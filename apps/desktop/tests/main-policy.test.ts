@@ -170,3 +170,15 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     command: false,
   });
 });
+
+test("loopback HTTP is an IP in 127.0.0.0/8, not a 127.* hostname", () => {
+  assert.equal(policy.isLocalhostUrl("http://127.0.0.1:8080"), true);
+  assert.equal(policy.isLocalhostUrl("http://127.0.0.2/health"), true);
+  assert.equal(policy.isLocalhostUrl("http://localhost:11434"), true);
+  assert.equal(policy.isLocalhostUrl("http://[::1]/"), true);
+  assert.equal(policy.isLocalhostUrl("https://127.0.0.1"), true);
+  assert.equal(policy.isLocalhostUrl("http://127.attacker.com"), false);
+  assert.equal(policy.isLocalhostUrl("http://127.0.0.1.attacker.com"), false);
+  assert.equal(policy.isLocalhostUrl("http://example.com"), false);
+  assert.equal(policy.isLocalhostUrl("https://veil.example"), false);
+});

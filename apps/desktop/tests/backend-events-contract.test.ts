@@ -7,7 +7,8 @@ const contract = loadTypeScriptModule(new URL("../src/shared/backendEvents.ts", 
 
 const fixtures = [
   ["user.message", { text: "hello" }], ["assistant.delta", { text: "hi" }],
-  ["assistant.progress.delta", { text: "planning" }], ["assistant.done", {}],
+  ["assistant.progress.delta", { text: "planning" }],
+  ["assistant.progress.delta", { text: "private thought", kind: "thinking" }], ["assistant.done", {}],
   ["worktree.requested", { branch: "b", path: "p", baseCommit: "c" }], ["worktree.created", { branch: "b", path: "p" }],
   ["command.started", { id: "1", command: "npm test", cwd: "." }], ["command.output", { id: "1", stream: "stdout", text: "ok" }],
   ["command.finished", { id: "1", exitCode: 0 }],

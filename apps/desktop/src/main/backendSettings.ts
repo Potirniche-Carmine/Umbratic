@@ -73,6 +73,7 @@ import {
   writeShowThinkingSetting,
   writeDictationSettings,
   writeModelEndpointSettings,
+  writeSkillSettings,
 } from "./storage";
 import { modelsDirectory } from "./appPaths";
 import { systemProfile } from "./hardware";
@@ -91,6 +92,7 @@ import {
   skillsDirectoryPath as skillsDirectoryPathService,
 } from "./skills";
 import type { ServerModelInfo } from "../shared/desktopApi";
+import { systemSkillEnabledFlags } from "../shared/harnessSkills";
 import type {
   BackendStatus,
   CapabilityProbeReport,
@@ -290,6 +292,7 @@ function revertToLocalMode() {
 
 export async function saveHarnessProfileSetting(input: unknown) {
   const settings = writeHarnessProfileSetting(input as HarnessProfileId);
+  writeSkillSettings(systemSkillEnabledFlags(settings));
   const status = await getBackendStatus();
   return { settings, status };
 }

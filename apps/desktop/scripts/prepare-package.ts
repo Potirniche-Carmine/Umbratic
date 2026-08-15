@@ -122,7 +122,8 @@ function runLong(command: string, args: string[], cwd: string, what: string): Pr
  * Building a CPU-only runtime, for iterating on packaging without the Vulkan
  * SDK installed. It produces an app that runs, slowly, on any machine — and one
  * that must never be released, so `verify:package` demands the same variable
- * before it will accept a build with no GPU backend, and CI never sets it.
+ * before it will accept a build with no GPU backend, and a release build
+ * never sets it.
  */
 const llamaCpuOnly = process.env.UMBRATIC_LLAMA_CPU_ONLY === "1";
 

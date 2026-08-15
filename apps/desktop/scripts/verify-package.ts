@@ -94,8 +94,9 @@ function verifyLlamaServer(directory: string) {
     ? "metal"
     : process.platform === "win32" && process.arch === "x64" ? "vulkan" : "";
   if (expectedGpuBackend && !backends.some((name) => name.toLowerCase().includes(expectedGpuBackend))) {
-    // The CPU-only escape hatch has to be asked for at both ends. CI never sets
-    // it, so a release that quietly lost its GPU backend still fails here.
+    // The CPU-only escape hatch has to be asked for at both ends. A release
+    // build never sets it, so a package that quietly lost its GPU backend still
+    // fails here.
     if (process.env.UMBRATIC_LLAMA_CPU_ONLY !== "1") {
       throw new Error(
         `Packaged llama-server is missing its ${expectedGpuBackend} backend: ${backends.join(", ")}\n`
@@ -123,9 +124,22 @@ function verifyDocumentsSkill(appArchive: string) {
   }
 }
 
+function verifyMacCodeSignature(appBundle: string) {
+  if (process.platform !== "darwin") return;
+  const result = spawnSync("codesign", ["--verify", "--deep", appBundle], { encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(
+      `Packaged app failed codesign verification. Flipping Electron fuses on Apple Silicon `
+      + `invalidates the ad-hoc signature unless electronFuses.resetAdHocDarwinSignature is true.\n`
+      + (result.stderr || result.stdout || `exit ${result.status}`),
+    );
+  }
+}
+
 const resources = packagedResources();
 const executable = (name: string) => process.platform === "win32" ? `${name}.exe` : name;
 const appArchive = requireFile(path.join(resources, "app.asar"));
+verifyMacCodeSignature(path.resolve(resources, "../.."));
 verifyDocumentsSkill(appArchive);
 verifyBinary(path.join(resources, "runner", executable("umbratic-runner")), /UmbraticRunner/);
 verifyBinary(path.join(resources, "desktop-core", executable("umbratic-desktop-core")), /usage: umbratic-desktop-core/);

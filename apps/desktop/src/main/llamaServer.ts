@@ -101,13 +101,16 @@ function reserveLoopbackPort(): Promise<number> {
  * process.env: that would hand the model runtime the app's proxy settings and
  * every unrelated override on the machine.
  */
-function sidecarEnvironment(): NodeJS.ProcessEnv {
+function sidecarEnvironment(apiKey: string): NodeJS.ProcessEnv {
   const names = ["HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR", "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATH", "Path", "LANG", "LC_ALL"];
   const env: NodeJS.ProcessEnv = {};
   for (const name of names) {
     const value = process.env[name];
     if (value) env[name] = value;
   }
+  // llama-server reads LLAMA_API_KEY. Putting the bearer on argv would expose
+  // it to every other user on the box via ps / Activity Monitor / WMI.
+  env.LLAMA_API_KEY = apiKey;
   return env;
 }
 
@@ -197,10 +200,10 @@ export function createLlamaSupervisor(options: { label: string }): LlamaSupervis
     const baseUrl = baseUrlFor(listenPort);
     const child = spawn(
       binary,
-      // Bound to loopback, and authenticated with a secret minted for this app
-      // run: another process on the box cannot drive the user's model.
-      ["--host", "127.0.0.1", "--port", String(listenPort), "--api-key", apiKey, ...args],
-      { env: sidecarEnvironment(), stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+      // Bound to loopback. The per-run bearer is in the child environment, not
+      // on this argv: another user on the box can read the command line.
+      ["--host", "127.0.0.1", "--port", String(listenPort), ...args],
+      { env: sidecarEnvironment(apiKey), stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
     );
     launchingChild = child;
 

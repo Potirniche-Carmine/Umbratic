@@ -47,6 +47,12 @@ function requestFromMessage(message: unknown): PdfRenderRequest {
 }
 
 function sendAndExit(result: PdfRenderResult, code: number) {
+  const parentPort = (process as NodeJS.Process & { parentPort?: { postMessage(value: unknown): void } }).parentPort;
+  if (parentPort) {
+    parentPort.postMessage(result);
+    process.exit(code);
+    return;
+  }
   if (process.send) {
     process.send(result, () => process.exit(code));
     return;
@@ -84,7 +90,20 @@ async function renderPdf(message: unknown): Promise<PdfRenderResult> {
   }
 }
 
-process.once("message", (message: unknown) => {
+function listenForRenderRequest(handler: (message: unknown) => void) {
+  const parentPort = (
+    process as NodeJS.Process & {
+      parentPort?: { once(event: "message", listener: (event: { data: unknown }) => void): void };
+    }
+  ).parentPort;
+  if (parentPort) {
+    parentPort.once("message", (event) => handler(event.data));
+    return;
+  }
+  process.once("message", handler);
+}
+
+listenForRenderRequest((message: unknown) => {
   renderPdf(message)
     .then((result) => sendAndExit(result, result.ok ? 0 : 1))
     .catch((error: unknown) => sendAndExit({ ok: false, error: error instanceof Error ? error.message : String(error) }, 1));

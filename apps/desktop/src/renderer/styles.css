@@ -10,9 +10,12 @@
 @import "./styles/composer-controls.css";
 @import "./styles/model-controls.css";
 @import "./styles/composer.css";
+@import "./styles/context-meter.css";
 @import "./styles/dictation.css";
 @import "./styles/review.css";
 @import "./styles/settings.css";
+@import "./styles/image-preview.css";
+@import "./styles/keyboard-settings.css";
 @import "./styles/remote.css";
 @import "./styles/skills-settings.css";
 @import "./styles/about-settings.css";

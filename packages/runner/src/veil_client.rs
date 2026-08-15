@@ -281,15 +281,28 @@ fn emit_delta(sink: &EventSink, session: &Session, text: &str) -> bool {
 }
 
 fn emit_narration(sink: &EventSink, session: &Session, text: &str) -> bool {
+    emit_progress(sink, session, text, None)
+}
+
+fn emit_progress(sink: &EventSink, session: &Session, text: &str, kind: Option<&str>) -> bool {
     if text.is_empty() {
         return false;
     }
-    sink.emit(json!({
-        "type": "assistant.progress.delta",
-        "taskId": session.task_id,
-        "text": text,
-        "at": now_iso()
-    }));
+    sink.emit(match kind {
+        Some(kind) => json!({
+            "type": "assistant.progress.delta",
+            "taskId": session.task_id,
+            "text": text,
+            "kind": kind,
+            "at": now_iso()
+        }),
+        None => json!({
+            "type": "assistant.progress.delta",
+            "taskId": session.task_id,
+            "text": text,
+            "at": now_iso()
+        }),
+    });
     true
 }
 
@@ -315,7 +328,7 @@ fn emit_streamed(
 ) -> bool {
     let mut streamed = false;
     if session.config.provider.reasoning_visible {
-        streamed |= emit_narration(sink, session, reasoning);
+        streamed |= emit_progress(sink, session, reasoning, Some("thinking"));
     }
     streamed |= emit_visible_content(sink, session, result, content);
     streamed

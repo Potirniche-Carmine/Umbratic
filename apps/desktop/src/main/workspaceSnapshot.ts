@@ -3,12 +3,11 @@ import { PdfRenderWorkerResult, RunnerPromptPart, binarySnapshotPrefix, imageAtt
 import {
   app,
   nativeImage,
+  utilityProcess,
 } from "electron";
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-
 
 import { type OcrInputKind } from "./artifactRuntime";
 import { attachmentContextTokens } from "./attachmentContext";
@@ -199,18 +198,13 @@ export function isPdfRenderWorkerResult(value: unknown): value is PdfRenderWorke
 
 export async function renderPdfAttachmentInWorker(filePath: string, outputDir: string, pageNumbers?: number[]): Promise<PdfRenderWorkerResult | null> {
   const workerPath = path.resolve(__dirname, "pdfRendererWorker.js");
-  if (!fs.existsSync(workerPath)) {
+  if (!fs.existsSync(workerPath) || typeof utilityProcess?.fork !== "function") {
     return null;
   }
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if ((process.versions as NodeJS.ProcessVersions & { electron?: string }).electron) {
-    env.ELECTRON_RUN_AS_NODE = "1";
-  }
-  const child = spawn(process.execPath, [workerPath], {
+  const child = utilityProcess.fork(workerPath, [], {
     cwd: path.dirname(workerPath),
-    env,
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    serviceName: "umbratic-pdf-renderer",
   });
 
   return new Promise((resolve) => {
@@ -238,24 +232,14 @@ export async function renderPdfAttachmentInWorker(filePath: string, outputDir: s
     });
     child.once("error", () => finish(null));
     child.once("exit", () => finish(null));
-
-    if (typeof child.send !== "function") {
-      finish(null);
-      return;
-    }
-    child.send(
-      {
-        filePath,
-        outputDir,
-        pageLimit: pdfImagePageLimit,
-        scale: pdfImageScale,
-        byteLimit: pdfAttachmentByteLimit,
-        ...(pageNumbers?.length ? { pageNumbers } : {}),
-      },
-      (error) => {
-        if (error) finish(null);
-      },
-    );
+    child.postMessage({
+      filePath,
+      outputDir,
+      pageLimit: pdfImagePageLimit,
+      scale: pdfImageScale,
+      byteLimit: pdfAttachmentByteLimit,
+      ...(pageNumbers?.length ? { pageNumbers } : {}),
+    });
   });
 }
 

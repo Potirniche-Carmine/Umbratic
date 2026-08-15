@@ -22,11 +22,10 @@ published checksum before making the runtime available. Development and
 packaging fail if the runtime was not provisioned. Electron Builder uses that
 local distribution rather than downloading a second copy.
 
-All Cargo builds must pass `--locked`. After `cargo fetch --locked`, CI runs the
-ordinary build and test graph with `CARGO_NET_OFFLINE=true`. Electron Builder
-may still retrieve its platform packaging toolset; those tool archives and
-checksums are fixed by the exact Electron Builder package and should be treated
-as part of an Electron Builder update review.
+All Cargo builds must pass `--locked`. Electron Builder may still retrieve its
+platform packaging toolset; those tool archives and checksums are fixed by the
+exact Electron Builder package and should be treated as part of an Electron
+Builder update review.
 
 ## Bundled llama.cpp runtime
 
@@ -90,14 +89,14 @@ quietly CPU-only release.
 
 Windows packaging needs the Vulkan SDK on the build machine for headers and
 `glslc` (`winget install KhronosGroup.VulkanSDK`, then a new terminal so
-`VULKAN_SDK` is set). Installing it in CI is an unreviewed binary download and
-is governed by the rules above; it is not yet wired into `package-desktop.yml`.
+`VULKAN_SDK` is set). Installing it from an unreviewed download is governed by
+the rules above; the Windows release machine installs it once as part of setup.
 
 `UMBRATIC_LLAMA_CPU_ONLY=1` packages without a GPU backend, for iterating on
 packaging without the SDK. The resulting app runs on any machine and is far too
 slow to ship, so `verify:package` refuses a build with no GPU backend unless the
-same variable is set there too. CI never sets it, which is what keeps a release
-that quietly lost its GPU backend from passing.
+same variable is set there too. A release build never sets it, which is what
+keeps a release that quietly lost its GPU backend from passing.
 
 Bumping the pin is a supply-chain review: read the intervening release notes,
 update both `tag` and `commit`, and rerun packaging and `verify:package` on both
@@ -156,13 +155,12 @@ allowlists, pinned toolchains, explicit GitHub runner images, and full-SHA
 GitHub Action references.
 
 `npm run supply-chain:audit` runs npm vulnerability and registry-signature
-checks, RustSec, and `govulncheck`. CI installs exact audited versions of the two
-external scanners before invoking it.
+checks, RustSec, and `govulncheck`. Install the exact audited versions of
+cargo-audit and govulncheck from `supply-chain-policy.json` before invoking it.
 
 `npm run supply-chain:sbom` creates a CycloneDX 1.6 inventory from
 `package-lock.json` and locked Cargo metadata without adding an SBOM library to
-the application. Tagged releases publish that SBOM and a SHA-256 manifest next
-to the installers.
+the application.
 
 PKCS#12/PFX client identities are intentionally unsupported. Managed endpoints
 must use PEM `certPath` and `keyPath`, keeping the default runner on one rustls

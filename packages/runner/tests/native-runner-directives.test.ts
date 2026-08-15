@@ -135,9 +135,13 @@ test("native runner sends the model name only when configured to", async () => {
       assert.equal((await prompt(visibleRun, session.id, "hello there")).status, 204);
       await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
       assert.equal(
-        events.events.some((event) => event.type === "assistant.progress.delta" && String(event.text).includes("RAW_REASONING_MARKER")),
+        events.events.some((event) =>
+          event.type === "assistant.progress.delta"
+          && event.kind === "thinking"
+          && String(event.text).includes("RAW_REASONING_MARKER")
+        ),
         true,
-        "opted-in reasoning streams as Working narration",
+        "opted-in reasoning streams as tagged thinking inside Working",
       );
     } finally {
       await events.close();

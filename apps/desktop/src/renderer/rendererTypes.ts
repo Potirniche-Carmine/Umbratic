@@ -2,36 +2,14 @@
 //! helper modules.
 
 import type { CommandRun } from "./commandDisplay";
-import type { ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import type { ReviewCommentDraft, ReviewFeedbackReference } from "./review/reviewComments";
 import type { ResponseFeedbackReason, ResponseRating } from "../shared/responseFeedback";
 import type { TaskPermissionRequest } from "./taskEventReducer";
-import type { ChatAttachment, IdeInfo } from "../shared/desktopApi";
+import type { ChatAttachment, IdeInfo, ReviewFile } from "../shared/desktopApi";
+
+export type { ReviewFile };
 
 export type AppearanceTheme = "system" | "light" | "dark";
-export type RunnerToolId = "read" | "ls" | "find" | "search" | "write" | "edit" | "lsp" | "command";
-export type RequiredToolContractRequirement = "file_change";
-export type RequiredToolContractReason =
-  | "file_tools_disabled"
-  | "missing_tool_call"
-  | "agent_reported_blocker"
-  | "attempted_tool_failed"
-  | "no_review_changes";
-export type ToolResultStatus = "success" | "permission_denied" | "policy_blocked" | "validation_error" | "runtime_error" | "timeout";
-export type ToolErrorCode =
-  | "tool_disabled"
-  | "unknown_tool"
-  | "invalid_arguments"
-  | "permission_denied"
-  | "policy_blocked"
-  | "workspace_boundary"
-  | "blocked_path"
-  | "command_exit_nonzero"
-  | "process_timeout"
-  | "process_error"
-  | "missing_dependency"
-  | "runtime_error";
-export type ReviewFile = NormalizedReviewFile;
 
 export type IdeChoice = IdeInfo;
 
@@ -64,7 +42,7 @@ export type AppearanceSettings = {
 export type PermissionRequest = TaskPermissionRequest;
 
 export type ComposerActivitySegment =
-  | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean }
+  | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean; kind?: "thinking" }
   | {
       type: "skill";
       id: string;

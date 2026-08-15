@@ -187,3 +187,19 @@ export function attachmentDetail(file: ChatAttachment): string {
 export function isImageAttachment(file: ChatAttachment): boolean {
   return !!file.previewDataUrl || /\.(png|jpe?g|webp|gif)$/i.test(file.name || file.path);
 }
+
+export function samePathKey(left: string, right: string): boolean {
+  const key = (value: string) => value.split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+  return key(left) === key(right);
+}
+
+export function normalizeAttachment(file: ChatAttachment): ChatAttachment {
+  const normalized: ChatAttachment = { path: file.path, name: file.name || file.path.split(/[\\/]/).pop() || file.path };
+  if (file.kind === "file" || file.kind === "folder") normalized.kind = file.kind;
+  if (file.source === "chat" || file.source === "workspace") normalized.source = file.source;
+  if (file.storedPath) normalized.storedPath = file.storedPath;
+  if (file.originalPath) normalized.originalPath = file.originalPath;
+  if (file.previewDataUrl?.startsWith("data:image/")) normalized.previewDataUrl = file.previewDataUrl;
+  if (Number.isSafeInteger(file.contextTokens) && (file.contextTokens ?? -1) >= 0) normalized.contextTokens = file.contextTokens;
+  return normalized;
+}

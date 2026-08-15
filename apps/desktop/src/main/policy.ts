@@ -13,6 +13,7 @@ import type {
   TelemetryPolicyInfo,
 } from "./types";
 import { isRecord, normalizeRelativePath, pathInside } from "./utils";
+export { isLocalhostUrl } from "./utils";
 
 export const umbraticPolicyVersion = "umbratic-enterprise-mvp-2";
 export const umbraticRunnerName = "UmbraticRunner";
@@ -408,19 +409,6 @@ export function baseUrlHost(baseUrl: string): string {
     return new URL(baseUrl).host;
   } catch {
     return "invalid-url";
-  }
-}
-
-export function isLocalhostUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") &&
-      (hostname === "localhost" || hostname === "::1" || hostname.startsWith("127."))
-    );
-  } catch {
-    return false;
   }
 }
 

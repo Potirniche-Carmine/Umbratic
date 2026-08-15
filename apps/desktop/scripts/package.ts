@@ -4,7 +4,7 @@
 // notarizes when the APPLE_* variables are present, so a Mac needs nothing
 // beyond `~/.umbratic/release.env`. Windows signing has no equivalent
 // discovery — Trusted Signing is named by four values — and those must not
-// sit in electron-builder.yml, where every unsigned developer and CI package
+// sit in electron-builder.yml, where every unsigned developer package
 // would try to sign and fail. They come from the same env file and are passed
 // on the command line here, so one file describes the release machine on
 // both platforms and the config stays valid for everyone else.

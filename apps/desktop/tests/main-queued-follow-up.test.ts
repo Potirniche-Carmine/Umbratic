@@ -48,9 +48,9 @@ function browserGlobals() {
   };
 }
 
-function loadRenderer() {
+function loadTimeline() {
   const icon = (props: unknown) => React.createElement("svg", props as object);
-  return loadTypeScriptModule(new URL("../src/renderer/main.tsx", import.meta.url), {
+  return loadTypeScriptModule(new URL("../src/renderer/composerTimeline.ts", import.meta.url), {
     cache: new Map(),
     globals: browserGlobals(),
     mocks: {
@@ -116,7 +116,7 @@ test("a queued follow-up's message is stored after the answer it followed", () =
 });
 
 test("two turns answered in one run render as two assistant messages", () => {
-  const { composerTimelineFromEvents } = loadRenderer();
+  const { composerTimelineFromEvents } = loadTimeline();
   const timeline = composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "hey there", at: "2026-01-01T00:00:00.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "Hello! How can I help you today?", at: "2026-01-01T00:00:01.000Z" },
@@ -143,7 +143,7 @@ test("an already-stored log with the follow-up out of order still reads as two a
   // message jumped ahead of the answer it followed. Those logs cannot be
   // rewritten, so the transcript has to read them correctly — which it does,
   // because `turn.outcome` separates the answers on its own.
-  const { composerTimelineFromEvents } = loadRenderer();
+  const { composerTimelineFromEvents } = loadTimeline();
   const timeline = composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "hey there", at: "2026-01-01T00:00:00.000Z" },
     { type: "user.message", taskId: "task-1", text: "C# vs Python vs C", at: "2026-01-01T00:00:03.000Z" },
@@ -162,7 +162,7 @@ test("an already-stored log with the follow-up out of order still reads as two a
 });
 
 test("a completed turn closes its answer even when the next one has not started", () => {
-  const { composerTimelineFromEvents } = loadRenderer();
+  const { composerTimelineFromEvents } = loadTimeline();
   const timeline = composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "hey there", at: "2026-01-01T00:00:00.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "First answer.", at: "2026-01-01T00:00:01.000Z" },

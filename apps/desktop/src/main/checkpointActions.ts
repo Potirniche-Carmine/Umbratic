@@ -5,7 +5,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 
-
 import {
   runnerRequest,
   stopRunnerProcess,
@@ -14,6 +13,7 @@ import {
   readTaskCheckpoints,
 } from "./storage";
 import type { TaskInfo, TaskCheckpoint, TaskRecord } from "./types";
+import type { TaskCheckpointView } from "../shared/desktopApi";
 import { isRecord, pathInside, requiredString } from "./utils";
 import {
   createTaskCheckpoint,
@@ -23,10 +23,7 @@ import {
   setTaskCheckpointPinned,
 } from "./checkpoints/service";
 
-export type TaskCheckpointView = Pick<
-  TaskCheckpoint,
-  "id" | "source" | "label" | "createdAt" | "state" | "pinned" | "logicalBytes"
->;
+export type { TaskCheckpointView };
 
 export function checkpointView(checkpoint: TaskCheckpoint): TaskCheckpointView {
   const { id, source, label, createdAt, state, pinned, logicalBytes } = checkpoint;

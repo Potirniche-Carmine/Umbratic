@@ -67,3 +67,30 @@ test("stream buffers retain only the visible tail of large internal output", () 
   assert.equal(events[0].text.endsWith("-end"), true);
   assert.equal(events[1].text.length, 24_000);
 });
+
+test("thinking and orientation progress do not coalesce", () => {
+  const { appendBufferedBackendEvent } = loadTypeScriptModule(bufferPath);
+  const events = [];
+  appendBufferedBackendEvent(events, {
+    type: "assistant.progress.delta",
+    kind: "thinking",
+    taskId: "task-1",
+    text: "the user asked ",
+  });
+  appendBufferedBackendEvent(events, {
+    type: "assistant.progress.delta",
+    kind: "thinking",
+    taskId: "task-1",
+    text: "a question",
+  });
+  appendBufferedBackendEvent(events, {
+    type: "assistant.progress.delta",
+    taskId: "task-1",
+    text: "I will map the repository.",
+  });
+
+  assert.deepEqual(plain(events.map((event) => [event.kind ?? "", event.text])), [
+    ["thinking", "the user asked a question"],
+    ["", "I will map the repository."],
+  ]);
+});

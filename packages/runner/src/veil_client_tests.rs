@@ -18,6 +18,35 @@ fn live_text_is_the_answer() {
 }
 
 #[test]
+fn visible_reasoning_is_tagged_thinking_and_tool_preambles_are_not() {
+    let directory = tempfile::tempdir().unwrap();
+    let session = crate::session::test_session(directory.path());
+    let sink = crate::session::test_sink(directory.path());
+    let mut events = sink.subscribe();
+
+    assert!(emit_progress(
+        &sink,
+        &session,
+        "I will map the repository.",
+        None
+    ));
+    assert!(emit_progress(
+        &sink,
+        &session,
+        "the user asked for a tour",
+        Some("thinking"),
+    ));
+
+    let observed: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert_eq!(observed.len(), 2);
+    assert_eq!(observed[0]["type"], "assistant.progress.delta");
+    assert_eq!(observed[0]["text"], "I will map the repository.");
+    assert!(observed[0].get("kind").is_none());
+    assert_eq!(observed[1]["kind"], "thinking");
+    assert_eq!(observed[1]["text"], "the user asked for a tour");
+}
+
+#[test]
 fn tool_deltas_accumulate_by_index() {
     let mut result = VeilChatResult::default();
     let mut calls = BTreeMap::new();

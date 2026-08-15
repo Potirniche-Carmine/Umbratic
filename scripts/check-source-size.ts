@@ -31,13 +31,13 @@ const ignoredDirectories = new Set([
   "vendor",
 ]);
 const lineLimit = 1_000;
-// One remaining exception. The other four were split into real modules; this
-// one is a single 4,500-line React component, so removing it means decomposing
-// `App` into child components with render tests to prove the decomposition is
-// behavior-preserving — a change that deserves its own review, not a drive-by.
+// One remaining exception. The other oversized files were split into real
+// modules; this one is still a single React `App` component. Removing it means
+// decomposing `App` into child components with render tests to prove the
+// decomposition is behavior-preserving — a change that deserves its own review.
 // The limit is pinned to the file's exact current size, so it can only shrink.
 const grandfatheredLimits = new Map<string, number>([
-  ["apps/desktop/src/renderer/main.tsx", 6_520],
+  ["apps/desktop/src/renderer/main.tsx", 4_930],
 ]);
 
 function sourceFiles(directory: string): string[] {

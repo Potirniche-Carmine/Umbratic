@@ -264,25 +264,21 @@ if (fs.existsSync(path.join(root, "node_modules"))) {
   }
 }
 
-const workflow = fs.readFileSync(path.join(root, ".github/workflows/package-desktop.yml"), "utf8");
-if (!workflow.includes(`cargo install cargo-audit --locked --version ${supplyChainPolicy.cargoAuditVersion}`)) {
-  fail(`CI must install cargo-audit ${supplyChainPolicy.cargoAuditVersion} with --locked.`);
-}
-if (!workflow.includes(`golang.org/x/vuln/cmd/govulncheck@v${supplyChainPolicy.govulncheckVersion}`)) {
-  fail(`CI must install govulncheck ${supplyChainPolicy.govulncheckVersion}.`);
-}
-if (!workflow.includes(`rustup toolchain install ${supplyChainPolicy.rustVersion} --profile minimal`)) {
-  fail(`CI must install the pinned Rust ${supplyChainPolicy.rustVersion} toolchain.`);
-}
-for (const match of workflow.matchAll(/^\s*runs-on:\s*([^\s#]+)(?:\s+#.*)?$/gm)) {
-  if (match[1].endsWith("-latest")) {
-    fail(`GitHub runner ${match[1]} must use an explicit operating-system image.`);
+const workflowsDir = path.join(root, ".github/workflows");
+for (const name of fs.readdirSync(workflowsDir).sort()) {
+  if (!name.endsWith(".yml") && !name.endsWith(".yaml")) continue;
+  const workflow = fs.readFileSync(path.join(workflowsDir, name), "utf8");
+  const label = `.github/workflows/${name}`;
+  for (const match of workflow.matchAll(/^\s*runs-on:\s*([^\s#]+)(?:\s+#.*)?$/gm)) {
+    if (match[1].endsWith("-latest")) {
+      fail(`${label}: GitHub runner ${match[1]} must use an explicit operating-system image.`);
+    }
   }
-}
-for (const match of workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)) {
-  const reference = match[1];
-  if (!/@[0-9a-f]{40}$/.test(reference)) {
-    fail(`GitHub Action ${reference} must be pinned to a full commit SHA.`);
+  for (const match of workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)) {
+    const reference = match[1];
+    if (!/@[0-9a-f]{40}$/.test(reference)) {
+      fail(`${label}: GitHub Action ${reference} must be pinned to a full commit SHA.`);
+    }
   }
 }
 

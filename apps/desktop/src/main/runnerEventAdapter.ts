@@ -3,6 +3,7 @@ import {
   decodeRunnerEvent,
   type RunnerEvent,
 } from "./runnerEventDecoder";
+import { progressKind } from "../shared/backendEvents";
 import type {
   BackendUiEvent,
   CommandClass,
@@ -89,7 +90,12 @@ export class RunnerEventAdapter {
         this.emitAssistant(event.text, eventAt(event), eventEndedAt(event));
         return;
       case "assistant.progress.delta":
-        this.emitProgress(event.text, eventAt(event), eventEndedAt(event));
+        this.emitProgress(
+          event.text,
+          eventAt(event),
+          eventEndedAt(event),
+          progressKind(event),
+        );
         return;
       case "tool.requested":
         this.handleToolRequested(event);
@@ -298,12 +304,13 @@ export class RunnerEventAdapter {
     });
   }
 
-  private emitProgress(text: string, at?: string, endedAt?: string): void {
+  private emitProgress(text: string, at?: string, endedAt?: string, kind?: "thinking"): void {
     if (!text) return;
     this.options.emit({
       type: "assistant.progress.delta",
       taskId: this.options.task.id,
       text,
+      ...(kind ? { kind } : {}),
       at,
       endedAt,
     });

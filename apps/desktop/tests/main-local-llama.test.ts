@@ -54,7 +54,8 @@ test("a missing or unconfigured model sends the user to the connection panel, no
 
 test("the supervisor binds loopback, authenticates, and never inherits the app environment", () => {
   assert.match(llamaServerSource, /"--host", "127\.0\.0\.1"/);
-  assert.match(llamaServerSource, /"--api-key", apiKey/);
+  assert.match(llamaServerSource, /env\.LLAMA_API_KEY = apiKey/);
+  assert.doesNotMatch(llamaServerSource, /"--api-key"/);
   assert.match(llamaServerSource, /crypto\.randomBytes\(32\)\.toString\("hex"\)/);
   assert.match(llamaServerSource, /probe\.listen\(0, "127\.0\.0\.1"/);
   assert.equal(llamaServerSource.includes("...process.env"), false);

@@ -31,6 +31,23 @@ test("runner event decoder accepts handled events and marks internal events as i
     assert.equal(tagged.event.text, "I will map this folder.", kind);
   }
 
+  const thinkingProgress = decoder.decodeRunnerEvent({
+    type: "assistant.progress.delta",
+    kind: "thinking",
+    taskId: "task-1",
+    text: "the user asked a question",
+  });
+  assert.equal(thinkingProgress.ok, true);
+  assert.equal(thinkingProgress.event.kind, "thinking");
+
+  const unknownProgressKind = decoder.decodeRunnerEvent({
+    type: "assistant.progress.delta",
+    kind: "scratch",
+    taskId: "task-1",
+    text: "I will map this folder.",
+  });
+  assert.equal(unknownProgressKind.ok, true, "unknown progress kinds are not a decode failure");
+
   const legacyFinished = decoder.decodeRunnerEvent({
     type: "tool.finished",
     taskId: "task-1",

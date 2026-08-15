@@ -23,6 +23,26 @@ test("appendTaskEvent coalesces adjacent streaming deltas in memory", async () =
   assert.equal(second[0].text, "Hello world");
 });
 
+test("appendTaskEvent does not coalesce thinking into orientation", async () => {
+  const shared = await loadTypeScriptModule(sharedTaskEventsPath, { cache: new Map() });
+  const progress = shared.appendTaskEvent([], {
+    type: "assistant.progress.delta",
+    taskId: "task-1",
+    text: "checking",
+  }, 500);
+  const next = shared.appendTaskEvent(progress, {
+    type: "assistant.progress.delta",
+    kind: "thinking",
+    taskId: "task-1",
+    text: "private thought",
+  }, 500);
+  assert.equal(next.length, 2);
+  assert.equal(next[0].kind, undefined);
+  assert.equal(next[0].text, "checking");
+  assert.equal(next[1].kind, "thinking");
+  assert.equal(next[1].text, "private thought");
+});
+
 test("response feedback can be toggled off without removing other ratings", async () => {
   const shared = await loadTypeScriptModule(sharedTaskEventsPath, { cache: new Map() });
   const events = [

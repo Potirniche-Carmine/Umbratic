@@ -145,8 +145,8 @@ protect, and SmartScreen trusts it from the first release.
 
 `apps/desktop/scripts/package.ts` passes these four to electron-builder on the
 command line; they are deliberately not in `electron-builder.yml`, so a
-developer or CI packaging without them gets an unsigned build rather than a
-signing failure.
+packaging run without them gets an unsigned build rather than a signing
+failure.
 
 ## Cutting a release
 

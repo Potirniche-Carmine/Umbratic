@@ -67,3 +67,24 @@ export function shortHash(value: string): string {
 export function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/").replace(/^\.\/+/, "");
 }
+
+function isLoopbackHostname(hostname: string): boolean {
+  if (hostname === "localhost" || hostname === "::1") return true;
+  const octets = hostname.split(".");
+  if (octets.length !== 4) return false;
+  const values = octets.map((part) => {
+    if (!/^(0|[1-9]\d{0,2})$/.test(part)) return -1;
+    return Number(part);
+  });
+  return values[0] === 127 && values.every((octet) => octet >= 0 && octet <= 255);
+}
+
+export function isLocalhostUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return (url.protocol === "http:" || url.protocol === "https:") && isLoopbackHostname(hostname);
+  } catch {
+    return false;
+  }
+}

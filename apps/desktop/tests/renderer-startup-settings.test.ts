@@ -75,8 +75,9 @@ test("weights loading from the composer say so where the composer is", () => {
   // Picking a model in the prompt box starts a load that reads gigabytes off
   // disk. Until now the only sign of it was in the Connection panel, which is
   // closed at exactly that moment — so the app looked hung.
+  const chrome = fs.readFileSync(new URL("../src/renderer/composerChrome.tsx", import.meta.url), "utf8");
   const main = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
-  assert.match(main, /function ModelStartupNotice\(/);
+  assert.match(chrome, /function ModelStartupNotice\(/);
   assert.match(main, /<ModelStartupNotice/);
   assert.match(main, /Starting model…/);
   // The microphone loads the speech weights on the press, which is the same
@@ -155,6 +156,7 @@ test("connection state and UI are outside the main renderer shell", () => {
   assert.match(main, /<ConnectionSettingsPanel controller=\{connectionSettings\} \/>/);
   assert.doesNotMatch(main, /async function saveEndpointSettings/);
   assert.match(connection, /export function useConnectionSettings/);
+  assert.doesNotMatch(main, /^export \{ /m);
 });
 
 test("local mode offers the catalog and applies a choice without a save step", () => {
@@ -168,6 +170,8 @@ test("local mode offers the catalog and applies a choice without a save step", (
   assert.match(source, /await api\.saveModelEndpointSettings\(next\)/);
   // There is no runtime URL to enter any more: the app starts its own.
   assert.doesNotMatch(source, /Ollama|11434|settingsAdvanced/);
+  const harness = fs.readFileSync(new URL("../src/renderer/HarnessSettings.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(harness, /Ollama|11434/);
 });
 
 test("startup never loads a model; the hardware probe is what warms", () => {

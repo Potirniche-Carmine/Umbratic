@@ -66,10 +66,30 @@ win:
   artifactName: Umbratic-${version}-${arch}.${ext}
   # Signing is Azure Trusted Signing, configured per release machine: the
   # package script passes win.azureSignOptions from ~/.umbratic/release.env.
-  # It is not written here because every unsigned developer and CI package
+  # It is not written here because every unsigned developer package
   # would then try to sign and fail.
   target:
     - nsis
+# Flipped after pack, before signing. runAsNode stays off: the PDF renderer is
+# a utilityProcess, not ELECTRON_RUN_AS_NODE. file:// extra privileges stay on
+# because the packaged renderer is still loaded with loadFile.
+# Apple Silicon kills a fuse-patched binary whose ad-hoc signature was not
+# reset. Developer ID signing does that for a release; unsigned local packages
+# never sign, so the fuse flip has to re-sign itself.
+# asar header validation stays off: electron-builder hashes package.json, then
+# strips scripts and devDependencies into the archive, so the fuse aborts at
+# launch with a hash mismatch. onlyLoadAppFromAsar still blocks the unpacked
+# app/ fallback.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: false
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: true
+  resetAdHocDarwinSignature: true
 nsis:
   include: scripts/installer.nsh
   # Same filled tile as the app: the 16–48px frames in the .ico are the

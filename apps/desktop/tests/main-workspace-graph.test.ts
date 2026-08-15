@@ -37,6 +37,11 @@ test("workspace graph is a togglable tool and defaults on", () => {
   assert.equal(tools.isRunnerToolId("workspace_graph"), true);
   assert.equal(tools.defaultToolSettings().workspace_graph, true);
   assert.ok(tools.enabledToolsFromSettings({}).includes("workspace_graph"));
+  const shared = fs.readFileSync(new URL("../src/shared/desktopApiTypes.ts", import.meta.url), "utf8");
+  const rendererTypes = fs.readFileSync(new URL("../src/renderer/rendererTypes.ts", import.meta.url), "utf8");
+  assert.match(shared, /export type RunnerToolId =/);
+  assert.match(shared, /"workspace_graph"/);
+  assert.doesNotMatch(rendererTypes, /export type RunnerToolId/);
 });
 
 /**

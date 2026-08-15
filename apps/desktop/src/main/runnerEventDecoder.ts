@@ -8,7 +8,7 @@ type RunnerEventBase = {
 
 export type RunnerEvent =
   | (RunnerEventBase & { type: "assistant.delta"; text: string })
-  | (RunnerEventBase & { type: "assistant.progress.delta"; text: string })
+  | (RunnerEventBase & { type: "assistant.progress.delta"; text: string; kind?: "thinking" })
   | (RunnerEventBase & {
       type: "tool.requested";
       toolCallId: string;
@@ -238,6 +238,9 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
       // over a leftover tag would lose the run's opening sentence.
       return hasString(value, "text");
     case "assistant.progress.delta":
+      // `kind` is optional and additive. Unknown values are dropped later
+      // rather than failing the payload: an older runner has no kind, and a
+      // newer one may send a tag this build has not named yet.
       return hasString(value, "text");
     case "command.safety.decision":
       return true;

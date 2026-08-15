@@ -4,7 +4,6 @@ import {
 } from "../shared/contextWindow";
 import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
 import type {
-  ChatAttachment,
   ChatRecord,
   HarnessProfileId,
   IdeInfo,
@@ -36,40 +35,6 @@ const defaultModelEndpointSettings: ModelEndpointSettings = {
     { name: "", value: "", valueConfigured: false },
     { name: "", value: "", valueConfigured: false },
   ],
-};
-export const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
-  engineering: new Set([
-    "umbratic-skill-creator",
-    "umbratic-git-worktree",
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-cmake",
-    "umbratic-discovery",
-    "umbratic-product-spec",
-    "umbratic-security-review",
-  ]),
-  marketing: new Set([
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-pdf",
-    "umbratic-data-analysis",
-    "umbratic-presentations",
-    "umbratic-documents",
-    "umbratic-spreadsheets",
-    "umbratic-discovery",
-    "umbratic-marketing-brief",
-  ]),
-  sales: new Set([
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-pdf",
-    "umbratic-data-analysis",
-    "umbratic-presentations",
-    "umbratic-documents",
-    "umbratic-spreadsheets",
-    "umbratic-discovery",
-    "umbratic-sales-enablement",
-  ]),
 };
 export const defaultIdeChoices: IdeInfo[] = [
   { id: "code", label: "VS Code", icon: "vscode" },
@@ -266,28 +231,6 @@ export function publicPreviewEndpointSettings(
       valueConfigured: header.valueConfigured || !!header.value,
     })),
   };
-}
-
-export function normalizeAttachment(file: ChatAttachment): ChatAttachment {
-  const normalized: ChatAttachment = {
-    path: file.path,
-    name: file.name || file.path.split(/[\\/]/).pop() || file.path,
-  };
-  if (file.source === "chat" || file.source === "workspace") {
-    normalized.source = file.source;
-  }
-  if (file.storedPath) normalized.storedPath = file.storedPath;
-  if (file.originalPath) normalized.originalPath = file.originalPath;
-  if (file.previewDataUrl?.startsWith("data:image/")) {
-    normalized.previewDataUrl = file.previewDataUrl;
-  }
-  if (
-    Number.isSafeInteger(file.contextTokens)
-    && (file.contextTokens ?? -1) >= 0
-  ) {
-    normalized.contextTokens = file.contextTokens;
-  }
-  return normalized;
 }
 
 export function getPreviewPermissionMode(): PermissionMode {

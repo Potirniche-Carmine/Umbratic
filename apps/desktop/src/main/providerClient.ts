@@ -5,10 +5,10 @@ import * as https from "node:https";
 import * as tls from "node:tls";
 
 import type { EndpointMtlsConfig } from "./config";
+import { isLocalhostUrl } from "./utils";
 
 function assertSecureEndpoint(url: URL) {
-  const loopback = url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "localhost";
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalhostUrl(url.href))) {
     throw new Error("Remote model endpoints must use HTTPS.");
   }
 }

@@ -125,6 +125,39 @@ test("runner event adapter shows safe public progress", () => {
   }]);
 });
 
+test("runner event adapter forwards thinking progress with its kind", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "assistant.progress.delta",
+    kind: "thinking",
+    taskId: "task-1",
+    text: "the user asked a question",
+  });
+
+  assert.deepEqual(plain(harness.emitted), [{
+    type: "assistant.progress.delta",
+    taskId: "task-1",
+    text: "the user asked a question",
+    kind: "thinking",
+  }]);
+});
+
+test("runner event adapter drops unknown progress kinds", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "assistant.progress.delta",
+    kind: "scratch",
+    taskId: "task-1",
+    text: "I will map this folder.",
+  });
+
+  assert.deepEqual(plain(harness.emitted), [{
+    type: "assistant.progress.delta",
+    taskId: "task-1",
+    text: "I will map this folder.",
+  }]);
+});
+
 // The run's opening orientation is ordinary assistant prose, so it reaches the
 // renderer untagged and settles above the working block like any other pre-tool
 // sentence. A `kind` from an older runner is dropped, never forwarded.
