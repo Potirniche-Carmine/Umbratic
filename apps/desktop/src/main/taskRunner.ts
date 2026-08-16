@@ -1,3 +1,5 @@
+import { runArtifactJob as runDocumentJob } from "./artifacts/service";
+import { localArtifactTransport, remoteArtifactTransport } from "./artifacts/transport";
 import { getPermissionMode } from "./mainRuntime";
 import { resolveSelectedModel, submitSteeredRunnerTurn } from "./backendSettings";
 import { chatAttachmentDirectory } from "./chatStore";
@@ -15,6 +17,7 @@ import * as path from "node:path";
 import {
   beginRunnerEventStream,
   runnerRequest,
+  replyRunnerArtifact,
   replyRunnerPermission,
   setRunnerProviderSession,
   startUmbraticRunnerServer,
@@ -293,6 +296,18 @@ export async function runRunnerTask(
         ),
       onDelegated: () => {
         delegatedToWorktree = true;
+      },
+      // The engines are this desktop's, so a remote task's files travel here
+      // and back rather than the engine travelling to the host.
+      onArtifact: async (job) => {
+        const transport = task.remote
+          ? remoteArtifactTransport(task)
+          : localArtifactTransport(task.worktreePath);
+        const result = await runDocumentJob(job, transport);
+        await replyRunnerArtifact(run as RunnerProcess, job.artifactId, result);
+      },
+      onArtifactReply: async (artifactId, result) => {
+        await replyRunnerArtifact(run as RunnerProcess, artifactId, result);
       },
       onStepSettled: (conversationStateValue) => {
         const conversationState = normalizeConversationState(conversationStateValue);

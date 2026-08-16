@@ -96,6 +96,21 @@ export type RunnerEvent =
       summary: string;
     })
   | (RunnerEventBase & {
+      type: "artifact.requested";
+      artifactId: string;
+      action: "inspect" | "create" | "edit";
+      format: string;
+      path?: string;
+      out?: string;
+      absolutePath?: string;
+      absoluteOut?: string;
+      templatePath?: string;
+      spec?: unknown;
+      ops?: unknown[];
+      options?: Record<string, unknown>;
+      timeoutMs: number;
+    })
+  | (RunnerEventBase & {
       type: "runner.error";
       message: string;
       category?: string;
@@ -193,6 +208,7 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "provider.reconnected",
   "context.retrieved",
   "permission.requested",
+  "artifact.requested",
   "runner.error",
   "tool.policy.stage",
   "skill.requested",
@@ -205,6 +221,7 @@ const handledTypes = new Set<RunnerEvent["type"]>([
 
 const ignoredTypes = new Set([
   "permission.resolved",
+  "artifact.resolved",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -273,6 +290,13 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && isFiniteNumber(value.followUpCapacity)
         && value.followUpCapacity >= 0
         && (value.reasonCode === null || typeof value.reasonCode === "string");
+    case "artifact.requested":
+      // The spec and ops are the format engine's business, not this decoder's:
+      // closing them here would reject a field a newer engine understands.
+      return hasString(value, "artifactId")
+        && (value.action === "inspect" || value.action === "create" || value.action === "edit")
+        && hasString(value, "format")
+        && hasNonNegativeNumber(value, "timeoutMs");
     case "tool.policy.stage":
       return hasString(value, "toolCallId") && hasString(value, "stage") && hasString(value, "outcome")
         && (value.reason === undefined || hasString(value, "reason"));

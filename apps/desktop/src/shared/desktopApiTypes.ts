@@ -24,6 +24,7 @@ export type RunnerToolId =
   | "edit"
   | "lsp"
   | "workspace_graph"
+  | "artifact"
   | "command";
 export type ToolResultStatus =
   | "success"

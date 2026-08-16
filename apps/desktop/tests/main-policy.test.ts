@@ -162,6 +162,7 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     edit: true,
     lsp: true,
     workspace_graph: true,
+    artifact: true,
     command: true,
   });
   assert.deepEqual(plain(tools.normalizeEnabledTools(["command", "bad", "read", "read", "unknown-tool"])), ["read", "command"]);
@@ -176,6 +177,7 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     edit: false,
     lsp: false,
     workspace_graph: false,
+    artifact: false,
     command: false,
   });
 });

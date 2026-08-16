@@ -23,9 +23,15 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
   },
   "dependencies": {
+    "@cantoo/pdf-lib": "2.8.1",
+    "@xmldom/xmldom": "0.9.10",
+    "docx": "9.7.1",
     "electron-updater": "6.8.9",
+    "jszip": "3.10.1",
     "lucide-react": "1.28.0",
     "pdf-to-img": "6.2.0",
+    "pdfjs-dist": "6.2.108",
+    "pdfmake": "0.3.11",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
