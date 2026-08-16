@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use url::Url;
 
-pub const RUNNER_TOOL_NAMES: [&str; 11] = [
+pub const RUNNER_TOOL_NAMES: [&str; 12] = [
     "read",
     "ls",
     "find",
@@ -21,6 +21,7 @@ pub const RUNNER_TOOL_NAMES: [&str; 11] = [
     "edit",
     "lsp",
     "workspace_graph",
+    "artifact",
     "command",
 ];
 const DEFAULT_CONTEXT_LENGTH: u64 = 64_000;
@@ -142,6 +143,11 @@ pub struct RunnerConfig {
     pub approved_executables: BTreeMap<String, PathBuf>,
     pub lsp_servers: Vec<LspServerConfig>,
     pub workspace_graph: Option<WorkspaceGraphConfig>,
+    /// Whether the desktop has document engines to answer `artifact` jobs with.
+    /// Unlike `workspace_graph`, this describes the desktop rather than this
+    /// host, so an SSH task can carry it while the remote machine has no
+    /// engine of its own.
+    pub artifact_service: bool,
     pub diagnostics: DiagnosticsConfig,
     pub provider: ProviderConfig,
     /// The user's local calendar day, supplied by the desktop. Injected at the
@@ -617,6 +623,12 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
             .map(|artifact_path| WorkspaceGraphConfig {
                 artifact_path: PathBuf::from(artifact_path),
             }),
+        artifact_service: config
+            .get("services")
+            .and_then(Value::as_object)
+            .and_then(|services| services.get("artifact"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         diagnostics: parse_diagnostics(config.get("diagnostics")),
         provider,
         local_date: optional_string(config.get("localDate")).and_then(|value| {

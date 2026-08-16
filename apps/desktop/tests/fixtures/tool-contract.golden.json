@@ -305,6 +305,64 @@
   },
   {
     "function": {
+      "description": "Create, inspect, and edit PowerPoint, Word, Excel, and PDF files. Send a spec or a list of ops as JSON; never write library code and never open the file yourself. inspect requires path and returns origin, editSurface, unsupported[], and an outline whose ids the other two actions address. create requires format and spec. edit requires path and ops[]. Inspect any file you did not just create before editing it: editSurface says which ops are allowed, and ids you did not read from an outline do not exist. Results carry qa[]; fix every error and call again, at most three rounds. Nothing is written when ok is false.",
+      "name": "artifact",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "inspect reads a file; create builds a new one from spec; edit applies ops to an existing one.",
+            "enum": [
+              "inspect",
+              "create",
+              "edit"
+            ],
+            "type": "string"
+          },
+          "format": {
+            "description": "Required for create. Inferred from the extension of path for inspect and edit.",
+            "enum": [
+              "pptx",
+              "docx",
+              "xlsx",
+              "pdf"
+            ],
+            "type": "string"
+          },
+          "ops": {
+            "description": "Edit operations in order, each addressing ids reported by inspect. An op the file's editSurface does not allow is refused and nothing is written.",
+            "maxItems": 200,
+            "type": "array"
+          },
+          "options": {
+            "description": "Optional switches such as {\"tracked\":true,\"author\":\"Umbratic\"} for a redlined Word edit.",
+            "type": "object"
+          },
+          "out": {
+            "description": "Workspace-relative destination. Defaults to .umbratic/artifacts/<format>/<name>. On edit, omit it to write the result back over path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "path": {
+            "description": "Workspace-relative file to inspect or edit. Required for those two actions.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "spec": {
+            "description": "The document specification for create, in this format's spec schema. Enums and content only: no coordinates, colours, or point sizes.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
       "description": "Run a local workspace command in /bin/sh after policy and permission checks. Prefer search to locate code and to show the lines around a match, read to open a window on a file, and ls or find for listing. Do not shell out to ripgrep, grep, or find for routine search. Optional timeoutMs has a bounded default and maximum. Output progress is coalesced; large output keeps the useful tail and remains retrievable by context hash. Send exactly command and optional timeoutMs. Do not send programId or args.",
       "name": "command",
       "parameters": {

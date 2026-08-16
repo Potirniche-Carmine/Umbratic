@@ -29,6 +29,20 @@ pub(super) enum FieldKind {
     EditArray {
         max_items: u64,
     },
+    /// A nested JSON object whose interior belongs to another schema — the
+    /// artifact spec, validated by the engine that builds the file. The
+    /// contract bounds the size and nothing else, deliberately: a field list
+    /// declared here would have to be kept in step with four format schemas,
+    /// and an unknown interior key must survive the wire rather than being
+    /// rejected by a runner that has no opinion about it.
+    JsonObject {
+        max_bytes: u64,
+    },
+    /// A nested JSON array under the same rule, bounded by item count as well.
+    JsonArray {
+        max_items: u64,
+        max_bytes: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -97,6 +111,32 @@ const fn choice(
     }
 }
 
+const fn json_object(name: &'static str, max_bytes: u64, description: &'static str) -> ToolField {
+    ToolField {
+        name,
+        kind: FieldKind::JsonObject { max_bytes },
+        required: false,
+        description,
+    }
+}
+
+const fn json_array(
+    name: &'static str,
+    max_items: u64,
+    max_bytes: u64,
+    description: &'static str,
+) -> ToolField {
+    ToolField {
+        name,
+        kind: FieldKind::JsonArray {
+            max_items,
+            max_bytes,
+        },
+        required: false,
+        description,
+    }
+}
+
 /// A cross-field rule. Argument shapes that are individually valid but
 /// meaningless together are rejected here rather than resolved by silent
 /// precedence in an executor, so the model gets a typed reason instead of a
@@ -142,6 +182,13 @@ pub(super) const MAX_GRAPH_DEPTH: i64 = 8;
 /// model asked for a number it could never get. One value, declared where the
 /// model reads it.
 pub(crate) const MAX_LSP_RESULTS: i64 = 50;
+/// One artifact spec. Large enough for a long deck or a workbook of real
+/// sheets, small enough that a runaway generation is refused before it reaches
+/// a worker.
+pub(crate) const MAX_ARTIFACT_SPEC_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_ARTIFACT_OPS: u64 = 200;
+pub(crate) const MAX_ARTIFACT_OPS_BYTES: u64 = 512 * 1024;
+pub(crate) const MAX_ARTIFACT_OPTIONS_BYTES: u64 = 8 * 1024;
 
 /// What gates a tool's presence on the frozen surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -436,6 +483,64 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
         rules: &[],
     },
     ToolDefinition {
+        name: "artifact",
+        kind: "json",
+        gate: Gate::Service("artifact"),
+        description: "Create, inspect, and edit PowerPoint, Word, Excel, and PDF files. Send a spec or a list of ops as JSON; never write library code and never open the file yourself. inspect requires path and returns origin, editSurface, unsupported[], and an outline whose ids the other two actions address. create requires format and spec. edit requires path and ops[]. Inspect any file you did not just create before editing it: editSurface says which ops are allowed, and ids you did not read from an outline do not exist. Results carry qa[]; fix every error and call again, at most three rounds. Nothing is written when ok is false.",
+        fields: &[
+            choice(
+                "action",
+                true,
+                &["inspect", "create", "edit"],
+                "inspect reads a file; create builds a new one from spec; edit applies ops to an existing one.",
+            ),
+            choice(
+                "format",
+                false,
+                &["pptx", "docx", "xlsx", "pdf"],
+                "Required for create. Inferred from the extension of path for inspect and edit.",
+            ),
+            text(
+                "path",
+                false,
+                "Workspace-relative file to inspect or edit. Required for those two actions.",
+            ),
+            text(
+                "out",
+                false,
+                "Workspace-relative destination. Defaults to .umbratic/artifacts/<format>/<name>. On edit, omit it to write the result back over path.",
+            ),
+            json_object(
+                "spec",
+                MAX_ARTIFACT_SPEC_BYTES,
+                "The document specification for create, in this format's spec schema. Enums and content only: no coordinates, colours, or point sizes.",
+            ),
+            json_array(
+                "ops",
+                MAX_ARTIFACT_OPS,
+                MAX_ARTIFACT_OPS_BYTES,
+                "Edit operations in order, each addressing ids reported by inspect. An op the file's editSurface does not allow is refused and nothing is written.",
+            ),
+            json_object(
+                "options",
+                MAX_ARTIFACT_OPTIONS_BYTES,
+                "Optional switches such as {\"tracked\":true,\"author\":\"Umbratic\"} for a redlined Word edit.",
+            ),
+        ],
+        rules: &[
+            FieldRule {
+                field: "spec",
+                requires: &["format"],
+                conflicts: &["ops"],
+            },
+            FieldRule {
+                field: "ops",
+                requires: &["path"],
+                conflicts: &["spec"],
+            },
+        ],
+    },
+    ToolDefinition {
         name: "command",
         kind: "log",
         gate: Gate::Capability("command"),
@@ -703,6 +808,14 @@ fn field_schema(field: &ToolField, programs: &[String]) -> Value {
                 "additionalProperties": false
             }
         }),
+        // No property list and no additionalProperties: the interior is another
+        // schema's business. Declaring it here would close the object against
+        // spec fields the engine understands and the runner has never heard of.
+        FieldKind::JsonObject { .. } => json!({"type": "object"}),
+        FieldKind::JsonArray { max_items, .. } => json!({
+            "type": "array",
+            "maxItems": max_items
+        }),
     };
     if !field.description.is_empty() {
         schema["description"] = json!(field.description);
@@ -823,5 +936,44 @@ fn validate_field(
             }
             Ok(())
         }
+        FieldKind::JsonObject { max_bytes } => {
+            if !value.is_object() {
+                return Err(tool.violation(Some(field.name), "a JSON object"));
+            }
+            bounded_json(tool, field, value, max_bytes)
+        }
+        FieldKind::JsonArray {
+            max_items,
+            max_bytes,
+        } => {
+            let items = value
+                .as_array()
+                .ok_or_else(|| tool.violation(Some(field.name), "a JSON array"))?;
+            if items.len() as u64 > max_items {
+                return Err(tool.violation(Some(field.name), format!("at most {max_items} items")));
+            }
+            bounded_json(tool, field, value, max_bytes)
+        }
     }
+}
+
+/// The only bound the contract places on a nested payload. Serialized length is
+/// what the transport and the worker actually pay for, so that is what is
+/// measured — not a key count, which says nothing about cost.
+fn bounded_json(
+    tool: &ToolDefinition,
+    field: &ToolField,
+    value: &Value,
+    max_bytes: u64,
+) -> Result<(), ContractViolation> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|_| tool.violation(Some(field.name), "serializable JSON"))?
+        .len() as u64;
+    if bytes > max_bytes {
+        return Err(tool.violation(
+            Some(field.name),
+            format!("at most {max_bytes} bytes of JSON, but received {bytes}"),
+        ));
+    }
+    Ok(())
 }

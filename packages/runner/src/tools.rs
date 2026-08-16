@@ -28,6 +28,7 @@ use crate::{
     session::{EventSink, Session},
 };
 
+mod artifact;
 pub(crate) mod catalog;
 mod command;
 #[cfg(test)]
@@ -51,6 +52,7 @@ mod write;
 
 #[cfg(test)]
 use crate::skill_preflight::explicit_skill_mention;
+use artifact::artifact_tool;
 use command::command_tool;
 #[cfg(test)]
 use command::{

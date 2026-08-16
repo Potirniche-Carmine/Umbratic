@@ -1,3 +1,4 @@
+pub mod artifact;
 mod compaction;
 pub mod config;
 pub mod context;

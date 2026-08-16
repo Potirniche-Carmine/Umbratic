@@ -30,6 +30,7 @@ request_type!(WebSearchRequest);
 request_type!(WebFetchRequest);
 request_type!(LspRequest);
 request_type!(WorkspaceGraphRequest);
+request_type!(ArtifactRequest);
 request_type!(ReadSkillRequest);
 request_type!(RetrieveContextRequest);
 
@@ -54,6 +55,7 @@ pub(super) enum ToolRequest {
     WebFetch(WebFetchRequest),
     Lsp(LspRequest),
     WorkspaceGraph(WorkspaceGraphRequest),
+    Artifact(ArtifactRequest),
     Command(CommandRequest),
     ReadSkill(ReadSkillRequest),
     RetrieveContext(RetrieveContextRequest),
@@ -130,6 +132,16 @@ impl ToolRequest {
                 primary: string_arg(&arguments, &["action"]),
                 arguments,
             }),
+            "artifact" => Self::Artifact(ArtifactRequest {
+                primary: format!(
+                    "{} {}",
+                    string_arg(&arguments, &["action"]),
+                    string_arg(&arguments, &["path", "out"])
+                )
+                .trim()
+                .to_owned(),
+                arguments,
+            }),
             "command" | "run_program" => {
                 let command = command_display(&arguments);
                 let safety = evaluate_command(&command, cwd);
@@ -173,6 +185,7 @@ impl ToolRequest {
             Self::WebSearch(request) => format!("web_search {}", request.primary),
             Self::WebFetch(request) => format!("web_fetch {}", request.primary),
             Self::Lsp(request) => format!("lsp {}", request.primary),
+            Self::Artifact(request) => format!("artifact {}", request.primary),
             Self::Command(request) => redact_text(&request.command, 320),
             Self::WorkspaceGraph(request) => {
                 format!("workspace_graph {}", request.primary)
@@ -188,6 +201,15 @@ impl ToolRequest {
         match self {
             Self::Command(request) => request.safety.command_class,
             Self::Write(_) | Self::Edit(_) | Self::ApplyPatch(_) => "edit",
+            // Only two of the three actions write, and the difference matters
+            // to everything downstream that treats "edit" as a mutation.
+            Self::Artifact(request) => {
+                if string_arg(&request.arguments, &["action"]) == "inspect" {
+                    "read"
+                } else {
+                    "edit"
+                }
+            }
             Self::WebSearch(_) | Self::WebFetch(_) => "network",
             _ => "read",
         }
@@ -208,6 +230,7 @@ impl ToolRequest {
             Self::WebFetch(request) => &request.arguments,
             Self::Lsp(request) => &request.arguments,
             Self::WorkspaceGraph(request) => &request.arguments,
+            Self::Artifact(request) => &request.arguments,
             Self::Command(request) => &request.arguments,
             Self::ReadSkill(request) => &request.arguments,
             Self::RetrieveContext(request) => &request.arguments,
@@ -241,6 +264,7 @@ pub fn tool_capability_name(name: &str) -> Option<&'static str> {
         "web_fetch" => Some("web_fetch"),
         "lsp" => Some("lsp"),
         "workspace_graph" => Some("workspace_graph"),
+        "artifact" => Some("artifact"),
         "command" | "run_program" => Some("command"),
         "read_skill" | "read_attachment" | "retrieve_context" => None,
         _ => None,
