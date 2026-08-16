@@ -75,6 +75,30 @@ export function loadTypeScriptModule(filePath, options = {}) {
       return require(specifier);
     };
 
+    // Modules that hand values to a native or heavily-validating dependency
+    // have to run in this realm. A new context has its own Array and Object
+    // intrinsics, so an array literal built inside it fails an `instanceof
+    // Array` check in a library loaded out here — which is a property of the
+    // test harness, not of the code under test. Running in the host realm the
+    // way Node's own CommonJS loader does removes the boundary entirely.
+    if (options.realm === "host") {
+      const wrapper = vm.runInThisContext(
+        `(function (exports, require, module, __filename, __dirname, globalsBag) {`
+          + `with (globalsBag) { ${output}\n}`
+          + `})`,
+        { filename: absolutePath },
+      );
+      wrapper(
+        module.exports,
+        localRequire,
+        module,
+        absolutePath,
+        path.dirname(absolutePath),
+        globals,
+      );
+      return module.exports;
+    }
+
     vm.runInNewContext(
       output,
       {

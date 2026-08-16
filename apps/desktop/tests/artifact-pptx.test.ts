@@ -8,7 +8,7 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
 const cache = new Map();
 const load = (relative) =>
-  loadTypeScriptModule(new URL(`../src/main/artifacts/worker/${relative}`, import.meta.url), { cache });
+  loadTypeScriptModule(new URL(`../src/main/artifacts/worker/${relative}`, import.meta.url), { cache, realm: "host" });
 
 const spec = load("pptx/spec.ts");
 const create = load("pptx/create.ts");
