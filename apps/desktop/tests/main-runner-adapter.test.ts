@@ -119,6 +119,7 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.taskId, "task-1");
   assert.equal(config.cwd, "C:/repo/.umbratic/worktree");
   assert.equal(config.permissionMode, "normal");
+  assert.match(String(config.localDate), /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday), /);
   assert.equal(config.contextLength, 128000);
   assert.equal(config.maxResponseTokens, 8192);
   assert.equal(config.protectedPromptReserveTokens, 2048);

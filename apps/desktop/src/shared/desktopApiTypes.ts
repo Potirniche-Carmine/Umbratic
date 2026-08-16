@@ -18,6 +18,8 @@ export type RunnerToolId =
   | "ls"
   | "find"
   | "search"
+  | "web_search"
+  | "web_fetch"
   | "write"
   | "edit"
   | "lsp"
@@ -87,6 +89,8 @@ export type DesktopStartupSettings = {
   reasoningEffort: ReasoningEffort;
   /** Live model thinking in the Working block. Off until the user asks. */
   showThinking: boolean;
+  /** Composer Web toggle. Off until the user turns it on. */
+  webTools: boolean;
 };
 
 /** How a remote connection proves who it is. */
@@ -314,7 +318,7 @@ export type BackendStatus = {
   privacy: {
     share: "disabled";
     enabledProviders: LocalProviderId[];
-    webTools: "disabled";
+    webTools: "off" | "on";
   };
   diagnostics: BackendDiagnostics;
   message?: string;
@@ -864,6 +868,7 @@ export type DesktopApi = {
     | { ok: false; message: string }
   >;
   setPermissionMode(mode: PermissionMode): Promise<PermissionMode>;
+  setWebTools(enabled: boolean): Promise<boolean>;
   listAvailableIdes(): Promise<IdeInfo[]>;
   startTask(input: {
     repositoryId?: string;

@@ -121,6 +121,8 @@ fn only_declared_tool_names_map_to_runner_capabilities() {
     assert_eq!(tool_capability_name("apply_patch"), Some("edit"));
     assert_eq!(tool_capability_name("run_program"), Some("command"));
     assert_eq!(tool_capability_name("search"), Some("search"));
+    assert_eq!(tool_capability_name("web_search"), Some("web_search"));
+    assert_eq!(tool_capability_name("web_fetch"), Some("web_fetch"));
     for undeclared in ["search_files", "apply-patch", "PowerShell", "bash"] {
         assert_eq!(tool_capability_name(undeclared), None, "{undeclared}");
     }

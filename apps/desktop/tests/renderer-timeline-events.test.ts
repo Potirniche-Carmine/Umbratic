@@ -17,6 +17,7 @@ test("command aggregation, pending permissions, and timelines reflect real event
     reconcileActivityDisclosureState,
   } = loadRendererFile("composerActivity.ts");
   const {
+    activityToolLabel,
     commandDetailLabel,
     commandLabel,
     commandHasVisibleDetails,
@@ -462,6 +463,8 @@ test("command aggregation, pending permissions, and timelines reflect real event
     "ls",
     "find",
     "search",
+    "web_search",
+    "web_fetch",
     "write",
     "edit",
     "apply_patch",
@@ -487,6 +490,21 @@ test("command aggregation, pending permissions, and timelines reflect real event
     stdout: Array.from({ length: 7 }, (_, index) => `line ${index + 1}`).join("\n"),
   };
   assert.equal(commandShellText(verboseRun), "[3 earlier output lines omitted.]\nline 4\nline 5\nline 6\nline 7");
+
+  const fetchRun = {
+    ...searchRun,
+    toolKind: "web_fetch",
+    command: "web_fetch https://www.democracynow.org/headlines",
+    commandClass: "network",
+    stdout: `${"A".repeat(2000)} footer`,
+  };
+  assert.equal(activityToolLabel(fetchRun).label, "Read www.democracynow.org");
+  assert.equal(commandDetailLabel(fetchRun), "Read web page results - network");
+  const fetchText = commandShellText(fetchRun);
+  assert.ok(fetchText.startsWith("A"));
+  assert.match(fetchText, /\[Page text truncated\.\]/);
+  assert.ok(!fetchText.includes("footer"));
+  assert.ok(fetchText.length < 800);
 
   const readRun = { ...searchRun, command: "read apps/desktop/src/renderer/main.tsx" };
   const readGroups = activityToolGroups([

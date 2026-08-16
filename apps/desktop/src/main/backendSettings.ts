@@ -61,6 +61,7 @@ import {
   readLocalDiagnostics,
   readModelEndpointSettings,
   readReasoningEffortSetting,
+  readToolSettings,
   publicModelEndpointSettings,
   readProjects,
   readProductTelemetryEvents,
@@ -75,6 +76,7 @@ import {
   writeModelEndpointSettings,
   writeSkillSettings,
 } from "./storage";
+import { webToolsEnabled } from "./toolSettings";
 import { modelsDirectory } from "./appPaths";
 import { systemProfile } from "./hardware";
 import { recordLocalDiagnostic } from "./diagnostics";
@@ -542,7 +544,7 @@ export async function getBackendStatus(startLocal: LocalRuntimeStart = "never"):
     privacy: {
       share: "disabled",
       enabledProviders: providers.filter((provider) => provider.status === "ready").map((provider) => provider.providerId),
-      webTools: "disabled",
+      webTools: webToolsEnabled(readToolSettings()) ? "on" : "off",
     },
     diagnostics: {
       runnerName: umbraticRunnerName,

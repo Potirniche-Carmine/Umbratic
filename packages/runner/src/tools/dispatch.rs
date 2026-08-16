@@ -270,6 +270,8 @@ pub async fn execute_tool(
         ToolRequest::Ls(request) => ls_tool(&session, &request.arguments).await,
         ToolRequest::Find(request) => find_tool(&session, &request.arguments).await,
         ToolRequest::Search(request) => search_tool(session.clone(), &request.arguments).await,
+        ToolRequest::WebSearch(request) => web_search_tool(&request.arguments).await,
+        ToolRequest::WebFetch(request) => web_fetch_tool(&request.arguments).await,
         ToolRequest::Lsp(request) => match session.lsp.as_ref() {
             // Structured evidence goes in details; content is a short rendering
             // for the model. No consumer parses the prose.

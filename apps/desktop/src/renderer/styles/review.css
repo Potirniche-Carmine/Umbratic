@@ -881,6 +881,10 @@
   overscroll-behavior: contain;
 }
 
+.modalScrim.isNested {
+  z-index: 50;
+}
+
 /* Set on <html> while any modal is open. The scrollable panes behind the
    scrim pause so stray wheel input cannot move the page under the dialog. */
 html.modalOpen .composerBody,

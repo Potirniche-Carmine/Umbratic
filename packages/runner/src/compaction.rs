@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use crate::{
     context::context_hash,
     context_events::{SessionEstimateState, request_estimate},
+    conversation_state::ensure_local_date_prefix,
     session::Session,
     veil_client::compact_context,
 };
@@ -561,6 +562,7 @@ pub(crate) async fn attempt_semantic_compaction(
         vec![json!({"role":"user","content":format!("{SEMANTIC_SUMMARY_PREFIX}{summary}")})];
     rebuilt.extend(carriers);
     rebuilt.extend_from_slice(&messages[prefix_end..]);
+    ensure_local_date_prefix(&mut rebuilt, session.config.local_date.as_deref());
     // Both sides of the shrink check are the same heuristic estimate: the
     // rebuilt prefix has no measurement of its own, so comparing it against an
     // anchored number would compare two different units.

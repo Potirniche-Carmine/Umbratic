@@ -814,8 +814,11 @@ test("everything else the app boots with survives a relaunch too", () => {
   assert.equal(relaunched.contextLength, 128000);
   assert.equal(relaunched.reasoningEffort, "high");
   assert.equal(relaunched.showThinking, false);
+  assert.equal(relaunched.webTools, false);
   storage.writeShowThinkingSetting(true);
   assert.equal(loadStorage(userData).readStartupSettings().showThinking, true);
+  storage.writeWebToolsSetting(true);
+  assert.equal(loadStorage(userData).readStartupSettings().webTools, true);
 });
 
 test("the server model choice survives a relaunch", () => {

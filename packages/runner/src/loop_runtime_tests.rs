@@ -94,6 +94,26 @@ async fn tool_history_stays_append_only_without_context_pressure() {
     assert_eq!(prepared.messages, messages);
 }
 
+#[tokio::test]
+async fn prepared_messages_put_the_local_date_first() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = (*test_config(directory.path())).clone();
+    config.local_date = Some("Saturday, August 15, 2026".into());
+    let session = session_with(
+        config,
+        vec![json!({"role":"user","content":"original request"})],
+    );
+    let prepared = prepared_messages(&session, &[], &crate::session::test_sink(directory.path()))
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.messages[0]["content"],
+        "today's date: Saturday, August 15, 2026"
+    );
+    assert_eq!(prepared.messages[1]["content"], "original request");
+    assert_eq!(session.messages.lock().await.len(), 1);
+}
+
 #[test]
 fn pressure_compaction_removes_one_complete_parallel_exchange() {
     let mut messages = vec![json!({"role":"user","content":"original request"})];

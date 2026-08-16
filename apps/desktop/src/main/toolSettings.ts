@@ -1,9 +1,14 @@
 import type { RunnerToolId } from "./types";
 
-export const runnerToolIds = ["read", "ls", "find", "search", "write", "edit", "lsp", "workspace_graph", "command"] as const satisfies readonly RunnerToolId[];
+export const runnerToolIds = ["read", "ls", "find", "search", "web_search", "web_fetch", "write", "edit", "lsp", "workspace_graph", "command"] as const satisfies readonly RunnerToolId[];
+const defaultOffTools = new Set<RunnerToolId>(["web_search", "web_fetch"]);
 
 export function defaultToolSettings(): Record<RunnerToolId, boolean> {
-  return Object.fromEntries(runnerToolIds.map((id) => [id, true])) as Record<RunnerToolId, boolean>;
+  return Object.fromEntries(runnerToolIds.map((id) => [id, !defaultOffTools.has(id)])) as Record<RunnerToolId, boolean>;
+}
+
+export function webToolsEnabled(settings: Record<RunnerToolId, boolean>): boolean {
+  return settings.web_search === true && settings.web_fetch === true;
 }
 
 export function isRunnerToolId(value: unknown): value is RunnerToolId {
