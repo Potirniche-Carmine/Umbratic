@@ -78,6 +78,7 @@ let previewSkills = previewDefaultSkills.map((skill) => ({
   ...skill,
   enabled: harnessSystemSkillIds[readPreviewHarnessProfile()].has(skill.id),
 }));
+let previewWebTools = false;
 
 export function createPreviewEnvironment() {
   const {
@@ -319,7 +320,7 @@ function createPreviewApi(): DesktopApi {
     privacy: {
       share: "disabled",
       enabledProviders: [],
-      webTools: "disabled",
+      webTools: "off",
     },
     diagnostics: {
       runnerName: "UmbraticRunner",
@@ -367,6 +368,7 @@ function createPreviewApi(): DesktopApi {
     contextLength: readPreviewContextLength(),
     reasoningEffort: readPreviewReasoningEffort(),
     showThinking: readPreviewShowThinking(),
+    webTools: previewWebTools,
   }),
   getCapabilityProbes: async () => previewCapabilityReport(),
   ...previewRemoteApi,
@@ -495,6 +497,10 @@ function createPreviewApi(): DesktopApi {
   setPermissionMode: async (mode) => {
     setPreviewPermissionMode(mode);
     return getPreviewPermissionMode();
+  },
+  setWebTools: async (enabled) => {
+    previewWebTools = enabled === true;
+    return previewWebTools;
   },
   listAvailableIdes: async () => defaultIdeChoices,
   startTask: async () => { throw new Error("Open the Electron app to run a task."); },

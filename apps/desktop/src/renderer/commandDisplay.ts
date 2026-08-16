@@ -37,6 +37,7 @@ export type CommandRun = {
 
 const commandOutputPreviewCharacterLimit = 12000;
 const commandOutputPreviewLineLimit = 5;
+const webFetchPreviewCharacterLimit = 600;
 
 // Every runner tool that is not a shell command. Keyed by the tool name the
 // runner reports, so a new tool cannot silently fall through to shell rendering.
@@ -47,6 +48,8 @@ const workspaceToolLabels: Record<string, string> = {
   ls: "List directory",
   find: "Find paths",
   search: "Search workspace",
+  web_search: "Search the web",
+  web_fetch: "Read web page",
   write: "Write file",
   edit: "Edit files",
   apply_patch: "Edit files",
@@ -90,6 +93,21 @@ function previewTail(value: string, limit: number): { text: string; truncated: b
   return { text: value.slice(-limit), truncated: true };
 }
 
+function previewHead(value: string, limit: number): { text: string; truncated: boolean } {
+  if (value.length <= limit) return { text: value, truncated: false };
+  return { text: value.slice(0, limit).trimEnd(), truncated: true };
+}
+
+function previewOutput(run: CommandRun): { text: string; truncated: boolean } {
+  const output = commandVisibleOutput(run);
+  if (run.toolKind === "web_fetch") return previewHead(output, webFetchPreviewCharacterLimit);
+  return previewTail(output, commandOutputPreviewCharacterLimit);
+}
+
+function webFetchHost(command: string): string | undefined {
+  return command.match(/https?:\/\/([^/\s]+)/i)?.[1];
+}
+
 function hidesReadValidationDetails(run: CommandRun): boolean {
   return run.toolKind === "read" && run.resultStatus === "validation_error";
 }
@@ -105,7 +123,7 @@ export function commandHasVisibleDetails(run: CommandRun): boolean {
 
 export function commandSummary(run: CommandRun): string {
   if (run.status === "running") return "running";
-  const outputPreview = previewTail(commandVisibleOutput(run), commandOutputPreviewCharacterLimit);
+  const outputPreview = previewOutput(run);
   const output = stripAnsi(outputPreview.text).trim();
   const lastLine = output.split(/\r?\n/).filter(Boolean).slice(-1)[0];
   if (run.status === "failed") {
@@ -118,19 +136,23 @@ export function commandSummary(run: CommandRun): string {
 export function commandShellText(run: CommandRun): string {
   const isTool = !isShellRun(run);
   const parts = isTool ? [] : [`$ ${run.command}`];
-  const outputPreview = previewTail(commandVisibleOutput(run), commandOutputPreviewCharacterLimit);
+  const outputPreview = previewOutput(run);
   const output = stripAnsi(outputPreview.text).trimEnd();
   if (output) {
-    const outputLines = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-    const lineTruncated = outputLines.length > commandOutputPreviewLineLimit;
-    if (outputPreview.truncated || lineTruncated) {
-      const visibleLines = outputLines.slice(-(commandOutputPreviewLineLimit - 1));
-      const marker = outputPreview.truncated
-        ? "[Earlier output omitted.]"
-        : `[${outputLines.length - visibleLines.length} earlier output line${outputLines.length - visibleLines.length === 1 ? "" : "s"} omitted.]`;
-      parts.push([marker, ...visibleLines].join("\n"));
+    if (run.toolKind === "web_fetch" && outputPreview.truncated) {
+      parts.push(`${output}\n\n[Page text truncated.]`);
     } else {
-      parts.push(output);
+      const outputLines = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+      const lineTruncated = outputLines.length > commandOutputPreviewLineLimit;
+      if (outputPreview.truncated || lineTruncated) {
+        const visibleLines = outputLines.slice(-(commandOutputPreviewLineLimit - 1));
+        const marker = outputPreview.truncated
+          ? "[Earlier output omitted.]"
+          : `[${outputLines.length - visibleLines.length} earlier output line${outputLines.length - visibleLines.length === 1 ? "" : "s"} omitted.]`;
+        parts.push([marker, ...visibleLines].join("\n"));
+      } else {
+        parts.push(output);
+      }
     }
   }
   if (isTool && !parts.length) parts.push(commandSummary(run));
@@ -143,6 +165,13 @@ export function commandDetailLabel(run: CommandRun): string {
 }
 
 export function activityToolLabel(run: CommandRun): { key: string; label: string } {
+  if (run.toolKind === "web_fetch") {
+    const host = webFetchHost(run.command);
+    return {
+      key: `web_fetch:${(host ?? run.command).toLowerCase()}`,
+      label: host ? `Read ${host}` : "Read web page",
+    };
+  }
   const fileTool = run.command.trim().match(/^(read|write|edit)\s+([^\s]+)/i);
   if (fileTool) {
     const target = fileTool[2].replaceAll("\\", "/");

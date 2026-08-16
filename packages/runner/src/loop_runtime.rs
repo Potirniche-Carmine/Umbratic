@@ -13,7 +13,9 @@ use crate::{
         observed_context_event, record_system_prompt_size, request_estimate, set_usage_anchor,
         skill_profile,
     },
-    conversation_state::{ConversationStateSnapshotInput, snapshot_conversation_state},
+    conversation_state::{
+        ConversationStateSnapshotInput, ensure_local_date_prefix, snapshot_conversation_state,
+    },
     events::{empty_summary, increment, now_iso, step_settled_event},
     permission::PermissionBroker,
     public_progress::{PublicProgressSchedule, compaction_finished, compaction_started},
@@ -299,8 +301,10 @@ pub(crate) async fn prepared_messages(
         }
         let fits_tokens = usage.estimated_tokens() <= session.config.context_length;
         if fits_tokens && messages.len() <= MAX_PROVIDER_MESSAGES {
+            let mut outgoing = messages.clone();
+            ensure_local_date_prefix(&mut outgoing, session.config.local_date.as_deref());
             return Ok(PreparedRequest {
-                messages: messages.clone(),
+                messages: outgoing,
                 max_output_tokens: usage.reserve_tokens,
                 usage,
                 profile_fingerprint,

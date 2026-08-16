@@ -35,7 +35,7 @@ import type { BackendUiEvent, CapabilityProbeReport, ChatAttachment, ReviewFile,
 import { pathInside } from "./utils";
 import { normalizeReviewFile, buildTextDiff } from "../shared/reviewDiff";
 import { boundedRecentLines } from "./historyContext";
-import { limitPromptImages, shouldIncludeWorkspaceContext } from "./promptContext";
+import { limitPromptImages, localDateContextLine, shouldIncludeWorkspaceContext } from "./promptContext";
 import { rootAgentInstructions } from "./repositoryInstructions";
 import {
   visibleTaskEvents,
@@ -313,7 +313,12 @@ export async function runnerPromptForTask(
     workspaceHasFiles: remote ? true : !directoryIsEmpty(rootPath),
     attachmentCount: attachments.length,
     historicalAttachmentCount: historicalAttachments.length,
-  })) return [{ type: "text", text: userPrompt }];
+  })) {
+    return [
+      { type: "text", text: `Umbratic chat context:\n- ${localDateContextLine()}` },
+      { type: "text", text: userPrompt },
+    ];
+  }
   // What the model is told is available has to describe the machine the tools
   // will actually run on, which for a remote task is not this one.
   const capabilityReport = remote
@@ -323,19 +328,22 @@ export async function runnerPromptForTask(
   const lines = remote
     ? [
         "Umbratic workspace context:",
+        `- ${localDateContextLine()}`,
         `- the workspace is on a remote host reached over SSH: ${remote.name}`,
         `- opened folder on that host: ${remote.directory}`,
         "- workspace tools run on the remote host, so paths and commands are that host's, not this computer's",
       ]
-    : hiddenChat
+      : hiddenChat
       ? [
           "Umbratic chat context:",
+          `- ${localDateContextLine()}`,
           "- no project folder is selected for this chat",
           "- Umbratic created a private scratch workspace for attachments and any files produced during the conversation",
           `- scratch workspace: ${rootPath}`,
         ]
       : [
           "Umbratic workspace context:",
+          `- ${localDateContextLine()}`,
           `- opened folder: ${rootPath}`,
           `- workspace kind: ${task.workspaceKind}`,
         ];

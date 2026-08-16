@@ -12,6 +12,7 @@ import { refreshWorkspaceGraph, workspaceGraphRunnerConfig } from "./indexerServ
 import { veilManagedModelId } from "./endpointConfig";
 import { currentLocalVeilConnection } from "./localVeil";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
+import { localCalendarDate } from "./promptContext";
 import { enabledPromptSkills } from "./skills";
 import { readContextLengthSetting, readHarnessProfileSetting, readModelEndpointSettings, readReasoningEffortSetting, readShowThinkingSetting } from "./storage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
@@ -90,6 +91,7 @@ export function buildUmbraticRunnerConfig(
     })),
     capabilities: task.capabilityProbes ?? [],
     permissionMode: "normal",
+    localDate: localCalendarDate(),
     enabledTools,
     approvedExecutables,
     lspServers,

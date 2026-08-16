@@ -181,6 +181,7 @@ const umbraticApi = {
   saveSkillDocument: (input: { id: string; content: string }) => invoke("umbratic:save-skill-document", input),
   resetSystemSkill: (input: { id: string }) => invoke("umbratic:reset-system-skill", input),
   setPermissionMode: (mode: PermissionMode) => invoke("umbratic:set-permission-mode", mode),
+  setWebTools: (enabled: boolean) => invoke("umbratic:set-web-tools", enabled),
   listAvailableIdes: () => invoke("umbratic:list-available-ides"),
   startTask: (input: {
     repositoryId?: string;

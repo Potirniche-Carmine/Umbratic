@@ -151,12 +151,6 @@ export async function handleRunnerPermission(
   };
   emit({ type: "permission.requested", taskId: task.id, request });
 
-  if (type === "webfetch" || type === "websearch") {
-    emit({ type: "permission.resolved", taskId: task.id, id, decision: "deny" });
-    await replyRunnerPermission(run, id, false);
-    return "resolved";
-  }
-
   pendingPermissions.set(id, {
     taskId: task.id,
     onAllow: () => replyRunnerPermission(run, id, true),

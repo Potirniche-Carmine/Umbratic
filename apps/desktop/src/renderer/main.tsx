@@ -81,7 +81,7 @@ import {
   ComposerModelPicker,
   DictationControl,
   PermissionModePicker,
-  WorktreeToggle,
+  WebToolsControl, WorktreeToggle,
   type ComposerModelOption,
 } from "./ComposerControls";
 import { insertTranscript, useDictation } from "./dictation";
@@ -257,7 +257,7 @@ const defaultStartupSettings: DesktopStartupSettings = {
   harnessProfile: defaultHarnessProfileId,
   contextLength: DEFAULT_CONTEXT_LENGTH,
   reasoningEffort: DEFAULT_REASONING_EFFORT,
-  showThinking: false,
+  showThinking: false, webTools: false,
 };
 const initialPrompt = "";
 const emptyReviewFiles: ReviewFile[] = [];
@@ -4185,7 +4185,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 disabled={busy}
                 onToggle={(next) => selectWorkspaceMode(next ? "worktree" : "local")}
               />
-            ) : null}
+            ) : null}<WebToolsControl initial={startupSettings.webTools === true} disabled={busy} setWebTools={api.setWebTools} onError={setError} />
 
             <div className="attachmentControl">
               <button

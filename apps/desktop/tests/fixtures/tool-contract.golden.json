@@ -166,6 +166,50 @@
   },
   {
     "function": {
+      "description": "Search the public web. Returns titles, URLs, and short snippets from DuckDuckGo. These are not full pages; call web_fetch with one result URL to read a page. Send exactly query. Private and loopback hosts never appear.",
+      "name": "web_search",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "description": "The search query. Distill the question; do not paste the whole user prompt.",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Read the text of one public web page. Use a URL from web_search or the user. Returns readable page text, not a screenshot or a browser. Private, loopback, link-local, and credentialed URLs are blocked. Send exactly url.",
+      "name": "web_fetch",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "description": "One absolute http or https URL.",
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
       "description": "Create or replace one workspace text file after permission. Send exactly path and content. Parents are created after approval; the write is staged and installed atomically.",
       "name": "write",
       "parameters": {

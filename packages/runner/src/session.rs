@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     config::{RunnerConfig, load_runner_config},
     context::{ContextCalibration, SessionContextStore, SystemPromptSize, UsageAnchor},
-    conversation_state::ConversationState,
+    conversation_state::{ConversationState, ensure_local_date_prefix},
     diagnostics::RunnerDiagnostics,
     events::RunnerEvent,
     lsp::LspService,
@@ -219,10 +219,11 @@ impl SessionStore {
         });
         let lsp = (!self.config.lsp_servers.is_empty())
             .then(|| LspService::new(self.config.cwd.clone(), self.config.lsp_servers.clone()));
-        let messages = conversation_state
+        let mut messages = conversation_state
             .as_ref()
             .map(ConversationState::seeded_messages)
             .unwrap_or_default();
+        ensure_local_date_prefix(&mut messages, self.config.local_date.as_deref());
         let durable_summary = conversation_state.and_then(|state| state.summary);
         let session = Arc::new(Session {
             id: id.clone(),
@@ -332,6 +333,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
             headers: std::collections::BTreeMap::new(),
             mtls: None,
         },
+        local_date: None,
     })
 }
 

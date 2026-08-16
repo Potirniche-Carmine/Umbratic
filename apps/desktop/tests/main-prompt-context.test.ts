@@ -25,6 +25,11 @@ test("limitPromptImages retains the newest bounded images and all text context",
   assert.deepEqual(Array.from(byteBounded.filter((part) => part.type === "image"), (part) => part.data_url), ["b".repeat(8)]);
 });
 
+test("local calendar date is a weekday month day year on the user's clock", () => {
+  assert.equal(promptContext.localCalendarDate(new Date(2026, 7, 15)), "Saturday, August 15, 2026");
+  assert.equal(promptContext.localDateContextLine(new Date(2026, 7, 15)), "today's date: Saturday, August 15, 2026");
+});
+
 test("workspace context follows project, file, and attachment state without matching prompt text", () => {
   const emptyChat = { hasProject: false, workspaceHasFiles: false, attachmentCount: 0, historicalAttachmentCount: 0 };
   assert.equal(promptContext.shouldIncludeWorkspaceContext(emptyChat), false);

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, GitBranch, Hand, Loader2, Mic, RefreshCw, ShieldCheck, Square } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, GitBranch, Globe, Hand, Loader2, Mic, RefreshCw, ShieldCheck, Square } from "lucide-react";
 
 import type { PermissionMode, ReasoningEffort } from "../shared/desktopApi";
 import type { DictationDevice, DictationStatus } from "./dictation";
+import { persistWebTools, useWebToolsEnabled, WebToolsConsentDialog } from "./WebToolsConsent";
 import { ShortcutTooltip, Tooltip } from "./Tooltip";
 
 /**
@@ -458,6 +459,60 @@ export function ComposerModelPicker({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Lets this chat search the public web and read pages. Off until asked: the
+ * queries leave this machine, so the control is the consent.
+ */
+export function WebToolsControl({
+  initial,
+  disabled,
+  setWebTools,
+  onError,
+}: {
+  initial: boolean;
+  disabled: boolean;
+  setWebTools(enabled: boolean): Promise<boolean>;
+  onError(message: string): void;
+}) {
+  const enabled = useWebToolsEnabled(initial);
+  const [confirming, setConfirming] = useState(false);
+  const title = enabled
+    ? "This chat can search the web and read pages"
+    : "This chat stays offline";
+  return (
+    <>
+      <label className={`worktreeToggle ${enabled ? "isOn" : ""}`} title={title}>
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={disabled}
+          aria-haspopup="dialog"
+          onChange={(event) => {
+            const next = event.currentTarget.checked;
+            if (next) {
+              setConfirming(true);
+              return;
+            }
+            void persistWebTools(false, setWebTools, onError);
+          }}
+        />
+        <span className="worktreeToggleBox" aria-hidden="true">
+          <Globe size={10} strokeWidth={2.5} />
+        </span>
+        <span>Web</span>
+      </label>
+      <WebToolsConsentDialog
+        open={confirming}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => {
+          setConfirming(false);
+          void persistWebTools(true, setWebTools, onError);
+        }}
+      />
+    </>
   );
 }
 

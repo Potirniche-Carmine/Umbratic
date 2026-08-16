@@ -11,7 +11,7 @@ import {
   localEndpointForced,
   managedModelEndpointDefaults,
 } from "./config";
-import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
+import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools, webToolsEnabled } from "./toolSettings";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
 import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
 import type { DesktopStartupSettings, DictationSettings, KeyBindingSettings, ReasoningEffort } from "../shared/desktopApi";
@@ -277,8 +277,7 @@ export function writeModelEndpointSettings(input: Partial<ActiveModelEndpointSet
   return next;
 }
 
-export function readToolSettings(): Record<RunnerToolId, boolean> {
-  const settings = readRawSettings();
+function toolSettingsFromRaw(settings: RawSettings): Record<RunnerToolId, boolean> {
   const rawTools = settings.tools && typeof settings.tools === "object" ? settings.tools : {};
   return {
     ...defaultToolSettings(),
@@ -286,6 +285,15 @@ export function readToolSettings(): Record<RunnerToolId, boolean> {
       Object.entries(rawTools).filter(([id, value]) => isRunnerToolId(id) && typeof value === "boolean"),
     ),
   } as Record<RunnerToolId, boolean>;
+}
+
+export function readToolSettings(): Record<RunnerToolId, boolean> {
+  return toolSettingsFromRaw(readRawSettings());
+}
+
+export function writeWebToolsSetting(enabled: boolean): boolean {
+  const next = writeToolSettings({ web_search: enabled, web_fetch: enabled });
+  return webToolsEnabled(next);
 }
 
 export function writeToolSettings(input: Partial<Record<RunnerToolId, boolean>>): Record<RunnerToolId, boolean> {
@@ -531,6 +539,7 @@ export function readStartupSettings(): DesktopStartupSettings {
     contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),
     reasoningEffort: isReasoningEffort(settings.reasoningEffort) ? settings.reasoningEffort : DEFAULT_REASONING_EFFORT,
     showThinking: settings.showThinking === true,
+    webTools: webToolsEnabled(toolSettingsFromRaw(settings)),
   };
 }
 
