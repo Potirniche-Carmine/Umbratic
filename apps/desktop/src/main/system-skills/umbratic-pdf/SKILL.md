@@ -1,53 +1,96 @@
 ---
 name: PDF & OCR
-description: Use for local PDF reading, extraction, generation, rendering, page-aware review, and OCR of images or scanned documents.
+description: Use to create, inspect, or edit PDF files — reports, one-pagers, whitepapers, proposals; and page-level work on an existing PDF such as merge, split, rotate, watermark, stamp, fill a form, or read a scan with OCR.
 ---
 
-# PDF & OCR
+# PDF
 
-## When To Use
+Everything goes through the `artifact` tool. You send JSON; the engine typesets
+the file or applies page operations. Never write `reportlab`, `pypdf`, or any
+other library code, and never shell out to Poppler or Ghostscript.
 
-- Read, summarize, compare, or review local PDF files where page order, layout, tables, images, or visual fidelity matter.
-- Create PDF reports, one-pagers, white papers, handouts, and other fixed-layout business artifacts.
-- Convert structured source material into a polished PDF deliverable that can be rendered and inspected locally.
-- Extract text from screenshots, scans, photographed documents, image attachments, and scanned PDFs when embedded text is missing or unreliable.
+## The one thing to understand about editing a PDF
 
-## Local Workflow
+**A PDF has no paragraphs.** It has glyphs at coordinates, with line breaks a
+program you never saw decided. So there is no `replaceText` and there never will
+be: rewriting a sentence would mean reflowing a page whose layout you cannot
+reconstruct, and the result overlaps itself.
 
-1. Treat supplied PDFs and source files as the factual source of truth. Separate extracted facts, assumptions, and generated copy.
-2. Prefer the native inspector for reading: attached PDFs arrive pre-routed (native text extract for text PDFs, page images for scans), and the `read` / `read_attachment` tools return the same native Markdown extract with page markers, classification, and page counts.
-3. Fall back to `pdfplumber` or `pypdf` only when the native extract reports encoding issues, when table or layout structure must be reconstructed, or for metadata and outline inspection the native extract does not cover.
-4. Generate new PDFs with `reportlab` when PDF authoring is requested and the Python artifact runtime is available.
-5. Render final PDFs with Poppler (`pdftoppm` plus `pdfinfo`) before claiming visual QA.
-6. Inspect rendered page PNGs for clipping, overlap, illegible type, bad table geometry, missing images, broken glyphs, page-number issues, and awkward section breaks.
+The ops are page-level and metadata-level: `merge`, `split`, `extractPages`,
+`deletePages`, `reorder`, `rotate`, `insertBlank`, `watermark`, `stamp`,
+`fillForm`, `flatten`, `setMetadata`.
 
-## OCR Workflow
+**To change the words, rebuild from source with `create`.** If the user wants
+the body text of a PDF changed and you do not have the source, say that plainly
+and offer to rebuild it from the content you can read.
 
-1. Prefer clean embedded PDF text when it is available and layout fidelity is not important. The native inspector flags pages without a text layer and garbled encodings; reserve OCR and vision for those pages.
-2. For image or scanned-PDF text, use the local OCR artifact digest when one is provided in the prompt.
-3. Treat OCR Markdown as the readable digest and OCR JSON as the auditable source for coordinates, page numbers, confidence, warnings, and timing.
-4. Preserve uncertainty. Mention low-confidence lines when a value matters, and never silently drop uncertain text.
-5. If warnings mention columns or table-like layouts, review the relevant page and line evidence before making strong claims.
+## Before you build anything
 
-## Paths And Files
+**`inspect` first.** You get the page count, each page's size and rotation, the
+text on each page, and the form field names `fillForm` addresses.
 
-- Keep generated PDF deliverables under `.umbratic/artifacts/pdf/` unless the user requests a specific path.
-- Use `.umbratic/templates/pdf/` only for user-supplied or server-selected templates; do not invent a protected template.
-- Put temporary extraction, render, and QA files under a task-specific scratch directory and keep final filenames stable and descriptive.
-- Keep OCR outputs under `.umbratic/artifacts/ocr/`; use `*.ocr.json` for the structured contract and `*.ocr.md` for the digest.
+**`inspect-only`** — the file is encrypted or unopenable. Say so and stop.
 
-## Quality Bar
+**`scanned`** in `unsupported` means no page had extractable text. The pages
+still merge, rotate, split, and stamp perfectly well — that is why the surface
+is still `surgical`. To read a scan, use OCR (below), not text extraction.
 
-- Maintain a polished hierarchy: deliberate margins, consistent typography, clear section rhythm, aligned tables, and readable captions.
-- Tables and charts must have explicit labels, balanced spacing, and legible values. Fix cramped columns before shrinking text.
-- Preserve citations and source references as human-readable text. Do not leave tool tokens, placeholders, or raw extraction artifacts in the final PDF.
-- Use ASCII hyphens in generated prose unless a source document requires a specific character.
+## Creating
 
-## Fallbacks
+```json
+{"action":"create","format":"pdf","spec":{
+  "preset":"narrative_proposal",
+  "page":{"size":"A4","orientation":"portrait"},
+  "meta":{"title":"Field Proposal","author":"Umbratic"},
+  "footer":{"pageNumbers":true},
+  "blocks":[{"type":"title","text":"Field Proposal"},
+            {"type":"heading","level":1,"text":"Summary"},
+            {"type":"paragraph","text":"The programme delivers **three** outcomes."}]}}
+```
 
-- If the native extract reports encoding issues or a page has no text layer, do not trust that text; use vision/OCR paths for those pages.
-- If extraction packages are missing, use the native extract or available render/page inspection paths, or state the extraction gap.
-- If `reportlab` is missing, provide clean structured source content and state the PDF generation gap.
-- If Poppler render tools are missing or rendering fails, do not claim PDF visual QA. State exactly what was checked instead.
-- If the OCR engine is missing or fails on a page, preserve the warning and do not claim that page was read.
-- Do not claim table reconstruction, formula recognition, chart parsing, or document-layout analysis unless a separate verified capability was used.
+The blocks and presets are the same vocabulary as Word — see the Documents
+skill and `references/spec.md`. A spec written for `docx` builds as `pdf`
+unchanged; it is re-typeset, not converted, so line and page breaks differ.
+
+Pagination is handled for you: a heading never orphans at the foot of a page,
+and a table repeats its header wherever its body crosses one.
+
+## Page work
+
+```json
+{"action":"edit","path":"reports/q3.pdf","ops":[
+  {"op":"watermark","text":"DRAFT"},
+  {"op":"rotate","angle":90,"pages":[1]}]}
+```
+
+Page numbers are one-based, matching what `inspect` reports and what the reader
+shows. `split` needs `out` to be a folder; it writes `part-001.pdf` onward
+beside it and the result says how many.
+
+`flatten` is one-way — the field values become page content and the fields are
+gone. That is what makes a filled form safe to circulate, and it is not
+reversible, so only do it when the user asks to finalise.
+
+## OCR
+
+For a scan, a screenshot, or a photographed document, use the local OCR digest
+when one is supplied in the prompt.
+
+- Prefer embedded text when `inspect` shows the pages have any; OCR is for when
+  they do not.
+- The OCR Markdown is the digest you read. The OCR JSON is the auditable source:
+  coordinates, page numbers, confidence, warnings.
+- **Preserve uncertainty.** When a value matters — a total, a date, a name —
+  say if its line was low confidence. Never silently drop uncertain text and
+  never present an OCR reading as though it were typed.
+- If the warnings mention columns or table-like layout, check the page evidence
+  before making a strong claim about reading order.
+- OCR outputs stay under `.umbratic/artifacts/ocr/` as `*.ocr.json` and
+  `*.ocr.md`. Nothing is uploaded and no model is downloaded.
+
+## Finishing
+
+Files land in `.umbratic/artifacts/pdf/` unless the user gave a path.
+
+Report: the path, the page count, `origin` and `editSurface`, any extra files a
+`split` wrote, and your assumptions. Never paste the spec back at the user.

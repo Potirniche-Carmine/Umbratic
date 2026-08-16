@@ -1,0 +1,95 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const skillsRoot = path.join(desktopRoot, "src", "main", "system-skills");
+
+/** The four skills the artifact tool serves. */
+const artifactSkills = [
+  "umbratic-presentations",
+  "umbratic-documents",
+  "umbratic-spreadsheets",
+  "umbratic-pdf",
+];
+
+test("each artifact skill has frontmatter and stays inside its size budget", () => {
+  for (const skill of artifactSkills) {
+    const file = path.join(skillsRoot, skill, "SKILL.md");
+    const body = fs.readFileSync(file, "utf8");
+    // A skill body is in context whenever the skill is enabled, so its size is
+    // a running cost rather than a one-off.
+    assert.ok(
+      Buffer.byteLength(body) <= 6 * 1024,
+      `${skill}/SKILL.md is ${Buffer.byteLength(body)} bytes; the budget is 6144`,
+    );
+    const frontmatter = /^---\nname: (.+)\ndescription: (.+)\n---\n/.exec(body);
+    assert.ok(frontmatter, `${skill}/SKILL.md needs name and description frontmatter`);
+    // The description is the routing signal: it has to name the file types and
+    // the verbs, or the skill never gets selected for the request it serves.
+    assert.ok(
+      frontmatter[2].length > 60,
+      `${skill} description is too thin to route on: ${frontmatter[2]}`,
+    );
+  }
+});
+
+test("the artifact skills route through the tool rather than through library code", () => {
+  for (const skill of artifactSkills) {
+    const body = fs.readFileSync(path.join(skillsRoot, skill, "SKILL.md"), "utf8");
+    assert.match(body, /`artifact` tool/, `${skill} should name the tool`);
+    // The path this replaced: skills that told the model to call a library when
+    // the host happened to have one.
+    for (const banned of ["pptxgenjs", "python-pptx", "openpyxl", "reportlab", "LibreOffice", "soffice"]) {
+      const mention = new RegExp(`\\b${banned}\\b`, "i");
+      if (!mention.test(body)) continue;
+      assert.match(
+        body,
+        new RegExp(`(Never write|never shell out to|no other library)[^.]*${banned}`, "i"),
+        `${skill} mentions ${banned} outside a prohibition`,
+      );
+    }
+  }
+});
+
+test("the orphaned OCR skill is gone and its guidance lives in the PDF skill", () => {
+  assert.equal(fs.existsSync(path.join(skillsRoot, "umbratic-ocr")), false);
+  const pdf = fs.readFileSync(path.join(skillsRoot, "umbratic-pdf", "SKILL.md"), "utf8");
+  assert.match(pdf, /## OCR/);
+  assert.match(pdf, /\.ocr\.json/);
+  assert.match(pdf, /[Pp]reserve uncertainty/);
+});
+
+test("the generated references are in step with the limits the code enforces", () => {
+  const generated = ["umbratic-presentations", "umbratic-documents", "umbratic-pdf"].flatMap((skill) =>
+    ["spec.md", "ops.md"].map((name) => path.join(skillsRoot, skill, "references", name)),
+  );
+  const before = generated.map((file) => fs.readFileSync(file, "utf8"));
+  execFileSync("node", ["scripts/generate-skill-references.ts"], {
+    cwd: desktopRoot,
+    stdio: "pipe",
+  });
+  generated.forEach((file, index) => {
+    assert.equal(
+      fs.readFileSync(file, "utf8"),
+      before[index],
+      `${path.relative(desktopRoot, file)} is stale; run npm run generate:skill-references`,
+    );
+  });
+});
+
+test("the spreadsheet skill lists exactly the formula allowlist the engine enforces", () => {
+  const body = fs.readFileSync(path.join(skillsRoot, "umbratic-spreadsheets", "SKILL.md"), "utf8");
+  const source = fs.readFileSync(
+    path.join(desktopRoot, "..", "..", "packages", "artifacts", "src", "formula.rs"),
+    "utf8",
+  );
+  const declared = [...source.matchAll(/^\s{4}"([A-Z0-9]+)",$/gm)].map((match) => match[1]);
+  assert.ok(declared.length > 40, `expected the allowlist, found ${declared.length} entries`);
+  for (const name of declared) {
+    assert.match(body, new RegExp(`\\b${name}\\b`), `${name} is missing from the skill`);
+  }
+});
