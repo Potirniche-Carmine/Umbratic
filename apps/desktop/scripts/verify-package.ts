@@ -145,6 +145,10 @@ verifyBinary(path.join(resources, "runner", executable("umbratic-runner")), /Umb
 verifyBinary(path.join(resources, "desktop-core", executable("umbratic-desktop-core")), /usage: umbratic-desktop-core/);
 verifyBinary(path.join(resources, "pdf", executable("umbratic-pdf")), /umbratic-pdf inspect/);
 verifyBinary(
+  path.join(resources, "artifacts", executable("umbratic-artifacts")),
+  /umbratic-artifacts .*one JSON job on stdin/,
+);
+verifyBinary(
   path.join(resources, "veil", executable("veil")),
   /VEIL_AUTH_TOKEN is required/,
   { ...process.env, VEIL_MODE: "local", VEIL_AUTH_TOKEN: "" },

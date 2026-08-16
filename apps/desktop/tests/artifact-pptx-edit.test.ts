@@ -462,15 +462,16 @@ test("the engine names an encrypted or legacy file rather than calling it corrup
   assert.match(response.errors[0].message, /inspect-only/);
 });
 
-test("a format with no engine yet says so instead of failing obscurely", async () => {
+test("a format this engine does not handle names the ones it does", async () => {
   const response = await engine.runArtifactJob({
     action: "create",
-    format: "xlsx",
+    format: "rtf",
     spec: {},
     workspaceRoot: workspace(),
   });
   assert.equal(response.ok, false);
-  assert.match(response.errors[0].message, /not built yet/);
+  assert.equal(response.kind, "unsupported");
+  assert.match(response.errors[0].message, /pptx, docx, pdf, xlsx/);
 });
 
 test("insertSlide builds with the create vocabulary and lands where it was asked to", () => {
