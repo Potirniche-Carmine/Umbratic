@@ -25,12 +25,13 @@ const composerTestTwoTurns = composerTestParams.has("twoTurns");
 const composerTestStage = ["orienting", "working", "answering"].includes(composerTestParams.get("stage") ?? "")
   ? composerTestParams.get("stage") as "orienting" | "working" | "answering"
   : null;
+const composerTestParallelWeb = composerTestParams.has("parallelWeb");
 const composerTestToolIssue = composerTestParams.has("toolIssue");
 const composerTestLiveWork = composerTestParams.has("liveWork");
 const composerTestTurnOutcome = ["model_gave_up", "safety_limit"].includes(composerTestParams.get("turnOutcome") ?? "")
   ? composerTestParams.get("turnOutcome") as "model_gave_up" | "safety_limit"
   : null;
-const composerTestAttachments: ChatAttachment[] = composerTestDirectAnswer || composerTestWaitingOnly || composerTestEscapedPlan ? [] : [
+const composerTestAttachments: ChatAttachment[] = composerTestDirectAnswer || composerTestWaitingOnly || composerTestEscapedPlan || composerTestParallelWeb ? [] : [
   { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
   { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
 ];
@@ -115,7 +116,17 @@ const composerTestStageEvents: BackendUiEvent[] = composerTestStage ? [
     { type: "assistant.delta" as const, taskId: "composer-test", text: "The endpoint is live at `/health` and returns `{\"status\":\"ok\"}`.\n\nIt is registered before the auth middleware, so an uptime check can reach it without a", at: new Date(Date.now() - 1_000).toISOString() },
   ] : []),
 ] : [];
-const composerTestEvents: BackendUiEvent[] = composerTestTour ? composerTestTourEvents : composerTestStage ? composerTestStageEvents : composerTestTwoTurns ? [
+const composerTestParallelWebPrompt = "What's in the news?";
+const composerTestParallelWebEvents: BackendUiEvent[] = [
+  { type: "user.message", taskId: "composer-test", text: composerTestParallelWebPrompt, at: new Date(Date.now() - 8_000).toISOString() },
+  { type: "assistant.progress.delta", taskId: "composer-test", text: "I'll search and read a few sources.", at: new Date(Date.now() - 6_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "web-search-1", command: "web_search latest news", cwd: "/workspace/Umbratic", kind: "read", toolKind: "web_search", commandClass: "network", at: new Date(Date.now() - 5_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "web-search-2", command: "web_search headlines", cwd: "/workspace/Umbratic", kind: "read", toolKind: "web_search", commandClass: "network", at: new Date(Date.now() - 5_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "web-fetch-1", command: "web_fetch https://www.notizie.it/latest", cwd: "/workspace/Umbratic", kind: "read", toolKind: "web_fetch", commandClass: "network", at: new Date(Date.now() - 4_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "web-fetch-2", command: "web_fetch https://www.publicnews.world/today", cwd: "/workspace/Umbratic", kind: "read", toolKind: "web_fetch", commandClass: "network", at: new Date(Date.now() - 4_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "web-fetch-3", command: "web_fetch https://www.livemint.com/news", cwd: "/workspace/Umbratic", kind: "read", toolKind: "web_fetch", commandClass: "network", at: new Date(Date.now() - 4_000).toISOString() },
+];
+const composerTestEvents: BackendUiEvent[] = composerTestTour ? composerTestTourEvents : composerTestStage ? composerTestStageEvents : composerTestParallelWeb ? composerTestParallelWebEvents : composerTestTwoTurns ? [
   { type: "user.message", taskId: "composer-test", text: "hey there", at: new Date(Date.now() - 60_000).toISOString() },
   { type: "assistant.delta", taskId: "composer-test", text: "Hello! How can I help you today? Whether it’s debugging code, analyzing data, drafting documentation, or anything else, feel free to let me know what you need assistance with.", at: new Date(Date.now() - 58_000).toISOString() },
   { type: "user.message", taskId: "composer-test", text: "tell me about C vs C# and the different industries they each apply to", at: new Date(Date.now() - 30_000).toISOString() },
@@ -483,12 +494,12 @@ const composerTestTask: TaskInfo = {
   id: "composer-test",
   chatId: "composer-test-chat",
   repositoryId: composerTestRepository.id,
-  prompt: composerTestTour ? "tell me more about this folder" : composerTestStage ? composerTestStagePrompt : composerTestVisiblePrompt,
+  prompt: composerTestTour ? "tell me more about this folder" : composerTestStage ? composerTestStagePrompt : composerTestParallelWeb ? composerTestParallelWebPrompt : composerTestVisiblePrompt,
   workspaceKind: "git",
   workspaceMode: "local",
   // A frozen stage is a run in flight, so it carries the running state that
   // drives the live block, the caret, and the withheld message actions.
-  state: composerTestTurnOutcome ? "failed" : composerTestRunning || composerTestStage || composerTestWaitingOnly ? "running" : "review_ready",
+  state: composerTestTurnOutcome ? "failed" : composerTestRunning || composerTestStage || composerTestWaitingOnly || composerTestParallelWeb ? "running" : "review_ready",
   originalBranch: "main",
   baseCommit: "preview",
   agentBranch: "preview",

@@ -6,7 +6,7 @@
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
   <link rel="stylesheet" href="/assets/style.css?v=10">
-  <link rel="stylesheet" href="/assets/models.css?v=4">
+  <link rel="stylesheet" href="/assets/models.css?v=5">
   <script defer src="/assets/console.js?v=11"></script>
 </head>
 <body>
@@ -32,7 +32,7 @@
         <div class="model-identity">
           <input class="model-name" name="display_name" value="{{.DisplayName}}" maxlength="120" required aria-label="Display name for {{.ID}}">
           <code>{{.ID}}{{if .IsDefault}} · default{{end}}</code>
-          <label class="model-role">
+          <label class="model-role{{if .IsSpeech}} is-speech{{end}}">
             <span class="visually-hidden">Role for {{.ID}}</span>
             <select name="role">
               <option value="chat" {{if not .IsSpeech}}selected{{end}}>Chat</option>

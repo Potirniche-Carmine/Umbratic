@@ -839,12 +839,14 @@
   background: var(--control-hover);
 }
 
-.activityLiveOutput {
-  min-height: 2.7em;
+/* Only mounted when a shell command has bytes to show. Height follows the
+   stream; a reserved min-height is what opened a gap under every running
+   tool, including web search, until the row finished and the pane vanished. */
+.activityLogEntry.commandLog .activityLiveOutput {
   max-height: 5.4em;
   margin: 3px 0 0 16px;
   overflow: hidden;
-  color: var(--text-secondary);
+  color: var(--muted);
   font-size: 10px;
   line-height: 1.35;
   white-space: pre-wrap;

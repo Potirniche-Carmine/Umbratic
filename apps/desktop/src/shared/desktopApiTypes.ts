@@ -436,8 +436,8 @@ export type TaskInfo = {
 export type ConversationMessage = {
   role: "user" | "assistant" | "tool";
   content: unknown;
-  tool_call_id?: string;
-  tool_calls?: unknown[];
+  toolCallId?: string;
+  toolCalls?: unknown[];
 };
 
 export type ConversationState = {

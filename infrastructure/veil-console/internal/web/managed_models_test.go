@@ -309,10 +309,17 @@ func TestModelsPageRegistersADictationRuntime(t *testing.T) {
 		`<option value="speech" selected>Dictation</option>`,
 		`<option value="chat" selected>Chat</option>`,
 		"Qwen3 ASR", "qwen3-asr",
+		// The dictation card is marked, so the one model that cannot answer a
+		// chat request is told apart from the fleet by looking rather than by
+		// reading each role control in turn.
+		`class="model-role is-speech"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("the models page must show %q", expected)
 		}
+	}
+	if strings.Count(body, `class="model-role is-speech"`) != 1 {
+		t.Fatalf("only the dictation card may carry the marker: %s", body)
 	}
 
 	// Veil takes one speech endpoint, so a second must be refused rather than

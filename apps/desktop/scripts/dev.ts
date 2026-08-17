@@ -138,7 +138,7 @@ async function buildDesktopProcessFiles() {
   });
   await runNodeScript(tsc, ["-p", "tsconfig.main.json"]);
   await build({
-    configFile: path.join(desktopRoot, "vite.preload.config.ts"),
+    configFile: path.join(desktopRoot, "vite.preload.config.mts"),
   });
   await runNodeScript(copySystemSkillsScript, []);
 }
@@ -150,7 +150,7 @@ async function main() {
   prepareRendererDevelopmentEnvironment(process.env);
 
   const viteServer = await createServer({
-    configFile: path.join(desktopRoot, "vite.config.ts"),
+    configFile: path.join(desktopRoot, "vite.config.mts"),
     server: {
       host: "127.0.0.1",
       port: Number.isFinite(requestedPort) ? requestedPort : 5173,
