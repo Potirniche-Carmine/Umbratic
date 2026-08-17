@@ -409,13 +409,13 @@ export function normalizeConversationState(value: unknown): ChatRecord["conversa
   }
   const tail = value.tail.map((message) => {
     if (!isRecord(message) || !["user", "assistant", "tool"].includes(String(message.role))) return null;
-    if (message.tool_call_id !== undefined && typeof message.tool_call_id !== "string") return null;
-    if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) return null;
+    if (message.toolCallId !== undefined && typeof message.toolCallId !== "string") return null;
+    if (message.toolCalls !== undefined && !Array.isArray(message.toolCalls)) return null;
     return {
       role: message.role as "user" | "assistant" | "tool",
       content: message.content,
-      ...(typeof message.tool_call_id === "string" ? { tool_call_id: message.tool_call_id } : {}),
-      ...(Array.isArray(message.tool_calls) ? { tool_calls: message.tool_calls } : {}),
+      ...(typeof message.toolCallId === "string" ? { toolCallId: message.toolCallId } : {}),
+      ...(Array.isArray(message.toolCalls) ? { toolCalls: message.toolCalls } : {}),
     };
   });
   if (tail.some((message) => !message) || Buffer.byteLength(JSON.stringify(value), "utf8") > 128 * 1024) return undefined;
@@ -441,7 +441,7 @@ function conversationStateTailIsComplete(tail: NonNullable<ChatRecord["conversat
   let pending: string[] = [];
   for (const message of tail) {
     if (message.role === "tool") {
-      const id = message.tool_call_id;
+      const id = message.toolCallId;
       if (!id) return false;
       const index = pending.indexOf(id);
       if (index < 0) return false;
@@ -449,9 +449,9 @@ function conversationStateTailIsComplete(tail: NonNullable<ChatRecord["conversat
       continue;
     }
     if (pending.length) return false;
-    if (message.tool_call_id) return false;
-    const ids = Array.isArray(message.tool_calls)
-      ? message.tool_calls
+    if (message.toolCallId) return false;
+    const ids = Array.isArray(message.toolCalls)
+      ? message.toolCalls
           .map((call) => (isRecord(call) && typeof call.id === "string" ? call.id : ""))
           .filter(Boolean)
       : [];

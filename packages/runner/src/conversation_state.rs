@@ -402,6 +402,21 @@ mod tests {
         });
         assert_eq!(state.tail.len(), 4);
         assert!(state.clone().validate().is_ok());
+        let encoded = serde_json::to_value(&state).unwrap();
+        let tail = encoded["tail"].as_array().expect("tail");
+        assert!(
+            tail.iter()
+                .any(|message| message.get("toolCalls").is_some())
+        );
+        assert!(
+            tail.iter()
+                .any(|message| message.get("toolCallId").is_some())
+        );
+        assert!(
+            tail.iter()
+                .all(|message| message.get("tool_calls").is_none()
+                    && message.get("tool_call_id").is_none())
+        );
     }
 
     #[test]

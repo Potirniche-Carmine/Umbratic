@@ -142,6 +142,12 @@ export function priorChatContext(events: BackendUiEvent[], currentUserPrompt = "
   return boundedRecentLines(lines);
 }
 
+function pushConversationHistory(lines: string[], history: string) {
+  if (!history) return;
+  if (lines.length) lines.push("");
+  lines.push("Conversation so far:", history);
+}
+
 export function capabilityNeedsForPrompt(prompt: string, attachments: ChatAttachment[] = []): CapabilityPromptNeeds {
   return {
     python: promptLooksLikePythonTask(prompt) || promptLooksLikeArtifactTask(prompt),
@@ -306,6 +312,9 @@ export async function runnerPromptForTask(
     : fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   const hiddenChat = !remote && isHiddenChatTask(task);
   const historicalAttachments = priorChatAttachments(task.events ?? [], userPrompt);
+  const hasDurableContext = options.useDurableContext
+    ?? Boolean(task.chatId && readChat(task.chatId)?.conversationState);
+  const history = hasDurableContext ? "" : priorChatContext(task.events ?? [], userPrompt);
   if (!shouldIncludeWorkspaceContext({
     hasProject: !hiddenChat,
     // A remote workspace cannot be inspected from here, and a run was asked for
@@ -313,7 +322,15 @@ export async function runnerPromptForTask(
     workspaceHasFiles: remote ? true : !directoryIsEmpty(rootPath),
     attachmentCount: attachments.length,
     historicalAttachmentCount: historicalAttachments.length,
-  })) return [{ type: "text", text: userPrompt }];
+  })) {
+    const lines: string[] = [];
+    pushConversationHistory(lines, history);
+    if (!history) return [{ type: "text", text: userPrompt }];
+    return [
+      { type: "text", text: lines.join("\n") },
+      { type: "text", text: userPrompt },
+    ];
+  }
   // What the model is told is available has to describe the machine the tools
   // will actually run on, which for a remote task is not this one.
   const capabilityReport = remote
@@ -340,16 +357,7 @@ export async function runnerPromptForTask(
           `- workspace kind: ${task.workspaceKind}`,
         ];
   if (!remote) pushAgentInstructionContext(lines, rootPath);
-  const hasDurableContext = options.useDurableContext
-    ?? Boolean(task.chatId && readChat(task.chatId)?.conversationState);
-  const history = hasDurableContext ? "" : priorChatContext(task.events ?? [], userPrompt);
-  if (history) {
-    lines.push(
-      "",
-      "Conversation so far, for reference only:",
-      history,
-    );
-  }
+  pushConversationHistory(lines, history);
   const capabilityGuidance = capabilityPromptGuidance(capabilityReport, capabilityNeeds);
   if (capabilityGuidance) lines.push("", capabilityGuidance);
   const parts: RunnerPromptPart[] = [{ type: "text", text: lines.join("\n") }];
