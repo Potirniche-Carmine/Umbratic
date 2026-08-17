@@ -111,6 +111,11 @@ fn admits(session: &Session, tool: &ToolDefinition, programs: &[String]) -> bool
         Gate::Service("workspace_graph") => {
             enabled("workspace_graph") && session.workspace_graph.is_some()
         }
+        // The engines live in the desktop app, not on this host, so the service
+        // is present exactly when the desktop said it has them. In SSH mode
+        // that is still the desktop's answer, which is why this is a declared
+        // flag rather than a probe of the machine the runner is on.
+        Gate::Service("artifact") => enabled("artifact") && session.config.artifact_service,
         Gate::Service(_) => false,
         Gate::ApprovedPrograms => enabled("command") && !programs.is_empty(),
         Gate::Skills => !session.config.skills.is_empty(),

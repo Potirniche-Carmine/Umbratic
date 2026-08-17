@@ -515,3 +515,42 @@ test("command aggregation, pending permissions, and timelines reflect real event
   assert.equal(readGroups[0].runs.length, 2);
 });
 
+test("live tool output is only for a streaming shell command that has bytes", () => {
+  const { commandLiveOutputPreview } = loadRendererFile("commandDisplay.ts");
+  const running = {
+    id: "run-1",
+    command: "npm test",
+    kind: "bash",
+    commandClass: "package-manager",
+    cwd: "C:/repo",
+    stdout: "",
+    stderr: "",
+    exitCode: null,
+    status: "running",
+  };
+  assert.equal(commandLiveOutputPreview(running), undefined);
+  assert.equal(commandLiveOutputPreview({ ...running, stdout: "ok\n" }), "ok\n");
+  assert.equal(commandLiveOutputPreview({ ...running, status: "passed", stdout: "ok\n" }), undefined);
+  assert.equal(
+    commandLiveOutputPreview({
+      ...running,
+      toolKind: "web_search",
+      command: "web_search latest news",
+      kind: "read",
+      commandClass: "network",
+    }),
+    undefined,
+  );
+  assert.equal(
+    commandLiveOutputPreview({
+      ...running,
+      toolKind: "web_search",
+      command: "web_search latest news",
+      kind: "read",
+      commandClass: "network",
+      stdout: "1. Example — https://example.com\nThese are short snippets.\n",
+    }),
+    undefined,
+  );
+});
+

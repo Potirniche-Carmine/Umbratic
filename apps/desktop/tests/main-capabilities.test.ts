@@ -83,13 +83,13 @@ test("probeLocalCapabilities records command, package, and Python package capabi
   assert.equal(byId.get("npm").status, "available");
   assert.equal(byId.get("uv").status, "missing");
   assert.equal(byId.get("python").status, "available");
-  assert.equal(byId.get("py-reportlab").status, "available");
-  assert.equal(byId.get("py-pdfplumber").status, "missing");
-  assert.equal(byId.get("py-pypdf").status, "available");
   assert.equal(byId.get("pdf-to-img").status, "available");
-  assert.equal(byId.get("node-docx").status, "available");
-  assert.equal(byId.get("node-pptx").status, "missing");
   assert.equal(byId.get("pdftoppm").status, "missing");
+  // The document engines ship inside the app, so there is no host package to
+  // probe for any of the four formats.
+  for (const retired of ["py-reportlab", "py-pdfplumber", "py-pypdf", "node-docx", "node-pptx", "node-xlsx", "libreoffice"]) {
+    assert.equal(byId.get(retired), undefined, `${retired} should no longer be probed`);
+  }
   assert.equal(byId.get("tesseract").status, "missing");
   assert.equal(byId.get("pdfinfo").status, "available");
   assert.equal(report.summary.requiredMissing, 0);
@@ -120,8 +120,9 @@ test("capability guidance degrades Python, CMake, and artifact workflows when pr
   assert.doesNotMatch(promptGuidance, /checked at/);
   assert.match(promptGuidance, /Python uv runtime: missing/);
   assert.match(promptGuidance, /CMake: missing; Ninja: missing; compiler: available/);
-  assert.match(promptGuidance, /PDF render QA with Poppler: missing or incomplete/);
-  assert.match(promptGuidance, /JS artifact authoring packages missing: node-pptx, node-xlsx/);
+  // One fact line, not a list of things the user might install.
+  assert.match(promptGuidance, /Artifact builder: pptx, docx, xlsx, pdf/);
+  assert.doesNotMatch(promptGuidance, /LibreOffice|reportlab|pdfplumber/);
   assert.match(promptGuidance, /local OCR digest generation is unavailable/);
 });
 

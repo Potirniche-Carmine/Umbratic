@@ -1,6 +1,6 @@
 import type { RunnerToolId } from "./types";
 
-export const runnerToolIds = ["read", "ls", "find", "search", "web_search", "web_fetch", "write", "edit", "lsp", "workspace_graph", "command"] as const satisfies readonly RunnerToolId[];
+export const runnerToolIds = ["read", "ls", "find", "search", "web_search", "web_fetch", "write", "edit", "lsp", "workspace_graph", "artifact", "command"] as const satisfies readonly RunnerToolId[];
 const defaultOffTools = new Set<RunnerToolId>(["web_search", "web_fetch"]);
 
 export function defaultToolSettings(): Record<RunnerToolId, boolean> {

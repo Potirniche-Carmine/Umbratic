@@ -121,6 +121,18 @@ export function commandHasVisibleDetails(run: CommandRun): boolean {
   return isShellRun(run) || commandVisibleOutput(run).trim().length > 0;
 }
 
+const liveOutputCharacterLimit = 1200;
+
+// Shell commands stream into this pane while they run. Workspace tools dump
+// their result at the end, so a reserved empty (or briefly filled) pane is
+// what spread parallel web rows ~100px apart until they finished.
+export function commandLiveOutputPreview(run: CommandRun): string | undefined {
+  if (run.status !== "running" || !isShellRun(run)) return undefined;
+  const output = commandVisibleOutput(run);
+  if (!output.trim()) return undefined;
+  return output.slice(-liveOutputCharacterLimit);
+}
+
 export function commandSummary(run: CommandRun): string {
   if (run.status === "running") return "running";
   const outputPreview = previewOutput(run);

@@ -19,4 +19,3 @@ export default defineConfig(({ command }) => ({
       filePath.endsWith(".worklet.js") ? false : undefined,
   },
 }));
-

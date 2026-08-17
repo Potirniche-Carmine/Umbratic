@@ -40,6 +40,7 @@ use crate::{
 
 const MAX_JSON_BODY_BYTES: usize = 512 * 1024;
 const MAX_PROMPT_BODY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_ARTIFACT_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 fn require_loopback(hostname: &str) -> Result<(), String> {
     if hostname
@@ -586,6 +587,41 @@ async fn permission_reply(
     )
 }
 
+/// The desktop's answer to one `artifact.requested` event.
+///
+/// The body is the engine's result verbatim — `ok`, `path`, `origin`,
+/// `editSurface`, `qa[]`, `outline` — and it is passed through rather than
+/// reshaped here: the tool renders it, and a runner that rewrote it would be a
+/// second place the result format has to be kept in step with the worker.
+async fn artifact_reply(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    request: Request,
+) -> Response {
+    // An inspect outline of a real workbook — sheets, headers, twenty sample
+    // rows each — is bigger than a permission reply ever is, so this route gets
+    // its own limit rather than making every small body pay for the largest.
+    let body = match read_json_with_limit(request, MAX_ARTIFACT_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let replied = state
+        .store
+        .artifacts
+        .reply(&state.store.sink, &id, Value::Object(body));
+    json_response(
+        if replied {
+            StatusCode::OK
+        } else {
+            // A job that already timed out or was aborted is gone. Saying so
+            // lets the desktop drop what it built instead of retrying into a
+            // broker that will never answer.
+            StatusCode::NOT_FOUND
+        },
+        Value::Bool(replied),
+    )
+}
+
 async fn abort(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     match state.store.abort(&id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -725,6 +761,7 @@ pub async fn listen(hostname: &str, port: u16) -> Result<RunnerServer, String> {
         .route("/session/{id}/abort", post(abort))
         .route("/session/{id}/queue", post(queue_action))
         .route("/permission/{id}/reply", post(permission_reply))
+        .route("/artifact/{id}/reply", post(artifact_reply))
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
         .with_state(state);

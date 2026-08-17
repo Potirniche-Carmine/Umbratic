@@ -33,12 +33,26 @@ fn repeated_exchange_limit(calls: &[ToolCall]) -> usize {
         matches!(
             tool_capability_name(&call.name),
             Some("write" | "edit" | "command")
-        )
+        ) || mutating_artifact(call)
     }) {
         MAX_REPEATED_MUTATING_TURNS
     } else {
         MAX_REPEATED_READ_ONLY_TURNS
     }
+}
+
+/// `artifact` is one tool with a read action and two write actions, so the
+/// capability name cannot decide this on its own. The strict limit is what
+/// makes the QA repair loop terminate: the spec or the ops have to change
+/// between rounds, and rebuilding the identical file twice is the failure this
+/// catches.
+fn mutating_artifact(call: &ToolCall) -> bool {
+    call.name == "artifact"
+        && call
+            .arguments
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|action| action == "create" || action == "edit")
 }
 
 fn completed_exchange_signature(calls: &[ToolCall], results: &[ToolResult]) -> Option<String> {

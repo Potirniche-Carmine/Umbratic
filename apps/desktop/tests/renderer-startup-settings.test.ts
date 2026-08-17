@@ -127,6 +127,7 @@ test("active task updates preserve the chat connection marker", () => {
     source.slice(start, end),
     /modelEndpointMode: existing\?\.modelEndpointMode \?\? endpointSettings\.mode/,
   );
+  assert.match(source.slice(start, end), /chatActivityUtcIso\(nextTask, existing\?\.updatedAt\)/);
 });
 
 test("an enrolled company server can reconnect or unregister with confirmation", () => {

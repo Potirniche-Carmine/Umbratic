@@ -1,3 +1,5 @@
+import type { ArtifactJob } from "./artifacts/service";
+import type { ArtifactResponse } from "./artifacts/worker/engine";
 import { classifyCommandText } from "./policy";
 import {
   decodeRunnerEvent,
@@ -60,6 +62,10 @@ export type RunnerEventAdapterOptions = {
   onFailure(message: string, details?: RunnerFailureDetails): void;
   onInvalid(input: { message: string; code: string; type?: string }): void;
   onQueueUpdated?(event: Extract<RunnerEvent, { type: "run.queue.updated" }>): void;
+  /** Runs one document job. Absent when this build has no engine. */
+  onArtifact?(job: ArtifactJob): Promise<void>;
+  /** Answers a job the adapter itself failed before it reached the engine. */
+  onArtifactReply?(artifactId: string, response: ArtifactResponse): Promise<void>;
 };
 
 function eventAt(event: RunnerEvent): string | undefined {
@@ -216,6 +222,9 @@ export class RunnerEventAdapter {
         return;
       case "permission.requested":
         this.handlePermission(event);
+        return;
+      case "artifact.requested":
+        this.handleArtifact(event);
         return;
       case "runner.error":
         this.pendingFailure = {
@@ -562,6 +571,48 @@ export class RunnerEventAdapter {
           String(error instanceof Error ? error.message : error),
         ),
       );
+  }
+
+  /**
+   * Runs a document job and answers the runner.
+   *
+   * Nothing is awaited on the event path: the runner has parked a oneshot and
+   * keeps streaming, and blocking here would stall every event behind a job
+   * that may take a minute. A job that fails still answers — the runner would
+   * otherwise wait out its whole timeout for a result we already have.
+   */
+  private handleArtifact(
+    event: Extract<RunnerEvent, { type: "artifact.requested" }>,
+  ): void {
+    const onArtifact = this.options.onArtifact;
+    if (!onArtifact) {
+      void this.options.onArtifactReply?.(event.artifactId, {
+        ok: false,
+        kind: "runtime",
+        errors: [{ path: "", message: "this session has no document engine attached" }],
+      });
+      return;
+    }
+    void onArtifact({
+      artifactId: event.artifactId,
+      action: event.action,
+      format: event.format,
+      ...(event.path ? { path: event.path } : {}),
+      ...(event.out ? { out: event.out } : {}),
+      ...(event.absolutePath ? { absolutePath: event.absolutePath } : {}),
+      ...(event.absoluteOut ? { absoluteOut: event.absoluteOut } : {}),
+      ...(event.templatePath ? { templatePath: event.templatePath } : {}),
+      ...(event.spec !== undefined ? { spec: event.spec } : {}),
+      ...(event.ops ? { ops: event.ops } : {}),
+      ...(event.options ? { options: event.options } : {}),
+      timeoutMs: event.timeoutMs,
+    }).catch((error) =>
+      this.options.onArtifactReply?.(event.artifactId, {
+        ok: false,
+        kind: "runtime",
+        errors: [{ path: "", message: String(error instanceof Error ? error.message : error) }],
+      }),
+    );
   }
 
   private finishOpenToolRuns(): void {

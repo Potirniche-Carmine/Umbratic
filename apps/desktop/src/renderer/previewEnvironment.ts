@@ -142,7 +142,6 @@ function createPreviewApi(): DesktopApi {
       ...existing,
       draftPrompt: input.draftPrompt,
       attachedFiles: input.attachedFiles.map(normalizeAttachment),
-      updatedAt: new Date().toISOString(),
     };
     writePreviewChats([next, ...chats.filter((chat) => chat.id !== input.chatId)]);
     return next;
