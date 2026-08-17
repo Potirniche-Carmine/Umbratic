@@ -143,6 +143,11 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
     );
   }
   assert.doesNotThrow(() => policy.assertUmbraticRunnerConfig({ ...config, provider: { ...config.provider, mode: "server" } }, model));
+  assert.doesNotThrow(() => policy.assertUmbraticRunnerConfig({ ...config, localDate: "Saturday, August 15, 2026" }, model));
+  assert.throws(
+    () => policy.assertUmbraticRunnerConfig({ ...config, localDate: "Saturday\nAugust 15, 2026" }, model),
+    /local date/,
+  );
 });
 
 test("tool settings normalize enabled tools without accepting unknown ids", () => {
@@ -151,10 +156,13 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     ls: true,
     find: true,
     search: true,
+    web_search: false,
+    web_fetch: false,
     write: true,
     edit: true,
     lsp: true,
     workspace_graph: true,
+    artifact: true,
     command: true,
   });
   assert.deepEqual(plain(tools.normalizeEnabledTools(["command", "bad", "read", "read", "unknown-tool"])), ["read", "command"]);
@@ -163,10 +171,13 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     ls: false,
     find: false,
     search: false,
+    web_search: false,
+    web_fetch: false,
     write: false,
     edit: false,
     lsp: false,
     workspace_graph: false,
+    artifact: false,
     command: false,
   });
 });

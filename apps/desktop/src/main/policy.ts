@@ -534,6 +534,14 @@ export function assertUmbraticRunnerConfig(
     "provider thinking must be on, off, or absent",
   );
   assert(!("system" in config), "protected system prompts must stay inside Veil");
+  assert(
+    config.localDate === undefined
+      || (typeof config.localDate === "string"
+        && config.localDate.length > 0
+        && config.localDate.length <= 80
+        && !config.localDate.includes("\n")),
+    "local date must be a short calendar day when present",
+  );
 }
 
 export function umbraticRunnerHardeningEnvironment(): NodeJS.ProcessEnv {

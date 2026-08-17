@@ -54,8 +54,10 @@ test("installBundledSystemSkills provisions the central skills layout", () => {
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-spreadsheets", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-data-analysis", "SKILL.md")), true);
   const documentsSkill = fs.readFileSync(path.join(directory, "system", "umbratic-documents", "SKILL.md"), "utf8");
-  assert.match(documentsSkill, /Non-Negotiable Visual QA/);
-  assert.doesNotMatch(documentsSkill, /In-App Review Snapshot|\.docx\.review\.json/);
+  // The visual-QA section is gone with the render path it depended on: the
+  // checks are deterministic now and come back in the tool's own qa[].
+  assert.match(documentsSkill, /`artifact` tool/);
+  assert.doesNotMatch(documentsSkill, /In-App Review Snapshot|\.docx\.review\.json|Visual QA/);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-cmake", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-discovery", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-product-spec", "SKILL.md")), true);
@@ -64,7 +66,7 @@ test("installBundledSystemSkills provisions the central skills layout", () => {
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-sales-enablement", "SKILL.md")), true);
   // OCR stays orphaned on disk: umbratic-pdf covers that path in v1.
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-ocr")), false);
-  assert.match(fs.readFileSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md"), "utf8"), /OCR Workflow/);
+  assert.match(fs.readFileSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md"), "utf8"), /## OCR/);
   const pythonSkill = fs.readFileSync(path.join(directory, "system", "umbratic-python", "SKILL.md"), "utf8");
   assert.match(pythonSkill, /write the file first/i);
   assert.match(pythonSkill, /If `uv` is not found, stop issuing `uv` commands/i);

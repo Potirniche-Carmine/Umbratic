@@ -103,6 +103,15 @@ func TestFutureHarnessChatRequestsAllSucceed(t *testing.T) {
 			},
 		},
 		{
+			name: "web_search and web_fetch tools this build has never named",
+			body: `{"input":"hello","tools":[{"type":"function","function":{"name":"web_search","description":"Search.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}},{"type":"function","function":{"name":"web_fetch","description":"Fetch.","parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}}}]}`,
+			check: func(t *testing.T, input ChatInput) {
+				if input.Tools == nil {
+					t.Fatal("web tools must reach the provider untouched")
+				}
+			},
+		},
+		{
 			name: "everything at once",
 			body: `{"input":"ship it","harness_bucket":"incident_triage","response_mode":"progress","skills":[{"id":"go","name":"Go","source":"marketplace","tier":2}],"tools":[{"type":"function","function":{"name":"run","description":"Run.","parameters":{"type":"object","properties":{"cmd":{"type":"string","pattern":".*"}},"additionalProperties":true}}}]}`,
 		},

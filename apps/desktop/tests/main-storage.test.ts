@@ -143,6 +143,63 @@ test("projects and chats are normalized from SQLite storage", () => {
   assert.equal(fs.existsSync(path.join(userData, "chats.json")), false);
 });
 
+test("chat timestamps are stored as UTC ISO datetimes in SQLite", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-chat-time-"));
+  const storage = loadStorage(userData);
+  storage.writeChat({
+    id: "chat-naive",
+    title: "Naive",
+    createdAt: "2026-08-16 10:00:00",
+    updatedAt: "2026-08-16 21:18:00",
+    attachedFiles: [],
+  });
+  const chat = storage.readChat("chat-naive");
+  assert.equal(chat.createdAt, "2026-08-16T10:00:00.000Z");
+  assert.equal(chat.updatedAt, "2026-08-16T21:18:00.000Z");
+  const row = withDb(chatDbPath(userData), (db) =>
+    db.prepare("SELECT created_at, updated_at, payload FROM chats WHERE id = ?").get("chat-naive"),
+  );
+  assert.equal(row.created_at, "2026-08-16T10:00:00.000Z");
+  assert.equal(row.updated_at, "2026-08-16T21:18:00.000Z");
+  assert.equal(JSON.parse(row.payload).updatedAt, "2026-08-16T21:18:00.000Z");
+  storage.closeStorageDatabases();
+});
+
+test("chat list age follows the last task event datetime, not the last row write", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-chat-activity-"));
+  const storage = loadStorage(userData);
+  storage.writeChat({
+    id: "chat-1",
+    title: "Hello",
+    createdAt: "2026-08-16T10:00:00.000Z",
+    updatedAt: "2026-08-16T22:17:00.000Z",
+    taskId: "task-1",
+    attachedFiles: [],
+  });
+  storage.writeTask({
+    id: "task-1",
+    repositoryId: "repo",
+    chatId: "chat-1",
+    prompt: "hello",
+    originalRepoPath: userData,
+    worktreePath: userData,
+    workspaceKind: "folder",
+    workspaceMode: "local",
+    state: "completed",
+    originalBranch: "main",
+    baseCommit: "abc",
+    agentBranch: "",
+    permissionMode: "normal",
+    createdAt: "2026-08-16T10:00:00.000Z",
+    changedFiles: [],
+    reviewFiles: [],
+    events: [{ type: "user.message", taskId: "task-1", text: "hello", at: "2026-08-16T21:18:00.000Z" }],
+  });
+  assert.equal(storage.readChat("chat-1").updatedAt, "2026-08-16T21:18:00.000Z");
+  assert.equal(storage.readChats()[0].updatedAt, "2026-08-16T21:18:00.000Z");
+  storage.closeStorageDatabases();
+});
+
 test("project chats are stored under the central data root", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-project-chats-"));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-home-project-chats-"));
@@ -814,8 +871,11 @@ test("everything else the app boots with survives a relaunch too", () => {
   assert.equal(relaunched.contextLength, 128000);
   assert.equal(relaunched.reasoningEffort, "high");
   assert.equal(relaunched.showThinking, false);
+  assert.equal(relaunched.webTools, false);
   storage.writeShowThinkingSetting(true);
   assert.equal(loadStorage(userData).readStartupSettings().showThinking, true);
+  storage.writeWebToolsSetting(true);
+  assert.equal(loadStorage(userData).readStartupSettings().webTools, true);
 });
 
 test("the server model choice survives a relaunch", () => {

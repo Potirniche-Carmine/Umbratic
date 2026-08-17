@@ -33,6 +33,18 @@ test("every desktop runner tool id is a tool the runner knows about", () => {
   assert.deepEqual([...tools.runnerToolIds].sort(), [...runnerNames].sort());
 });
 
+test("web tools are togglable and default off", () => {
+  assert.equal(tools.isRunnerToolId("web_search"), true);
+  assert.equal(tools.isRunnerToolId("web_fetch"), true);
+  assert.equal(tools.defaultToolSettings().web_search, false);
+  assert.equal(tools.defaultToolSettings().web_fetch, false);
+  assert.equal(tools.enabledToolsFromSettings({}).includes("web_search"), false);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(tools.enabledToolsFromSettings({ web_search: true, web_fetch: true }).filter((id) => id.startsWith("web_")))),
+    ["web_search", "web_fetch"],
+  );
+});
+
 test("workspace graph is a togglable tool and defaults on", () => {
   assert.equal(tools.isRunnerToolId("workspace_graph"), true);
   assert.equal(tools.defaultToolSettings().workspace_graph, true);

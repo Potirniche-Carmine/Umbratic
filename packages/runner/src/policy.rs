@@ -81,7 +81,12 @@ pub fn is_generated_runtime_path(value: &str) -> bool {
         ".next",
         ".vite",
         "vendor",
-        ".umbratic",
+        // `.umbratic` is not here. It used to be, which hid the whole directory
+        // from ls, find, and search — including `.umbratic/artifacts/`, the
+        // files the artifact tool writes for the user to open. The generated
+        // parts of it are hidden by the prefixes above instead, so runtime,
+        // build, tmp, and index stay invisible while a produced document does
+        // not.
     ];
     let extensions = [
         "pyc", "pyo", "o", "obj", "a", "lib", "so", "dylib", "dll", "exe", "pdb",
@@ -589,6 +594,21 @@ mod tests {
         assert!(!is_blocked_path("src/tokenizer.rs"));
         assert!(!is_blocked_path("docs/secret-management.md"));
         assert!(!is_blocked_path("tests/credential_store.rs"));
+    }
+
+    #[test]
+    fn produced_artifacts_are_visible_while_the_runtime_beside_them_stays_hidden() {
+        // A deck the artifact tool just wrote has to be findable by the tools
+        // that list and search, or the model cannot hand the user a path it can
+        // confirm exists. Everything else under `.umbratic` is machinery.
+        assert!(!is_generated_runtime_path(
+            ".umbratic/artifacts/pptx/q3-review.pptx"
+        ));
+        assert!(!is_generated_runtime_path(".umbratic/artifacts"));
+        assert!(is_generated_runtime_path(".umbratic/runtime/runner.log"));
+        assert!(is_generated_runtime_path(".umbratic/tmp/staged-1"));
+        assert!(is_generated_runtime_path(".umbratic/build/out.bin"));
+        assert!(is_generated_runtime_path(".umbratic/index/graph.json"));
     }
 
     #[test]

@@ -127,6 +127,7 @@ test("active task updates preserve the chat connection marker", () => {
     source.slice(start, end),
     /modelEndpointMode: existing\?\.modelEndpointMode \?\? endpointSettings\.mode/,
   );
+  assert.match(source.slice(start, end), /chatActivityUtcIso\(nextTask, existing\?\.updatedAt\)/);
 });
 
 test("an enrolled company server can reconnect or unregister with confirmation", () => {
@@ -172,6 +173,22 @@ test("local mode offers the catalog and applies a choice without a save step", (
   assert.doesNotMatch(source, /Ollama|11434|settingsAdvanced/);
   const harness = fs.readFileSync(new URL("../src/renderer/HarnessSettings.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(harness, /Ollama|11434/);
+});
+
+test("web tools live on the composer, default off, and ask before turning on", () => {
+  const harness = fs.readFileSync(new URL("../src/renderer/HarnessSettings.tsx", import.meta.url), "utf8");
+  const consent = fs.readFileSync(new URL("../src/renderer/WebToolsConsent.tsx", import.meta.url), "utf8");
+  const controls = fs.readFileSync(new URL("../src/renderer/ComposerControls.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(harness, /setWebTools|WebToolsConsentDialog|Turn on web search/);
+  assert.match(consent, /role="alertdialog"/);
+  assert.match(consent, /Turn on web search\?/);
+  assert.match(consent, /The model will send search queries/);
+  assert.match(consent, /Sites can be malicious/);
+  assert.match(consent, /steer the run/);
+  assert.doesNotMatch(consent, /Do not send secrets/);
+  assert.match(consent, /Stay offline/);
+  assert.match(controls, /WebToolsConsentDialog/);
+  assert.match(controls, /setConfirming\(true\)/);
 });
 
 test("startup never loads a model; the hardware probe is what warms", () => {

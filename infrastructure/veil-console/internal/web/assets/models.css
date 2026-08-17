@@ -84,32 +84,50 @@
  * The role sits with the identity rather than in its own grid cell: the card is
  * a two-column grid whose later rows span both columns, so a new top-level
  * child would push the run state onto its own row.
+ *
+ * It is the one field on a card that changes what the model is for rather than
+ * how it runs — a dictation model answers the microphone and would fail every
+ * chat request sent to it — so it reads as a chip rather than as another line
+ * of muted text, and the dictation one is tinted. A fleet is chat models and at
+ * most one dictation model, and the odd one out has to be findable by looking.
  */
 .model-role {
-  margin-top: 0.3rem;
+  margin-top: 0.35rem;
+  justify-self: start;
 }
 
 .model-role select {
   width: auto;
   height: auto;
-  padding: 0.12rem 1.4rem 0.12rem 0.4rem;
-  margin-left: -0.4rem;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background-color: transparent;
+  padding: 0.14rem 1.4rem 0.14rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background-color: var(--control);
   box-shadow: none;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.model-role.is-speech select {
+  border-color: rgba(10, 132, 255, 0.45);
+  background-color: rgba(10, 132, 255, 0.14);
+  color: var(--blue);
 }
 
 .model-role select:hover {
-  border-color: var(--line);
+  border-color: var(--line-strong);
+}
+
+.model-role.is-speech select:hover {
+  border-color: rgba(10, 132, 255, 0.7);
 }
 
 .model-role select:focus {
   outline: none;
   border-color: var(--line-strong);
-  background-color: var(--control);
+  background-color: var(--control-hover);
 }
 
 /*

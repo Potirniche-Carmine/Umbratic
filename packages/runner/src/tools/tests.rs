@@ -121,6 +121,8 @@ fn only_declared_tool_names_map_to_runner_capabilities() {
     assert_eq!(tool_capability_name("apply_patch"), Some("edit"));
     assert_eq!(tool_capability_name("run_program"), Some("command"));
     assert_eq!(tool_capability_name("search"), Some("search"));
+    assert_eq!(tool_capability_name("web_search"), Some("web_search"));
+    assert_eq!(tool_capability_name("web_fetch"), Some("web_fetch"));
     for undeclared in ["search_files", "apply-patch", "PowerShell", "bash"] {
         assert_eq!(tool_capability_name(undeclared), None, "{undeclared}");
     }
@@ -607,6 +609,7 @@ async fn disabled_and_aborted_calls_keep_complete_lifecycles() {
         context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
         lsp: None,
         workspace_graph: None,
+        artifacts: Arc::new(crate::artifact::ArtifactBroker::default()),
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
@@ -731,6 +734,7 @@ async fn attachment_reader_retrieves_every_utf8_byte_and_rejects_escape_paths() 
         context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
         lsp: None,
         workspace_graph: None,
+        artifacts: Arc::new(crate::artifact::ArtifactBroker::default()),
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
@@ -839,6 +843,7 @@ async fn read_skill_is_limited_to_enabled_skill_resources() {
         context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
         lsp: None,
         workspace_graph: None,
+        artifacts: Arc::new(crate::artifact::ArtifactBroker::default()),
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),

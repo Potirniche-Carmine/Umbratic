@@ -88,6 +88,7 @@ export const desktopIpcChannels = {
   saveSkillDocument: "umbratic:save-skill-document",
   resetSystemSkill: "umbratic:reset-system-skill",
   setPermissionMode: "umbratic:set-permission-mode",
+  setWebTools: "umbratic:set-web-tools",
   listAvailableIdes: "umbratic:list-available-ides",
   startTask: "umbratic:start-task",
   steerTask: "umbratic:steer-task",

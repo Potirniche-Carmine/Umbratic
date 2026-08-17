@@ -94,6 +94,26 @@ async fn tool_history_stays_append_only_without_context_pressure() {
     assert_eq!(prepared.messages, messages);
 }
 
+#[tokio::test]
+async fn prepared_messages_put_the_local_date_first() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = (*test_config(directory.path())).clone();
+    config.local_date = Some("Saturday, August 15, 2026".into());
+    let session = session_with(
+        config,
+        vec![json!({"role":"user","content":"original request"})],
+    );
+    let prepared = prepared_messages(&session, &[], &crate::session::test_sink(directory.path()))
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.messages[0]["content"],
+        "today's date: Saturday, August 15, 2026"
+    );
+    assert_eq!(prepared.messages[1]["content"], "original request");
+    assert_eq!(session.messages.lock().await.len(), 1);
+}
+
 #[test]
 fn pressure_compaction_removes_one_complete_parallel_exchange() {
     let mut messages = vec![json!({"role":"user","content":"original request"})];
@@ -291,6 +311,7 @@ async fn preflight_compacts_complete_tool_lifecycles_until_the_request_fits() {
         context_store: tokio::sync::Mutex::new(SessionContextStore::default()),
         lsp: None,
         workspace_graph: None,
+        artifacts: Arc::new(crate::artifact::ArtifactBroker::default()),
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
@@ -344,6 +365,7 @@ async fn preflight_rejects_an_oversized_atomic_user_request() {
         context_store: tokio::sync::Mutex::new(SessionContextStore::default()),
         lsp: None,
         workspace_graph: None,
+        artifacts: Arc::new(crate::artifact::ArtifactBroker::default()),
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
@@ -454,6 +476,7 @@ fn session_with(config: crate::config::RunnerConfig, messages: Vec<Value>) -> Se
         context_store: tokio::sync::Mutex::new(SessionContextStore::default()),
         lsp: None,
         workspace_graph: None,
+        artifacts: Arc::new(crate::artifact::ArtifactBroker::default()),
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),

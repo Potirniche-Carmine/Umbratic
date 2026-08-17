@@ -14,6 +14,9 @@ const desktopCoreBinary = path.resolve(desktopRoot, "../../target/release", desk
 const pdfTarget = path.join(desktopRoot, ".package", "pdf");
 const pdfBinaryName = process.platform === "win32" ? "umbratic-pdf.exe" : "umbratic-pdf";
 const pdfBinary = path.resolve(desktopRoot, "../../target/release", pdfBinaryName);
+const artifactsTarget = path.join(desktopRoot, ".package", "artifacts");
+const artifactsBinaryName = process.platform === "win32" ? "umbratic-artifacts.exe" : "umbratic-artifacts";
+const artifactsBinary = path.resolve(desktopRoot, "../../target/release", artifactsBinaryName);
 const codeIndexTarget = path.join(desktopRoot, ".package", "code-index");
 const codeIndexBinaryName = process.platform === "win32" ? "umbratic-code-index.exe" : "umbratic-code-index";
 const codeIndexBinary = path.resolve(desktopRoot, "../../target/release", codeIndexBinaryName);
@@ -327,6 +330,13 @@ const packagedPdfBinary = path.join(pdfTarget, pdfBinaryName);
 fs.copyFileSync(pdfBinary, packagedPdfBinary);
 if (process.platform !== "win32") fs.chmodSync(packagedPdfBinary, 0o755);
 console.log(`Prepared packaged PDF inspector at ${path.relative(desktopRoot, packagedPdfBinary)}`);
+
+fs.rmSync(artifactsTarget, { recursive: true, force: true });
+fs.mkdirSync(artifactsTarget, { recursive: true });
+const packagedArtifactsBinary = path.join(artifactsTarget, artifactsBinaryName);
+fs.copyFileSync(artifactsBinary, packagedArtifactsBinary);
+if (process.platform !== "win32") fs.chmodSync(packagedArtifactsBinary, 0o755);
+console.log(`Prepared packaged artifacts sidecar at ${path.relative(desktopRoot, packagedArtifactsBinary)}`);
 
 fs.rmSync(codeIndexTarget, { recursive: true, force: true });
 fs.mkdirSync(codeIndexTarget, { recursive: true });

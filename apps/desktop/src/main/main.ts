@@ -71,6 +71,7 @@ import {
   readTasks,
   writeLocalQuantSelection,
   writePermissionModeSetting,
+  writeWebToolsSetting,
   writeTasks,
   closeStorageDatabases,
 } from "./storage";
@@ -500,6 +501,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     saveSkillDocument: (input) => saveSkillDocumentService(input),
     resetSystemSkill: (input) => resetSystemSkillService(input),
     setPermissionMode: (mode) => setPermissionMode(mode),
+    setWebTools: (enabled) => writeWebToolsSetting(enabled === true),
     listAvailableIdes: () => listAvailableIdes(),
     openRepositoryInIde: (input) => openRepositoryInIde(input),
     startTask: (input) => startTask(input),

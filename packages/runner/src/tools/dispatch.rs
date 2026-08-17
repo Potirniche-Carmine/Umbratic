@@ -17,7 +17,17 @@ impl IndexUpdate {
             ToolRequest::Write(_) | ToolRequest::Edit(_) | ToolRequest::ApplyPatch(_) => {
                 Self::Mutation
             }
+            // An artifact create or edit puts a new file in the workspace, but
+            // the result names an `out` rather than the `path` a typed
+            // mutation reports, so the index is marked stale instead.
             ToolRequest::Command(_) => Self::Coarse,
+            ToolRequest::Artifact(request) => {
+                if request.arguments.get("action").and_then(Value::as_str) == Some("inspect") {
+                    Self::None
+                } else {
+                    Self::Coarse
+                }
+            }
             _ => Self::None,
         }
     }
@@ -270,6 +280,8 @@ pub async fn execute_tool(
         ToolRequest::Ls(request) => ls_tool(&session, &request.arguments).await,
         ToolRequest::Find(request) => find_tool(&session, &request.arguments).await,
         ToolRequest::Search(request) => search_tool(session.clone(), &request.arguments).await,
+        ToolRequest::WebSearch(request) => web_search_tool(&request.arguments).await,
+        ToolRequest::WebFetch(request) => web_fetch_tool(&request.arguments).await,
         ToolRequest::Lsp(request) => match session.lsp.as_ref() {
             // Structured evidence goes in details; content is a short rendering
             // for the model. No consumer parses the prose.
@@ -304,6 +316,9 @@ pub async fn execute_tool(
             .ok_or_else(|| {
                 ToolError::runtime("Workspace graph is not configured for this session.")
             }),
+        ToolRequest::Artifact(request) => {
+            artifact_tool(&session, &sink, &request.arguments, &permissions).await
+        }
         ToolRequest::Command(request) => {
             command_tool(
                 &session,

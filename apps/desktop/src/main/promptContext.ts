@@ -2,6 +2,31 @@ export type ContextPromptPart =
   | { type: "text"; text: string }
   | { type: "image"; data_url: string };
 
+const weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+const monthNames = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+] as const;
+
+/** The user's local calendar day, for factual context — not a clock or timezone lecture. */
+export function localCalendarDate(date: Date = new Date()): string {
+  return `${weekdayNames[date.getDay()]}, ${monthNames[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+}
+
+export function localDateContextLine(date: Date = new Date()): string {
+  return `today's date: ${localCalendarDate(date)}`;
+}
+
 export function shouldIncludeWorkspaceContext(input: {
   hasProject: boolean;
   workspaceHasFiles: boolean;

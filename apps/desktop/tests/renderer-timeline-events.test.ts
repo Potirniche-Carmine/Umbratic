@@ -17,6 +17,7 @@ test("command aggregation, pending permissions, and timelines reflect real event
     reconcileActivityDisclosureState,
   } = loadRendererFile("composerActivity.ts");
   const {
+    activityToolLabel,
     commandDetailLabel,
     commandLabel,
     commandHasVisibleDetails,
@@ -462,6 +463,8 @@ test("command aggregation, pending permissions, and timelines reflect real event
     "ls",
     "find",
     "search",
+    "web_search",
+    "web_fetch",
     "write",
     "edit",
     "apply_patch",
@@ -488,6 +491,21 @@ test("command aggregation, pending permissions, and timelines reflect real event
   };
   assert.equal(commandShellText(verboseRun), "[3 earlier output lines omitted.]\nline 4\nline 5\nline 6\nline 7");
 
+  const fetchRun = {
+    ...searchRun,
+    toolKind: "web_fetch",
+    command: "web_fetch https://www.democracynow.org/headlines",
+    commandClass: "network",
+    stdout: `${"A".repeat(2000)} footer`,
+  };
+  assert.equal(activityToolLabel(fetchRun).label, "Read www.democracynow.org");
+  assert.equal(commandDetailLabel(fetchRun), "Read web page results - network");
+  const fetchText = commandShellText(fetchRun);
+  assert.ok(fetchText.startsWith("A"));
+  assert.match(fetchText, /\[Page text truncated\.\]/);
+  assert.ok(!fetchText.includes("footer"));
+  assert.ok(fetchText.length < 800);
+
   const readRun = { ...searchRun, command: "read apps/desktop/src/renderer/main.tsx" };
   const readGroups = activityToolGroups([
     { type: "command", id: "read-1", run: { ...readRun, id: "read-1" } },
@@ -495,5 +513,44 @@ test("command aggregation, pending permissions, and timelines reflect real event
   ]);
   assert.equal(readGroups[0].label, "Read main.tsx");
   assert.equal(readGroups[0].runs.length, 2);
+});
+
+test("live tool output is only for a streaming shell command that has bytes", () => {
+  const { commandLiveOutputPreview } = loadRendererFile("commandDisplay.ts");
+  const running = {
+    id: "run-1",
+    command: "npm test",
+    kind: "bash",
+    commandClass: "package-manager",
+    cwd: "C:/repo",
+    stdout: "",
+    stderr: "",
+    exitCode: null,
+    status: "running",
+  };
+  assert.equal(commandLiveOutputPreview(running), undefined);
+  assert.equal(commandLiveOutputPreview({ ...running, stdout: "ok\n" }), "ok\n");
+  assert.equal(commandLiveOutputPreview({ ...running, status: "passed", stdout: "ok\n" }), undefined);
+  assert.equal(
+    commandLiveOutputPreview({
+      ...running,
+      toolKind: "web_search",
+      command: "web_search latest news",
+      kind: "read",
+      commandClass: "network",
+    }),
+    undefined,
+  );
+  assert.equal(
+    commandLiveOutputPreview({
+      ...running,
+      toolKind: "web_search",
+      command: "web_search latest news",
+      kind: "read",
+      commandClass: "network",
+      stdout: "1. Example — https://example.com\nThese are short snippets.\n",
+    }),
+    undefined,
+  );
 });
 

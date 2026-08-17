@@ -3,12 +3,15 @@
 //! App component is the only oversized file left in the renderer.
 
 import { chatTitleFromFirstMessage } from "../shared/chatTitle";
+import { parseUtcMs } from "../shared/utcDate";
 import type {
   BackendUiEvent,
   ChatAttachment,
   ChatRecord,
   TaskState,
 } from "../shared/desktopApi";
+
+export { chatActivityUtcIso } from "../shared/utcDate";
 
 export type WorktreeChatGroup = {
   key: string;
@@ -71,10 +74,10 @@ export function draftMatchesTaskPrompt(draftPrompt: string, taskPrompt: string):
   return !!draft && (prompt === draft || prompt.startsWith(`${draft}\n\nAttached files:`));
 }
 
-export function relativeChatAge(value: string): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "";
-  const elapsedMs = Math.max(0, Date.now() - timestamp);
+export function relativeChatAge(value: string, now = Date.now()): string {
+  const timestamp = parseUtcMs(value);
+  if (timestamp === undefined) return "";
+  const elapsedMs = Math.max(0, now - timestamp);
   const elapsedMinutes = Math.floor(elapsedMs / 60_000);
   if (elapsedMinutes < 1) return "<1m";
   if (elapsedMinutes < 60) return `${elapsedMinutes}m`;
@@ -85,8 +88,8 @@ export function relativeChatAge(value: string): string {
   return `${Math.floor(elapsedDays / 7)}w`;
 }
 
-export function chatSubline(chat: ChatRecord): string {
-  return chat.updatedAt ? relativeChatAge(chat.updatedAt) : "";
+export function chatSubline(chat: ChatRecord, now = Date.now()): string {
+  return chat.updatedAt ? relativeChatAge(chat.updatedAt, now) : "";
 }
 
 export function closedChatMessage(state?: TaskState): string | undefined {

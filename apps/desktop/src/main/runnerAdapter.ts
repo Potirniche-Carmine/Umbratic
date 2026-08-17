@@ -7,11 +7,13 @@ import { app } from "electron";
 
 import { runnerLogsDirectory, workspaceRuntimeDirectory } from "./appPaths";
 import { companyEndpoint } from "./config";
+import { artifactEngineAvailable } from "./artifacts/service";
 import { probeLocalCapabilities } from "./capabilities";
 import { refreshWorkspaceGraph, workspaceGraphRunnerConfig } from "./indexerService";
 import { veilManagedModelId } from "./endpointConfig";
 import { currentLocalVeilConnection } from "./localVeil";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
+import { localCalendarDate } from "./promptContext";
 import { enabledPromptSkills } from "./skills";
 import { readContextLengthSetting, readHarnessProfileSetting, readModelEndpointSettings, readReasoningEffortSetting, readShowThinkingSetting } from "./storage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
@@ -61,8 +63,12 @@ export function buildUmbraticRunnerConfig(
   // The workspace graph is an artifact this desktop builds from a local
   // checkout. There is none for a directory on another machine.
   const workspaceGraph = onRemoteHost ? undefined : workspaceGraphRunnerConfig(task.worktreePath);
+  // Unlike the graph, the document engines belong to this desktop rather than
+  // to the workspace's machine, so a remote task gets them too: the runner asks
+  // over the event stream and the bytes travel.
+  const artifactService = artifactEngineAvailable();
   const enabledTools = requestedTools.filter(
-    (tool) => tool !== "lsp" && tool !== "workspace_graph",
+    (tool) => tool !== "lsp" && tool !== "workspace_graph" && tool !== "artifact",
   ) as RunnerToolId[];
   if (requestedTools.includes("lsp") && lspServers.length > 0) {
     enabledTools.splice(Math.min(4, enabledTools.length), 0, "lsp" as RunnerToolId);
@@ -71,6 +77,9 @@ export function buildUmbraticRunnerConfig(
   // the artifact exists the tool simply does not admit.
   if (requestedTools.includes("workspace_graph") && workspaceGraph) {
     enabledTools.splice(Math.min(5, enabledTools.length), 0, "workspace_graph" as RunnerToolId);
+  }
+  if (requestedTools.includes("artifact") && artifactService) {
+    enabledTools.splice(Math.min(6, enabledTools.length), 0, "artifact" as RunnerToolId);
   }
   return {
     taskId: task.id,
@@ -90,10 +99,12 @@ export function buildUmbraticRunnerConfig(
     })),
     capabilities: task.capabilityProbes ?? [],
     permissionMode: "normal",
+    localDate: localCalendarDate(),
     enabledTools,
     approvedExecutables,
     lspServers,
     workspaceGraph,
+    services: { artifact: artifactService },
     diagnostics: {
       enabled: false,
     },
@@ -492,6 +503,25 @@ export function beginRunnerEventStream(run: RunnerProcess, onEvent: (event: Reco
     }
   })();
   return { ready, done };
+}
+
+/**
+ * Answers one artifact job.
+ *
+ * A 404 means the runner already gave up on this job — it timed out, or the run
+ * was aborted — so the result is dropped rather than retried. The file it
+ * describes was written to a confined path either way; what is lost is only the
+ * model's chance to hear about it this turn.
+ */
+export async function replyRunnerArtifact(
+  run: RunnerProcess,
+  artifactId: string,
+  result: unknown,
+): Promise<void> {
+  await runnerRequest<boolean>(run, `/artifact/${encodeURIComponent(artifactId)}/reply`, {
+    method: "POST",
+    body: result as Record<string, unknown>,
+  }).catch(() => undefined);
 }
 
 export async function replyRunnerPermission(run: RunnerProcess, permissionId: string, allow: boolean) {

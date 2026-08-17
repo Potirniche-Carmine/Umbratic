@@ -262,6 +262,113 @@ async fn the_generated_tool_contract_matches_the_shared_fixture() {
     );
 }
 
+#[test]
+fn artifact_is_absent_until_the_desktop_declares_the_service() {
+    // The engines are the desktop's, not this host's. A runner that advertised
+    // the tool on the strength of the capability alone would offer the model a
+    // document builder with nothing behind it.
+    let directory = tempfile::tempdir().unwrap();
+    let mut session = crate::session::test_session(directory.path());
+    Arc::get_mut(&mut Arc::get_mut(&mut session).unwrap().config)
+        .unwrap()
+        .artifact_service = false;
+    assert!(!tool_surface(&session).declares("artifact"));
+
+    let declared = crate::session::test_session(directory.path());
+    assert!(tool_surface(&declared).declares("artifact"));
+}
+
+#[tokio::test]
+async fn an_artifact_action_missing_its_required_arguments_names_them() {
+    let directory = tempfile::tempdir().unwrap();
+    // The action matrix is not expressible in the schema, so it is the
+    // executor's, and each action names the field it wanted rather than
+    // reporting a generic shape error.
+    for (arguments, expected) in [
+        (json!({"action":"create","format":"pptx"}), "requires spec"),
+        (json!({"action":"inspect"}), "requires path"),
+        (json!({"action":"edit","path":"deck.pptx"}), "requires ops"),
+    ] {
+        let result = execute_tool(
+            crate::session::test_session(directory.path()),
+            crate::session::test_sink(directory.path()),
+            Arc::new(crate::permission::PermissionBroker::default()),
+            ToolCall {
+                id: "matrix".into(),
+                name: "artifact".into(),
+                arguments,
+                index: 0,
+            },
+        )
+        .await;
+        assert_eq!(result.status, "validation_error");
+        assert!(
+            result.content.contains(expected),
+            "expected {expected} in {}",
+            result.content
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_oversize_artifact_spec_is_refused_before_any_job_is_emitted() {
+    let directory = tempfile::tempdir().unwrap();
+    let sink = crate::session::test_sink(directory.path());
+    let mut events = sink.subscribe();
+    let filler = "x".repeat(2 * 1024 * 1024);
+    let result = execute_tool(
+        crate::session::test_session(directory.path()),
+        sink.clone(),
+        Arc::new(crate::permission::PermissionBroker::default()),
+        ToolCall {
+            id: "oversize".into(),
+            name: "artifact".into(),
+            arguments: json!({"action":"create","format":"pptx","spec":{"note":filler}}),
+            index: 0,
+        },
+    )
+    .await;
+    assert_eq!(result.status, "validation_error");
+    assert_eq!(result.details.as_ref().unwrap()["field"], "spec");
+    // Nothing but the tool's own lifecycle events: no job reached the desktop.
+    let mut emitted = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        emitted.push(event["type"].as_str().unwrap_or_default().to_owned());
+    }
+    assert!(!emitted.iter().any(|kind| kind == "artifact.requested"));
+}
+
+#[test]
+fn unknown_fields_inside_an_artifact_spec_survive_the_contract() {
+    // The wire-compat rule. The spec's interior belongs to the format schema
+    // the worker owns; a runner that closed it would reject every field added
+    // to an engine before this binary was rebuilt.
+    let directory = tempfile::tempdir().unwrap();
+    let session = crate::session::test_session(directory.path());
+    let surface = tool_surface(&session);
+    let arguments = json!({
+        "action": "create",
+        "format": "pptx",
+        "spec": {"slides": [{"layout": "title", "someFutureField": {"nested": true}}]}
+    });
+    assert!(
+        surface
+            .validate("artifact", arguments.as_object().unwrap())
+            .is_ok()
+    );
+    // The top level stays closed, which is what keeps a typo out of the tool.
+    assert!(
+        surface
+            .validate(
+                "artifact",
+                json!({"action":"create","format":"pptx","spek":{}})
+                    .as_object()
+                    .unwrap()
+            )
+            .is_err()
+    );
+}
+
 /// A file long enough that an unqualified read must bound itself, with every
 /// line self-identifying so a window can be checked exactly.
 fn numbered_workspace(lines: usize) -> (tempfile::TempDir, String) {

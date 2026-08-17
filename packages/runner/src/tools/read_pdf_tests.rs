@@ -111,6 +111,7 @@ async fn attachment_reader_serves_pdf_markdown_in_bounded_chunks() {
         context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
         lsp: None,
         workspace_graph: None,
+        artifacts: Arc::new(crate::artifact::ArtifactBroker::default()),
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),

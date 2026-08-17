@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { stableChatTitle } from "../shared/chatTitle";
+import { chatActivityUtcIso, utcNowIso } from "../shared/utcDate";
 
 import { attachmentContextTokens } from "./attachmentContext";
 import {
@@ -172,7 +173,7 @@ export function createChat(input: unknown): ChatRecord {
   if (requestedWorktreeTaskId && !reusableWorktree) {
     throw new Error("This worktree is no longer open. Start a new worktree chat from the project.");
   }
-  const now = new Date().toISOString();
+  const now = utcNowIso();
   const chat: ChatRecord = {
     id: requestedId ?? chatId(),
     title,
@@ -231,7 +232,6 @@ export function updateChatDraft(input: unknown): ChatRecord {
     ...existing,
     draftPrompt,
     attachedFiles,
-    updatedAt: new Date().toISOString(),
   };
   writeChat(next);
   return next;
@@ -341,7 +341,7 @@ export function updateChatFromTask(task: TaskRecord) {
     id: task.chatId,
     title: stableChatTitle(existing?.title, task.prompt),
     createdAt: existing?.createdAt ?? task.createdAt,
-    updatedAt: new Date().toISOString(),
+    updatedAt: chatActivityUtcIso(task, existing?.updatedAt) ?? utcNowIso(),
     modelEndpointMode: task.modelEndpointMode ?? existing?.modelEndpointMode,
     taskId: task.id,
     taskState: task.state,

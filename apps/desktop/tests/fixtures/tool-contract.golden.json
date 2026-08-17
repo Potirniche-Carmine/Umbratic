@@ -166,6 +166,50 @@
   },
   {
     "function": {
+      "description": "Search the public web. Returns titles, URLs, and short snippets from DuckDuckGo. These are not full pages; call web_fetch with one result URL to read a page. Send exactly query. Private and loopback hosts never appear.",
+      "name": "web_search",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "description": "The search query. Distill the question; do not paste the whole user prompt.",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Read the text of one public web page. Use a URL from web_search or the user. Returns readable page text, not a screenshot or a browser. Private, loopback, link-local, and credentialed URLs are blocked. Send exactly url.",
+      "name": "web_fetch",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "description": "One absolute http or https URL.",
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
       "description": "Create or replace one workspace text file after permission. Send exactly path and content. Parents are created after approval; the write is staged and installed atomically.",
       "name": "write",
       "parameters": {
@@ -253,6 +297,64 @@
         },
         "required": [
           "patch"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Create, inspect, and edit PowerPoint, Word, Excel, and PDF files. Send a spec or a list of ops as JSON; never write library code and never open the file yourself. inspect requires path and returns origin, editSurface, unsupported[], and an outline whose ids the other two actions address. create requires format and spec. edit requires path and ops[]. Inspect any file you did not just create before editing it: editSurface says which ops are allowed, and ids you did not read from an outline do not exist. Results carry qa[]; fix every error and call again, at most three rounds. Nothing is written when ok is false.",
+      "name": "artifact",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "inspect reads a file; create builds a new one from spec; edit applies ops to an existing one.",
+            "enum": [
+              "inspect",
+              "create",
+              "edit"
+            ],
+            "type": "string"
+          },
+          "format": {
+            "description": "Required for create. Inferred from the extension of path for inspect and edit.",
+            "enum": [
+              "pptx",
+              "docx",
+              "xlsx",
+              "pdf"
+            ],
+            "type": "string"
+          },
+          "ops": {
+            "description": "Edit operations in order, each addressing ids reported by inspect. An op the file's editSurface does not allow is refused and nothing is written.",
+            "maxItems": 200,
+            "type": "array"
+          },
+          "options": {
+            "description": "Optional switches such as {\"tracked\":true,\"author\":\"Umbratic\"} for a redlined Word edit.",
+            "type": "object"
+          },
+          "out": {
+            "description": "Workspace-relative destination. Defaults to .umbratic/artifacts/<format>/<name>. On edit, omit it to write the result back over path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "path": {
+            "description": "Workspace-relative file to inspect or edit. Required for those two actions.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "spec": {
+            "description": "The document specification for create, in this format's spec schema. Enums and content only: no coordinates, colours, or point sizes.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "action"
         ],
         "type": "object"
       }

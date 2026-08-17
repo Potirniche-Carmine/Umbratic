@@ -39,6 +39,7 @@ import {
   readProjects,
   readTask,
 } from "./storage";
+import { readToolSettings } from "./settingsStorage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import type {
   ChatAttachment,
@@ -229,7 +230,7 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
   if (requestedWorktreeTaskId && requestedWorkspaceMode === "worktree" && !reusableWorktreeTask) {
     throw new Error("This worktree is no longer open. Start a new worktree chat from the project.");
   }
-  const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings({}));
+  const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings(readToolSettings()));
   const capabilityReport = remote
     ? await remoteCapabilityReport(remote.connectionId)
     : await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });

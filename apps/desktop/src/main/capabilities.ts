@@ -584,15 +584,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     installHint: "Install Poppler with your system package manager.",
     workflows: ["PDF artifact", "visual QA"],
   },
-  {
-    id: "libreoffice",
-    label: "LibreOffice",
-    category: "optional-artifacts",
-    commands: ["soffice", "libreoffice"],
-    purpose: "Renders or exports DOCX, PPTX, and spreadsheet artifacts for visual checks.",
-    installHint: "Install LibreOffice or make soffice available on PATH.",
-    workflows: ["DOCX artifact", "PPTX artifact", "XLSX artifact", "visual QA"],
-  },
 ];
 
 const nodePackageProbeSpecs: NodePackageProbeSpec[] = [
@@ -605,66 +596,9 @@ const nodePackageProbeSpecs: NodePackageProbeSpec[] = [
     installHint: "Install the desktop dependencies so pdf-to-img is available.",
     workflows: ["PDF attachment", "vision input"],
   },
-  {
-    id: "node-docx",
-    label: "DOCX JS runtime",
-    packageName: "docx",
-    category: "optional-artifacts",
-    purpose: "Creates DOCX files through a deterministic JavaScript artifact runtime.",
-    installHint: "Add the configured DOCX artifact package to the desktop runtime.",
-    workflows: ["DOCX artifact"],
-  },
-  {
-    id: "node-pptx",
-    label: "PPTX JS runtime",
-    packageName: "pptxgenjs",
-    category: "optional-artifacts",
-    purpose: "Creates PowerPoint files through a deterministic JavaScript artifact runtime.",
-    installHint: "Add the configured PPTX artifact package to the desktop runtime.",
-    workflows: ["PPTX artifact"],
-  },
-  {
-    id: "node-xlsx",
-    label: "XLSX JS runtime",
-    packageName: "xlsx",
-    category: "optional-artifacts",
-    purpose: "Creates and inspects spreadsheet workbooks through a JavaScript artifact runtime.",
-    installHint: "Add the configured XLSX artifact package to the desktop runtime.",
-    workflows: ["XLSX artifact"],
-  },
 ];
 
 const pythonPackageProbeSpecs: PythonPackageProbeSpec[] = [
-  {
-    id: "py-reportlab",
-    label: "reportlab",
-    moduleName: "reportlab",
-    distributionName: "reportlab",
-    category: "optional-artifacts",
-    purpose: "Generates PDF files locally.",
-    installHint: "Install reportlab into the configured Python artifact environment.",
-    workflows: ["PDF artifact"],
-  },
-  {
-    id: "py-pdfplumber",
-    label: "pdfplumber",
-    moduleName: "pdfplumber",
-    distributionName: "pdfplumber",
-    category: "optional-artifacts",
-    purpose: "Extracts text and tables from PDFs for content checks.",
-    installHint: "Install pdfplumber into the configured Python artifact environment.",
-    workflows: ["PDF artifact", "PDF extraction"],
-  },
-  {
-    id: "py-pypdf",
-    label: "pypdf",
-    moduleName: "pypdf",
-    distributionName: "pypdf",
-    category: "optional-artifacts",
-    purpose: "Reads and manipulates PDFs for local artifact workflows.",
-    installHint: "Install pypdf into the configured Python artifact environment.",
-    workflows: ["PDF artifact", "PDF extraction"],
-  },
 ];
 
 function reportSummary(probes: CapabilityProbeResult[]): CapabilityProbeReport["summary"] {
@@ -796,10 +730,6 @@ export function capabilityById(report: CapabilityProbeReport, id: string): Capab
   return report.probes.find((probe) => probe.id === id);
 }
 
-function isAvailable(report: CapabilityProbeReport, id: string): boolean {
-  return capabilityById(report, id)?.status === "available";
-}
-
 function statusLabel(probe: CapabilityProbeResult | undefined): string {
   if (!probe) return "unknown";
   return probe.version && probe.status === "available" ? `available (${probe.version})` : probe.status;
@@ -844,16 +774,11 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
   }
 
   if (artifactRequested(needs)) {
-    const popplerRenderAvailable = isAvailable(report, "pdftoppm") && isAvailable(report, "pdfinfo");
-    const libreOfficeAvailable = isAvailable(report, "libreoffice");
-    const pdfPackageAvailable = isAvailable(report, "py-reportlab") && (isAvailable(report, "py-pdfplumber") || isAvailable(report, "py-pypdf"));
-    const jsArtifactPackages = ["node-docx", "node-pptx", "node-xlsx"].filter((id) => !isAvailable(report, id));
-    lines.push(`- PDF render QA with Poppler: ${popplerRenderAvailable ? "available" : "missing or incomplete"}`);
-    lines.push(`- PDF Python packages: ${pdfPackageAvailable ? "available" : "missing or incomplete"}`);
-    lines.push(`- DOCX/PPTX/XLSX render/export with LibreOffice: ${libreOfficeAvailable ? "available" : "missing"}`);
-    if (jsArtifactPackages.length) {
-      lines.push(`- JS artifact authoring packages missing: ${jsArtifactPackages.join(", ")}`);
-    }
+    // The document engines ship inside the app; there is nothing on the host to
+    // probe for, and nothing for the user to install. What the model needs to
+    // know is which formats the tool builds, which is a fact rather than a
+    // capability — so it is stated as one.
+    lines.push("- Artifact builder: pptx, docx, xlsx, pdf");
   }
 
   if (needs.ocr) {

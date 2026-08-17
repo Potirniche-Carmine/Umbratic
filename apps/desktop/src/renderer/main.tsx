@@ -47,7 +47,7 @@ import {
   eventTimelineTime,
   folderName,
   isImageAttachment,
-  relativeChatAge,
+  chatActivityUtcIso,
   samePathKey,
   shortHash,
   stateLabel,
@@ -81,7 +81,7 @@ import {
   ComposerModelPicker,
   DictationControl,
   PermissionModePicker,
-  WorktreeToggle,
+  WebToolsControl, WorktreeToggle,
   type ComposerModelOption,
 } from "./ComposerControls";
 import { insertTranscript, useDictation } from "./dictation";
@@ -237,9 +237,9 @@ import {
   commandDetailLabel,
   commandHasVisibleDetails,
   commandLabel,
+  commandLiveOutputPreview,
   commandShellText,
   commandSummary,
-  commandVisibleOutput,
   type CommandClass,
   type CommandRun,
 } from "./commandDisplay";
@@ -257,7 +257,7 @@ const defaultStartupSettings: DesktopStartupSettings = {
   harnessProfile: defaultHarnessProfileId,
   contextLength: DEFAULT_CONTEXT_LENGTH,
   reasoningEffort: DEFAULT_REASONING_EFFORT,
-  showThinking: false,
+  showThinking: false, webTools: false,
 };
 const initialPrompt = "";
 const emptyReviewFiles: ReviewFile[] = [];
@@ -1525,7 +1525,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         {
           ...chat,
           title: stableChatTitle(existing?.title, nextTask.prompt),
-          createdAt: existing?.createdAt ?? chat.createdAt,
+          createdAt: existing?.createdAt ?? chat.createdAt, updatedAt: chatActivityUtcIso(nextTask, existing?.updatedAt) ?? now,
           modelEndpointMode: existing?.modelEndpointMode ?? endpointSettings.mode,
           repositoryName: chat.repositoryName ?? existing?.repositoryName,
           repositoryPath: chat.repositoryPath ?? existing?.repositoryPath,
@@ -3571,7 +3571,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               </span>
             ) : null}
             <strong>{chatDisplayTitle(chat)}</strong>
-            <em>{chatSubline(chat)}</em>
+            <em title={chat.updatedAt}>{chatSubline(chat)}</em>
           </span>
         </button>
         <button
@@ -3985,6 +3985,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                     const toolDisclosureId = `${item.id}:${segment.id}`;
                                     const toolExpanded = expandedActivityToolIds.has(toolDisclosureId);
                                     const hasVisibleDetails = commandHasVisibleDetails(segment.run);
+                                    const liveOutput = toolExpanded ? undefined : commandLiveOutputPreview(segment.run);
                                     const toolLabelContent = (
                                       <>
                                         <SquareTerminal className="activityToolKindIcon" size={11} aria-hidden="true" />
@@ -4023,11 +4024,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                             {toolLabelContent}
                                           </div>
                                         )}
-                                        {!toolExpanded && segment.run.status === "running" ? (
-                                          <pre className="activityLiveOutput" aria-live="polite">
-                                            {commandVisibleOutput(segment.run).slice(-1200)}
-                                          </pre>
-                                        ) : null}
+                                        {liveOutput ? <pre className="activityLiveOutput" aria-live="polite">{liveOutput}</pre> : null}
                                         {hasVisibleDetails && toolExpanded ? (
                                           <div className="activityToolGroupDetails">
                                             <div>
@@ -4185,7 +4182,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 disabled={busy}
                 onToggle={(next) => selectWorkspaceMode(next ? "worktree" : "local")}
               />
-            ) : null}
+            ) : null}<WebToolsControl initial={startupSettings.webTools === true} disabled={busy} setWebTools={api.setWebTools} onError={setError} />
 
             <div className="attachmentControl">
               <button

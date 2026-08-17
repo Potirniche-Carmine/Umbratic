@@ -12,9 +12,10 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 use uuid::Uuid;
 
 use crate::{
+    artifact::ArtifactBroker,
     config::{RunnerConfig, load_runner_config},
     context::{ContextCalibration, SessionContextStore, SystemPromptSize, UsageAnchor},
-    conversation_state::ConversationState,
+    conversation_state::{ConversationState, ensure_local_date_prefix},
     diagnostics::RunnerDiagnostics,
     events::RunnerEvent,
     lsp::LspService,
@@ -80,6 +81,9 @@ pub struct Session {
     pub context_store: Mutex<SessionContextStore>,
     pub lsp: Option<LspService>,
     pub workspace_graph: Option<WorkspaceGraphService>,
+    /// The store's broker, shared with every session so the `artifact` tool can
+    /// reach it without threading a second handle through the run loop.
+    pub artifacts: Arc<ArtifactBroker>,
     pub skill_cache: SharedSkillCache,
     /// Warm workspace path index behind `search`. Lives for the session and is
     /// marked stale at the start of every accepted run, so between-turn editor
@@ -179,6 +183,7 @@ pub struct SessionStore {
     sessions: RwLock<HashMap<String, Arc<Session>>>,
     pub sink: EventSink,
     pub permissions: Arc<PermissionBroker>,
+    pub artifacts: Arc<ArtifactBroker>,
 }
 
 impl SessionStore {
@@ -202,6 +207,7 @@ impl SessionStore {
                 diagnostics,
             },
             permissions: Arc::new(PermissionBroker::default()),
+            artifacts: Arc::new(ArtifactBroker::default()),
         })
     }
 
@@ -219,10 +225,11 @@ impl SessionStore {
         });
         let lsp = (!self.config.lsp_servers.is_empty())
             .then(|| LspService::new(self.config.cwd.clone(), self.config.lsp_servers.clone()));
-        let messages = conversation_state
+        let mut messages = conversation_state
             .as_ref()
             .map(ConversationState::seeded_messages)
             .unwrap_or_default();
+        ensure_local_date_prefix(&mut messages, self.config.local_date.as_deref());
         let durable_summary = conversation_state.and_then(|state| state.summary);
         let session = Arc::new(Session {
             id: id.clone(),
@@ -244,6 +251,7 @@ impl SessionStore {
             context_store: Mutex::new(SessionContextStore::default()),
             lsp,
             workspace_graph,
+            artifacts: self.artifacts.clone(),
             skill_cache: SharedSkillCache::default(),
             search_index: Arc::new(SearchIndex::default()),
             tool_surface: OnceLock::new(),
@@ -267,6 +275,7 @@ impl SessionStore {
         let session = self.get(id).await?;
         session.abort();
         self.permissions.abort_all(&self.sink, &session.task_id);
+        self.artifacts.abort_all(&self.sink, &session.task_id);
         Ok(())
     }
 
@@ -310,6 +319,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
         approved_executables: std::collections::BTreeMap::new(),
         lsp_servers: Vec::new(),
         workspace_graph: None,
+        artifact_service: true,
         diagnostics: crate::config::DiagnosticsConfig {
             enabled: false,
             log_path: None,
@@ -332,6 +342,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
             headers: std::collections::BTreeMap::new(),
             mtls: None,
         },
+        local_date: None,
     })
 }
 
@@ -369,6 +380,7 @@ pub(crate) fn test_session(cwd: &std::path::Path) -> Arc<Session> {
         context_store: Mutex::new(SessionContextStore::default()),
         lsp: None,
         workspace_graph: None,
+        artifacts: Arc::new(ArtifactBroker::default()),
         skill_cache: SharedSkillCache::default(),
         search_index: Arc::new(SearchIndex::default()),
         tool_surface: OnceLock::new(),

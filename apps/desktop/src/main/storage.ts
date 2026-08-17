@@ -7,6 +7,7 @@ import {
 } from "./config";
 import { isRunnerToolId } from "./toolSettings";
 import { normalizeReviewFile } from "../shared/reviewDiff";
+import { chatActivityUtcIso, compareUtcIsoDesc, normalizeUtcIso } from "../shared/utcDate";
 import type {
   CapabilityProbeCategory,
   CapabilityProbeImportance,
@@ -484,6 +485,8 @@ function normalizeChatRecord(chat: unknown): ChatRecord | null {
       : undefined;
   return {
     ...chat,
+    createdAt: normalizeUtcIso(chat.createdAt) ?? chat.createdAt,
+    updatedAt: normalizeUtcIso(chat.updatedAt) ?? chat.updatedAt,
     modelEndpointMode: isModelEndpointMode(chat.modelEndpointMode) ? chat.modelEndpointMode : undefined,
     repositoryName:
       typeof chat.repositoryName === "string" && chat.repositoryName.trim()
@@ -515,12 +518,12 @@ function normalizeChats(chats: unknown[]): ChatRecord[] {
   return chats
     .map((chat) => normalizeChatRecord(chat))
     .filter((chat): chat is ChatRecord => !!chat)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    .sort((left, right) => compareUtcIsoDesc(left.updatedAt, right.updatedAt));
 }
 
 function putNewestChat(chats: Map<string, ChatRecord>, chat: ChatRecord) {
   const existing = chats.get(chat.id);
-  if (!existing || chat.updatedAt.localeCompare(existing.updatedAt) >= 0) {
+  if (!existing || compareUtcIsoDesc(existing.updatedAt, chat.updatedAt) >= 0) {
     chats.set(chat.id, chat);
   }
 }
@@ -594,16 +597,25 @@ function writeChatsToDatabase(chats: ChatRecord[]) {
   withChatsDatabase((db) => replaceChatsInDatabase(db, chats));
 }
 
+function chatWithTaskActivity(chat: ChatRecord, task: TaskRecord | null | undefined): ChatRecord {
+  if (!task) return chat;
+  const updatedAt = chatActivityUtcIso(task, chat.updatedAt) ?? chat.updatedAt;
+  return updatedAt === chat.updatedAt ? chat : { ...chat, updatedAt };
+}
+
 export function readChats(): ChatRecord[] {
+  const tasks = new Map(readTasks().map((task) => [task.id, task]));
   const chats = new Map<string, ChatRecord>();
   for (const chat of readChatsFromDatabase(chatsDatabasePath())) {
-    putNewestChat(chats, chat);
+    putNewestChat(chats, chatWithTaskActivity(chat, chat.taskId ? tasks.get(chat.taskId) : undefined));
   }
-  return Array.from(chats.values()).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return Array.from(chats.values()).sort((left, right) => compareUtcIsoDesc(left.updatedAt, right.updatedAt));
 }
 
 export function readChat(chatId: string): ChatRecord | null {
-  return readChatFromDatabase(chatsDatabasePath(), chatId);
+  const chat = readChatFromDatabase(chatsDatabasePath(), chatId);
+  if (!chat) return null;
+  return chatWithTaskActivity(chat, chat.taskId ? readTask(chat.taskId) : null);
 }
 
 function chatWithProjectMetadata(chat: ChatRecord): ChatRecord {
@@ -620,23 +632,26 @@ function chatWithProjectMetadata(chat: ChatRecord): ChatRecord {
 export function writeChat(chat: ChatRecord) {
   const normalized = normalizeChatRecord(chat);
   if (!normalized) return;
-  withChatsDatabase((db) => upsertChatInDatabase(db, chatWithProjectMetadata(normalized)));
+  const task = normalized.taskId ? readTask(normalized.taskId) : null;
+  withChatsDatabase((db) => upsertChatInDatabase(db, chatWithProjectMetadata(chatWithTaskActivity(normalized, task))));
 }
 
 export function writeChats(chats: ChatRecord[]) {
   const projects = readProjects();
   const projectsByPath = new Map(projects.map((project) => [pathKey(project.rootPath), project]));
+  const tasks = new Map(readTasks().map((task) => [task.id, task]));
   const nextChats: ChatRecord[] = [];
 
   for (const chat of normalizeChats(chats)) {
-    const project = chat.repositoryPath ? projectsByPath.get(pathKey(chat.repositoryPath)) : undefined;
+    const withActivity = chatWithTaskActivity(chat, chat.taskId ? tasks.get(chat.taskId) : undefined);
+    const project = withActivity.repositoryPath ? projectsByPath.get(pathKey(withActivity.repositoryPath)) : undefined;
     if (!project) {
-      nextChats.push(chat);
+      nextChats.push(withActivity);
       continue;
     }
     nextChats.push({
-      ...chat,
-      repositoryName: chat.repositoryName ?? project.name,
+      ...withActivity,
+      repositoryName: withActivity.repositoryName ?? project.name,
       repositoryPath: project.rootPath,
     });
   }

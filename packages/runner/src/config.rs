@@ -10,15 +10,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use url::Url;
 
-pub const RUNNER_TOOL_NAMES: [&str; 9] = [
+pub const RUNNER_TOOL_NAMES: [&str; 12] = [
     "read",
     "ls",
     "find",
     "search",
+    "web_search",
+    "web_fetch",
     "write",
     "edit",
     "lsp",
     "workspace_graph",
+    "artifact",
     "command",
 ];
 const DEFAULT_CONTEXT_LENGTH: u64 = 64_000;
@@ -140,8 +143,16 @@ pub struct RunnerConfig {
     pub approved_executables: BTreeMap<String, PathBuf>,
     pub lsp_servers: Vec<LspServerConfig>,
     pub workspace_graph: Option<WorkspaceGraphConfig>,
+    /// Whether the desktop has document engines to answer `artifact` jobs with.
+    /// Unlike `workspace_graph`, this describes the desktop rather than this
+    /// host, so an SSH task can carry it while the remote machine has no
+    /// engine of its own.
+    pub artifact_service: bool,
     pub diagnostics: DiagnosticsConfig,
     pub provider: ProviderConfig,
+    /// The user's local calendar day, supplied by the desktop. Injected at the
+    /// front of every model request so compaction cannot drop it.
+    pub local_date: Option<String>,
 }
 
 fn object(value: &Value) -> Result<&Map<String, Value>, String> {
@@ -612,8 +623,22 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
             .map(|artifact_path| WorkspaceGraphConfig {
                 artifact_path: PathBuf::from(artifact_path),
             }),
+        artifact_service: config
+            .get("services")
+            .and_then(Value::as_object)
+            .and_then(|services| services.get("artifact"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         diagnostics: parse_diagnostics(config.get("diagnostics")),
         provider,
+        local_date: optional_string(config.get("localDate")).and_then(|value| {
+            let value = value.trim();
+            (!value.is_empty()
+                && value.chars().count() <= 80
+                && !value.contains('\n')
+                && !value.chars().any(char::is_control))
+            .then(|| value.to_owned())
+        }),
     })
 }
 
@@ -849,6 +874,28 @@ mod tests {
         .unwrap();
         assert!(visible.provider.send_reasoning_visible_field);
         assert!(visible.provider.reasoning_visible);
+    }
+
+    #[test]
+    fn local_date_is_optional_factual_context() {
+        let without = parse_runner_config(
+            r#"{"password":"p","cwd":"/tmp","provider":{"name":"Veil","baseURL":"http://127.0.0.1:1","mode":"local","chatEndpointPath":"/api/engineering/chat","modelId":"m"}}"#,
+        )
+        .unwrap();
+        assert_eq!(without.local_date, None);
+        let with = parse_runner_config(
+            r#"{"password":"p","cwd":"/tmp","localDate":"Saturday, August 15, 2026","provider":{"name":"Veil","baseURL":"http://127.0.0.1:1","mode":"local","chatEndpointPath":"/api/engineering/chat","modelId":"m"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            with.local_date.as_deref(),
+            Some("Saturday, August 15, 2026")
+        );
+        let ignored = parse_runner_config(
+            r#"{"password":"p","cwd":"/tmp","localDate":"Saturday\nAugust 15, 2026","provider":{"name":"Veil","baseURL":"http://127.0.0.1:1","mode":"local","chatEndpointPath":"/api/engineering/chat","modelId":"m"}}"#,
+        )
+        .unwrap();
+        assert_eq!(ignored.local_date, None);
     }
 
     #[test]

@@ -28,6 +28,7 @@ use crate::{
     session::{EventSink, Session},
 };
 
+mod artifact;
 pub(crate) mod catalog;
 mod command;
 #[cfg(test)]
@@ -44,10 +45,14 @@ mod request;
 mod search;
 mod skill;
 mod surface;
+mod web;
+#[cfg(test)]
+mod web_tests;
 mod write;
 
 #[cfg(test)]
 use crate::skill_preflight::explicit_skill_mention;
+use artifact::artifact_tool;
 use command::command_tool;
 #[cfg(test)]
 use command::{
@@ -68,6 +73,7 @@ pub use search::SearchIndex;
 use search::{note_mutation, search_tool};
 use skill::read_skill_tool;
 pub use surface::{ToolSurface, enabled_tool_specs, tool_surface};
+use web::{web_fetch_tool, web_search_tool};
 use write::{apply_patch_tool, edit_tool, write_tool};
 
 const MAX_READ_OUTPUT_BYTES: usize = 60 * 1024;
