@@ -99,7 +99,11 @@ export function looksLikeCommandBlock(content: string): boolean {
   );
 }
 
-function MarkdownCodeBlock({ language, content }: { language: string; content: string }) {
+function MarkdownCodeBlock({
+  language,
+  content,
+  trailingInline,
+}: { language: string; content: string; trailingInline?: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
   const label = codeBlockLabel(language, content);
   const isCommand = label === "command" || /^(bash|sh|zsh|shell|console|terminal|powershell|ps1|pwsh|cmd|bat)$/i.test(label);
@@ -118,7 +122,7 @@ function MarkdownCodeBlock({ language, content }: { language: string; content: s
         </button>
       </figcaption>
       <pre className="markdownCode">
-        <code>{content}</code>
+        <code>{content}{trailingInline ?? null}</code>
       </pre>
     </figure>
   );
@@ -226,7 +230,7 @@ function MarkdownBlockView({
   trailingInline?: React.ReactNode;
 }) {
   if (block.type === "code") {
-    return <MarkdownCodeBlock content={block.content} language={block.language} />;
+    return <MarkdownCodeBlock content={block.content} language={block.language} trailingInline={trailingInline} />;
   }
   if (block.type === "heading") {
     const headingContent = (
@@ -259,7 +263,10 @@ function MarkdownBlockView({
           <thead>
             <tr>
               {block.headers.map((header, headerIndex) => (
-                <th key={headerIndex}>{renderInlineMarkdown(header, referenceOptions)}</th>
+                <th key={headerIndex}>
+                  {renderInlineMarkdown(header, referenceOptions)}
+                  {block.rows.length === 0 && headerIndex === block.headers.length - 1 ? trailingInline ?? null : null}
+                </th>
               ))}
             </tr>
           </thead>
@@ -267,7 +274,10 @@ function MarkdownBlockView({
             {block.rows.map((row, rowIndex) => (
               <tr key={rowIndex}>
                 {row.map((cell, cellIndex) => (
-                  <td key={cellIndex}>{renderInlineMarkdown(cell, referenceOptions)}</td>
+                  <td key={cellIndex}>
+                    {renderInlineMarkdown(cell, referenceOptions)}
+                    {rowIndex === block.rows.length - 1 && cellIndex === row.length - 1 ? trailingInline ?? null : null}
+                  </td>
                 ))}
               </tr>
             ))}
@@ -365,8 +375,12 @@ function StreamingMarkdownContent({ content, caretClassName }: { content: string
   const blocks = useMemo(() => parseMarkdown(content), [content]);
   const blockKeys = useMemo(() => blocks.map((block) => JSON.stringify(block)), [blocks]);
   const caret = caretClassName ? <span className={caretClassName} aria-hidden="true" /> : null;
+  // The caret rides at the end of the text being written — inside the code
+  // box while a fence is open, in the last cell of a table — rather than on
+  // its own line under the block, where it read as a cursor stranded at the
+  // bottom of the message. Only a rule has nowhere to put it.
   const lastBlock = blocks.at(-1);
-  const caretInline = !!lastBlock && ["paragraph", "heading", "list", "quote"].includes(lastBlock.type);
+  const caretInline = !!lastBlock && lastBlock.type !== "rule";
   return (
     <div className="markdownContent">
       {blocks.map((block, index) =>

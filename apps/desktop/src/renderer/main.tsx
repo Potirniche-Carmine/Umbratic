@@ -134,7 +134,6 @@ import {
   ThumbsDown,
   ThumbsUp,
   Trash2,
-  TriangleAlert,
   Type,
   User,
   X,
@@ -232,6 +231,7 @@ import { formatFileSize, taskStatusDetail, taskStatusTitle } from "./taskStatusD
 import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
 import { ConnectionNotice } from "./connectionNotice";
+import { ErrorToast } from "./errorToast";
 import { IdeIcon } from "./ideLogos";
 import {
   activityToolLabel,
@@ -249,7 +249,6 @@ export const streamingMarkdownRenderBatchIntervalMs = 50;
 const maxCachedTaskEventGroups = 24;
 const commandOutputPreviewCharacterLimit = 12000;
 const commandOutputPreviewLineLimit = 5;
-const TOAST_LIFETIME_MS = 5_000;
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
 const defaultStartupSettings: DesktopStartupSettings = {
   // Matches the main-process default so a failed startup read does not flip modes.
@@ -408,13 +407,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [busy, setBusy] = useState(false);
   const [stopPending, setStopPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // A toast is a notice, not a state: it says its sentence and leaves. Anything
-  // that still matters after five seconds is on the panel it came from.
-  useEffect(() => {
-    if (!error) return;
-    const timer = window.setTimeout(() => setError(null), TOAST_LIFETIME_MS);
-    return () => window.clearTimeout(timer);
-  }, [error]);
   const connectionSettings = useConnectionSettings({
     api,
     backend,
@@ -4891,15 +4883,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         />
       ) : null}
 
-      {error ? (
-        <div className="toast" role="alert">
-          <TriangleAlert size={16} />
-          <span>{error}</span>
-          <button type="button" onClick={() => setError(null)} aria-label="Dismiss error">
-            <X size={14} />
-          </button>
-        </div>
-      ) : null}
+      <ErrorToast message={error} onDismiss={() => setError(null)} />
 
     </div>
   );

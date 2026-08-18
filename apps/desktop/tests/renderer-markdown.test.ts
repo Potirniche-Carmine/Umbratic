@@ -264,6 +264,25 @@ test("a streaming answer shows the text as it arrives, and a settled answer is c
   assert.match(settled, /The answer streams token by token/);
 });
 
+test("the streaming caret rides the end of the code being written, not the bottom of the message", () => {
+  const { AssistantAnswerContent } = loadRendererFile("markdownContent.tsx");
+  const render = (content) =>
+    renderToStaticMarkup(React.createElement(AssistantAnswerContent, { content, streaming: true }));
+
+  // An open fence: the caret is inside <code>, after the last streamed line.
+  const code = render("Here:\n\n```c\nint main() {\n  return 0;");
+  assert.match(code, /return 0;<span class="streamingTextCaret"[^>]*><\/span><\/code><\/pre>/);
+  assert.equal((code.match(/streamingTextCaret/g) ?? []).length, 1);
+
+  // A table in progress: the caret is in the last cell written.
+  const table = render("| a | b |\n| --- | --- |\n| 1 | 2 |");
+  assert.match(table, /2<span class="streamingTextCaret"[^>]*><\/span><\/td>/);
+
+  // A rule has nowhere to hold it, so it follows the block.
+  const rule = render("done\n\n---");
+  assert.match(rule, /<hr\/><span class="streamingTextCaret"/);
+});
+
 test("the review panel's close spring stays stable however long a frame takes", () => {
   const { reviewCloseSpring, reviewOpenSpring, reviewSpringStep } = loadRendererFile("reviewSpring.ts");
 
@@ -490,9 +509,16 @@ test("the connection notice sits on the prompt box and counts down to the next r
 });
 
 test("an error toast says its sentence and leaves", () => {
+  const { ErrorToast, TOAST_LIFETIME_MS } = loadRendererFile("errorToast.tsx");
+  assert.equal(TOAST_LIFETIME_MS, 5_000);
+  const shown = renderToStaticMarkup(React.createElement(ErrorToast, { message: "Health check failed", onDismiss() {} }));
+  assert.match(shown, /class="toast"/);
+  assert.match(shown, /Health check failed/);
+  assert.equal(renderToStaticMarkup(React.createElement(ErrorToast, { message: null, onDismiss() {} })), "");
+  const source = fs.readFileSync(new URL("../src/renderer/errorToast.tsx", import.meta.url), "utf8");
+  assert.match(source, /window\.setTimeout\(\(\) => dismiss\.current\(\), TOAST_LIFETIME_MS\)/);
   const renderer = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
-  assert.match(renderer, /const TOAST_LIFETIME_MS = 5_000;/);
-  assert.match(renderer, /window\.setTimeout\(\(\) => setError\(null\), TOAST_LIFETIME_MS\)/);
+  assert.match(renderer, /<ErrorToast message=\{error\} onDismiss=\{\(\) => setError\(null\)\} \/>/);
 });
 
 test("only the prose nothing follows is the turn's answer", () => {
