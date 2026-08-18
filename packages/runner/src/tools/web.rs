@@ -17,8 +17,17 @@ use super::{ToolError, ToolExecutionResult, ToolResult, string_arg};
 
 const SEARCH_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 const MAX_RESULTS: usize = 5;
-const MAX_PAGE_CHARS: usize = 16_000;
-const MAX_FETCH_BYTES: usize = 512 * 1024;
+/// How much readable text one fetch hands back. The runner's context pipeline
+/// already shows anything past 16 KB as a head-and-tail preview and keeps the
+/// rest for the model to page through, so this is a ceiling on what is worth
+/// keeping, not on what the model sees at once. A long article fits; a page
+/// beyond it is cut with a note saying how much there was.
+const MAX_PAGE_CHARS: usize = 100_000;
+/// How much of a response is read off the wire. Read up to here and stop,
+/// rather than fail: a news front page is a few megabytes of markup and script
+/// around a few kilobytes of prose, and refusing the whole page because the
+/// script was heavy answered the model with nothing.
+const MAX_FETCH_BYTES: usize = 5 * 1024 * 1024;
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// DDG's HTML endpoint refuses non-browser clients. This is a fetch UA, not a
@@ -46,7 +55,8 @@ pub(super) async fn web_search_tool(input: &Map<String, Value>) -> ToolExecution
         SEARCH_ENDPOINT,
         Some(&[("q", query.as_str()), ("kl", "us-en")]),
     )
-    .await?;
+    .await?
+    .body;
     let hits = parse_ddg_html(&html);
     if hits.is_empty() {
         return Ok(ToolResult::success(
@@ -81,12 +91,18 @@ pub(super) async fn web_search_tool(input: &Map<String, Value>) -> ToolExecution
 pub(super) async fn web_fetch_tool(input: &Map<String, Value>) -> ToolExecutionResult {
     let raw_url = string_arg(input, &["url"]);
     let url = check_public_url(&raw_url)?;
-    let body = http_text("GET", url.as_str(), None).await?;
-    let text = truncate_page(&readable_text(&body));
+    let fetched = http_text("GET", url.as_str(), None).await?;
+    let mut text = truncate_page(&readable_text(&fetched.body));
+    if fetched.truncated {
+        text.push_str(&format!(
+            "\n\n... (the page was longer than {} MB; only the first part was fetched)",
+            MAX_FETCH_BYTES / (1024 * 1024)
+        ));
+    }
     Ok(ToolResult::success_detailed(
         url.to_string(),
         text,
-        Some(json!({ "url": url.as_str() })),
+        Some(json!({ "url": url.as_str(), "truncated": fetched.truncated })),
         None,
     ))
 }
@@ -269,27 +285,44 @@ pub(super) fn readable_text(body: &str) -> String {
     collapse_ws(&strip_tags(&without_blocks))
 }
 
+/// Removes whole elements — script, style, and friends — in one pass over the
+/// document. Lowercased once for matching; the output is copied from the
+/// original, so nothing outside the removed elements changes case.
 fn strip_blocks(input: &str, tags: &[&str]) -> String {
-    let mut output = input.to_owned();
-    for tag in tags {
-        loop {
-            let open = format!("<{tag}");
-            let close = format!("</{tag}>");
-            let Some(start) = output.to_ascii_lowercase().find(&open) else {
-                break;
-            };
-            let after_open = output[start..].find('>').map(|index| start + index + 1);
-            let Some(content_start) = after_open else {
-                break;
-            };
-            let lower = output.to_ascii_lowercase();
-            let end = lower[content_start..]
-                .find(&close)
-                .map(|index| content_start + index + close.len())
-                .unwrap_or(output.len());
-            output.replace_range(start..end, " ");
-        }
+    let lower = input.to_ascii_lowercase();
+    let mut output = String::with_capacity(input.len());
+    let mut cursor = 0;
+    while let Some(offset) = lower[cursor..].find('<') {
+        let at = cursor + offset;
+        let after = &lower[at + 1..];
+        let matched = tags.iter().find(|tag| {
+            after.starts_with(*tag)
+                && after[tag.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|next| next == '>' || next == '/' || next.is_ascii_whitespace())
+        });
+        let Some(tag) = matched else {
+            output.push_str(&input[cursor..=at]);
+            cursor = at + 1;
+            continue;
+        };
+        output.push_str(&input[cursor..at]);
+        output.push(' ');
+        let content_start = lower[at..]
+            .find('>')
+            .map_or(input.len(), |index| at + index + 1);
+        let close = format!("</{tag}");
+        cursor = lower[content_start..]
+            .find(&close)
+            .map_or(input.len(), |index| {
+                let close_at = content_start + index;
+                lower[close_at..]
+                    .find('>')
+                    .map_or(input.len(), |end| close_at + end + 1)
+            });
     }
+    output.push_str(&input[cursor..]);
     output
 }
 
@@ -373,24 +406,34 @@ fn collapse_ws(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn truncate_page(text: &str) -> String {
+pub(super) fn truncate_page(text: &str) -> String {
     if text.is_empty() {
         return "(page returned no readable text)".to_owned();
     }
-    if text.chars().count() <= MAX_PAGE_CHARS {
+    let total = text.chars().count();
+    if total <= MAX_PAGE_CHARS {
         return text.to_owned();
     }
     let clipped: String = text.chars().take(MAX_PAGE_CHARS).collect();
-    format!("{clipped}\n\n... (truncated)")
+    format!("{clipped}\n\n... (truncated: showing {MAX_PAGE_CHARS} of {total} characters)")
+}
+
+/// A response body, and whether it was cut at the read cap.
+struct FetchedText {
+    body: String,
+    truncated: bool,
 }
 
 async fn http_text(
     method: &str,
     url: &str,
     form: Option<&[(&str, &str)]>,
-) -> Result<String, ToolError> {
+) -> Result<FetchedText, ToolError> {
     if let Some(body) = test_http_override(method, url, form) {
-        return body;
+        return body.map(|body| FetchedText {
+            body,
+            truncated: false,
+        });
     }
     let parsed = allow_public_destination(url)?;
     let client = reqwest::Client::builder()
@@ -431,16 +474,29 @@ async fn http_text(
             status.as_u16()
         )));
     }
-    let bytes = response
-        .bytes()
+    // Read up to the cap and stop, rather than buffer the whole body and then
+    // refuse it: the useful part of a page is usually near the top, and the
+    // model is better served by the first megabytes than by an error.
+    let mut response = response;
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| ToolError::runtime(format!("Failed to read response: {error}")))?;
-    if bytes.len() > MAX_FETCH_BYTES {
-        return Err(ToolError::runtime(format!(
-            "Response exceeded {MAX_FETCH_BYTES} bytes."
-        )));
+        .map_err(|error| ToolError::runtime(format!("Failed to read response: {error}")))?
+    {
+        let room = MAX_FETCH_BYTES - bytes.len();
+        if chunk.len() >= room {
+            bytes.extend_from_slice(&chunk[..room]);
+            truncated = true;
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(FetchedText {
+        body: String::from_utf8_lossy(&bytes).into_owned(),
+        truncated,
+    })
 }
 
 #[cfg(test)]
