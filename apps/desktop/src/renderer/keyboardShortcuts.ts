@@ -18,6 +18,7 @@ import { useSyncExternalStore } from "react";
 export type ShortcutId =
   | "dictation.toggle"
   | "chat.new"
+  | "chat.jump"
   | "app.settings"
   | "app.shortcuts"
   | "review.toggle"
@@ -52,6 +53,13 @@ export type ShortcutDefinition = {
   binding?: ShortcutBinding;
   /** A chord shown as text when it is a key the binding cannot express. */
   display?: string[];
+  /**
+   * Prefixes a `display` chord with the primary modifier, spelled for the
+   * machine reading it. A reference row that involves ⌘ or Ctrl cannot write
+   * the modifier into `display` itself without naming the wrong one on half the
+   * machines that read it.
+   */
+  displayPrimary?: boolean;
 };
 
 /**
@@ -65,6 +73,17 @@ export const shortcuts: readonly ShortcutDefinition[] = [
     label: "New chat",
     detail: "Saves the draft you are on and starts an empty one.",
     binding: { key: "n", primary: true },
+  },
+  {
+    id: "chat.jump",
+    section: "Chats and panels",
+    // Nine slots because there are nine number keys worth reaching for without
+    // looking. A tenth chat is a click away, and 0 as "the tenth" is a rule
+    // nobody remembers.
+    label: "Jump to a chat",
+    detail: "Hold the modifier to number the first nine chats in the sidebar, then press that number to open one.",
+    display: ["1"],
+    displayPrimary: true,
   },
   {
     id: "review.toggle",
@@ -317,6 +336,42 @@ export function shortcutForEvent(event: KeyboardEvent, mac = isMacPlatform()): S
   return active.find((shortcut) => shortcut.binding && matchesShortcut(event, shortcut.binding, mac)) ?? null;
 }
 
+/** How many chats the number keys reach. The `chat.jump` row documents them. */
+export const chatJumpLimit = 9;
+
+/**
+ * The chat position a key press is asking for, or null when it is asking for
+ * something else.
+ *
+ * Deliberately not nine rows in the table above: a row binds one chord to one
+ * action, and this is one gesture that means "the nth chat" for whatever the
+ * sidebar is showing. It lives here anyway so the platform rule — ⌘ on a Mac,
+ * Ctrl everywhere else, never both — is written in exactly one place.
+ */
+export function chatJumpFromEvent(
+  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey">,
+  mac = isMacPlatform(),
+): number | null {
+  if (!chatJumpModifierHeld(event, mac)) return null;
+  return /^[1-9]$/.test(event.key) ? Number(event.key) : null;
+}
+
+/**
+ * Whether the modifier that offers the numbers is down.
+ *
+ * Exact on the other modifiers, because this is what puts the badges on the
+ * rows: ⌥⌘1 is somebody else's shortcut, and numbering the sidebar for it would
+ * promise a jump that never comes.
+ */
+export function chatJumpModifierHeld(
+  event: Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "shiftKey" | "altKey">,
+  mac = isMacPlatform(),
+): boolean {
+  const primary = mac ? event.metaKey : event.ctrlKey;
+  const secondary = mac ? event.ctrlKey : event.metaKey;
+  return primary && !secondary && !event.shiftKey && !event.altKey;
+}
+
 /**
  * The chord as separate keys, for a row of <kbd>s.
  *
@@ -324,7 +379,9 @@ export function shortcutForEvent(event: KeyboardEvent, mac = isMacPlatform()): S
  * the keys themselves; everywhere else they are words, for the same reason.
  */
 export function shortcutKeys(definition: ShortcutDefinition, mac = isMacPlatform()): string[] {
-  if (definition.display) return definition.display;
+  if (definition.display) {
+    return definition.displayPrimary ? [mac ? "⌘" : "Ctrl", ...definition.display] : definition.display;
+  }
   const binding = definition.binding;
   if (!binding) return [];
   const keys: string[] = [];

@@ -3,6 +3,7 @@
 //! App component is the only oversized file left in the renderer.
 
 import { chatTitleFromFirstMessage } from "../shared/chatTitle";
+import { chatJumpLimit } from "./keyboardShortcuts";
 import { parseUtcMs } from "../shared/utcDate";
 import type {
   BackendUiEvent,
@@ -42,6 +43,37 @@ export type DeleteCandidate =
   | { kind: "chat"; chat: ChatRecord }
   | { kind: "projectChats"; project: ProjectDeleteTarget }
   | { kind: "project"; project: ProjectDeleteTarget };
+
+/**
+ * The chats the sidebar is actually showing, top to bottom.
+ *
+ * Collapsed groups are skipped rather than counted. The numbers the rows wear
+ * are positions in what the eye can see, and a hidden chat holding number 3
+ * would make every badge under it point one chat short.
+ */
+export function visibleChatOrder(
+  groups: readonly ChatProjectGroup[],
+  collapsedProjects: ReadonlySet<string>,
+  collapsedWorktrees: ReadonlySet<string>,
+): ChatRecord[] {
+  const visible: ChatRecord[] = [];
+  for (const group of groups) {
+    if (collapsedProjects.has(group.key)) continue;
+    visible.push(...group.chats);
+    for (const worktree of group.worktrees) {
+      if (collapsedWorktrees.has(worktree.key)) continue;
+      visible.push(...worktree.chats);
+    }
+  }
+  return visible;
+}
+
+/** The number each of the first nine visible chats answers to, by chat id. */
+export function chatJumpNumbers(visible: readonly ChatRecord[], limit = chatJumpLimit): Map<string, number> {
+  const numbers = new Map<string, number>();
+  for (const [index, chat] of visible.slice(0, limit).entries()) numbers.set(chat.id, index + 1);
+  return numbers;
+}
 
 export function eventTimelineTime(event: BackendUiEvent): string {
   return event.endedAt ?? event.at ?? "";

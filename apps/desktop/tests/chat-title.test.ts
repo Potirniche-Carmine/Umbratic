@@ -16,6 +16,32 @@ test("chat titles lead with the words that tell one chat from another", () => {
   assert.equal(chatTitleFromFirstMessage("fix it"), "Fix it");
 });
 
+test("a greeting is not a title", () => {
+  // "Hey there, fix the build" opens with two words of nothing. Stripping only
+  // the first left a sidebar where three different chats all read "There".
+  assert.equal(chatTitleFromFirstMessage("hey there fix the build"), "Fix the build");
+  assert.equal(chatTitleFromFirstMessage("hi there, tell me about the retry policy"), "Retry policy");
+  // A message that is only a greeting still has to say what it said.
+  assert.equal(chatTitleFromFirstMessage("hey there"), "Hey there");
+  // The subject on its own line, behind a greeting on the first one.
+  assert.equal(chatTitleFromFirstMessage("hi!\ncan you fix the CRLF bug"), "Fix the CRLF bug");
+});
+
+test("a full stop inside a word or a number does not end the title", () => {
+  // "Tell me 1. what the runner does" used to break at the enumerator and
+  // title the chat with the number it broke on.
+  assert.equal(chatTitleFromFirstMessage("tell me 1. what the runner does"), "What the runner does");
+  assert.equal(chatTitleFromFirstMessage("bump to v1.2 and rebuild"), "Bump to v1.2 and rebuild");
+  assert.equal(chatTitleFromFirstMessage("use e.g. a mutex here"), "Use e.g. a mutex here");
+  // A number that is counting keeps its number.
+  assert.equal(chatTitleFromFirstMessage("tell me 1 thing about retries"), "1 thing about retries");
+});
+
+test("politeness at the end is not part of the title", () => {
+  assert.equal(chatTitleFromFirstMessage("Update the release docs please"), "Update the release docs");
+  assert.equal(chatTitleFromFirstMessage("Update the release docs, thanks"), "Update the release docs");
+});
+
 test("chat titles fit the sidebar column", () => {
   const long = chatTitleFromFirstMessage(
     "Investigate why the streaming relay drops events under concurrent load",

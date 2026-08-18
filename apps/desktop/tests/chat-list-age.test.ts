@@ -50,3 +50,36 @@ test("sidebar ages are computed from the stored UTC datetime", () => {
     "1h",
   );
 });
+
+test("the sidebar numbers count what is on screen, not what exists", () => {
+  const chat = (id: string) => ({ id, updatedAt: "2026-08-16T21:18:00.000Z" });
+  const groups = [
+    { key: "a", name: "A", chats: [chat("a1"), chat("a2")], worktrees: [{ key: "a-wt", chats: [chat("w1")] }] },
+    { key: "b", name: "B", chats: [chat("b1")], worktrees: [] },
+  ];
+
+  // `ids` rather than a bare `.map`: the module runs in its own vm realm, and
+  // an array built there has that realm's prototype, which a strict deep
+  // comparison rejects.
+  const ids = (rows) => Array.from(rows, (row) => row.id);
+
+  const all = presentation.visibleChatOrder(groups, new Set(), new Set());
+  assert.deepEqual(ids(all), ["a1", "a2", "w1", "b1"]);
+
+  // A collapsed group is not skipped over in the count — it is not there. A
+  // hidden chat holding number 3 would leave every badge under it pointing one
+  // chat short of where it says.
+  const collapsedWorktree = presentation.visibleChatOrder(groups, new Set(), new Set(["a-wt"]));
+  assert.deepEqual(ids(collapsedWorktree), ["a1", "a2", "b1"]);
+  const collapsedProject = presentation.visibleChatOrder(groups, new Set(["a"]), new Set());
+  assert.deepEqual(ids(collapsedProject), ["b1"]);
+
+  const numbers = presentation.chatJumpNumbers(collapsedWorktree);
+  assert.deepEqual(Array.from(numbers.entries(), (entry) => Array.from(entry)), [["a1", 1], ["a2", 2], ["b1", 3]]);
+
+  // Past the ninth row there is no number to press, so no row wears one.
+  const many = presentation.chatJumpNumbers(Array.from({ length: 12 }, (_, index) => chat(`c${index}`)));
+  assert.equal(many.size, 9);
+  assert.equal(many.get("c8"), 9);
+  assert.equal(many.has("c9"), false);
+});
