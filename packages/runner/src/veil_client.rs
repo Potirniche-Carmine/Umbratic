@@ -11,9 +11,9 @@ use crate::{
     tools::ToolCall,
     veil_request::chat_request_body,
     veil_retry::{
-        MAX_CONNECT_ATTEMPTS, VeilAttemptError, VeilAttemptInput, committed_output,
-        emit_reconnected, emit_reconnecting, reconnect_delay_ms, retry_after_from,
-        retryable_status, sleep_unless_aborted,
+        MAX_RETRIES, VeilAttemptError, VeilAttemptInput, committed_output, emit_reconnected,
+        emit_reconnecting, reconnect_delay_ms, retry_after_from, retry_is_quiet,
+        retryable_veil_failure, sleep_unless_aborted,
     },
     veil_tls::{expected_pin, pinned_tls_config, resolve_server_name},
 };
@@ -511,14 +511,34 @@ fn veil_failure_message(status: Option<u16>, payload: Option<&Value>) -> String 
     }
 }
 
-fn veil_stream_error(line: &str) -> Option<String> {
+/// An error frame Veil wrote into the stream, as the failure it describes.
+///
+/// Veil reports a runtime that went away after the stream opened — a reset
+/// mid-answer, an idle timeout, an upstream that stopped short — as one of
+/// these frames rather than as a status, because the status was already sent.
+/// It is the same failure a dropped socket is, and as long as nothing has been
+/// committed it is worth the same retry; the caller decides that part.
+fn veil_stream_error(line: &str) -> Option<VeilAttemptError> {
     let data = sse_data(line)?;
     let payload = serde_json::from_str::<Value>(data).ok()?;
     payload.get("error")?;
-    Some(format!(
+    let message = format!(
         "model request failed: {}",
         veil_failure_message(None, Some(&payload))
-    ))
+    );
+    let code = payload.get("code").and_then(Value::as_str).unwrap_or("");
+    Some(
+        if matches!(
+            code,
+            "model_service_stream_incomplete"
+                | "model_service_unavailable"
+                | "model_service_timeout"
+        ) {
+            VeilAttemptError::retryable(message)
+        } else {
+            VeilAttemptError::final_failure(message)
+        },
+    )
 }
 
 fn process_veil_line(
@@ -592,12 +612,18 @@ pub async fn stream_veil_chat(
         host_header,
         body,
     };
-    let mut attempt = 1_u32;
+    // Retries taken so far, how many of them went unannounced, and whether the
+    // composer has been told. The quiet ones are subtracted from what the user
+    // is shown, so the count on screen starts at 1 and ends at the number of
+    // waits they could actually see.
+    let mut retries = 0_u32;
+    let mut quiet_retries = 0_u32;
+    let mut shown = false;
     loop {
         match attempt_veil_chat(session, sink, &attempt_input).await {
             Ok(result) => {
-                if attempt > 1 {
-                    emit_reconnected(session, sink, attempt);
+                if shown {
+                    emit_reconnected(session, sink, retries);
                 }
                 return Ok(result);
             }
@@ -610,17 +636,28 @@ pub async fn stream_veil_chat(
                 // server is not coming back on a timescale anyone will wait for.
                 if error.committed
                     || !error.retryable
-                    || attempt >= MAX_CONNECT_ATTEMPTS
+                    || retries >= MAX_RETRIES
                     || session.is_aborted()
                 {
                     return Err(error.message);
                 }
-                let delay_ms = reconnect_delay_ms(attempt, error.retry_after_ms);
-                emit_reconnecting(session, sink, attempt, delay_ms);
+                retries += 1;
+                let delay_ms = reconnect_delay_ms(retries, shown, error.retry_after_ms);
+                if retry_is_quiet(retries, shown, delay_ms) {
+                    quiet_retries += 1;
+                } else {
+                    shown = true;
+                    emit_reconnecting(
+                        session,
+                        sink,
+                        retries - quiet_retries,
+                        MAX_RETRIES - quiet_retries,
+                        delay_ms,
+                    );
+                }
                 if !sleep_unless_aborted(session, delay_ms).await {
                     return Err("model request aborted".into());
                 }
-                attempt += 1;
             }
         }
     }
@@ -681,11 +718,13 @@ async fn attempt_veil_chat(
             "model request failed: {}",
             veil_failure_message(Some(status.as_u16()), payload.as_ref())
         );
-        return Err(if retryable_status(status.as_u16()) {
-            VeilAttemptError::retryable(message).after(retry_after)
-        } else {
-            VeilAttemptError::final_failure(message)
-        });
+        return Err(
+            if retryable_veil_failure(status.as_u16(), payload.as_ref()) {
+                VeilAttemptError::retryable(message).after(retry_after)
+            } else {
+                VeilAttemptError::final_failure(message)
+            },
+        );
     }
     let mut result = VeilChatResult::default();
     let mut partial = BTreeMap::new();
@@ -714,7 +753,7 @@ async fn attempt_veil_chat(
             .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?
         {
             if let Some(error) = veil_stream_error(&line) {
-                return Err(VeilAttemptError::final_failure(error).committed_if(committed));
+                return Err(error.committed_if(committed));
             }
             let (line_completed, content, reasoning) =
                 process_veil_line(&line, &mut result, &mut partial).map_err(|error| {
@@ -734,7 +773,7 @@ async fn attempt_veil_chat(
     if !trailing.trim().is_empty() {
         let trailing = trailing.trim_end_matches(['\r', '\n']);
         if let Some(error) = veil_stream_error(trailing) {
-            return Err(VeilAttemptError::final_failure(error).committed_if(committed));
+            return Err(error.committed_if(committed));
         }
         let (line_completed, content, reasoning) =
             process_veil_line(trailing, &mut result, &mut partial)

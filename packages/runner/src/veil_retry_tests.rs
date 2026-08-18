@@ -4,48 +4,54 @@ use serde_json::json;
 use crate::tools::ToolCall;
 
 #[test]
-fn the_backoff_is_capped_exponential_growth() {
-    assert_eq!(reconnect_window_ms(1), 500);
-    assert_eq!(reconnect_window_ms(2), 1_000);
-    assert_eq!(reconnect_window_ms(4), 4_000);
-    assert_eq!(reconnect_window_ms(7), 32_000);
-    for attempt in 8..=MAX_CONNECT_ATTEMPTS {
-        assert_eq!(reconnect_window_ms(attempt), RECONNECT_MAX_DELAY_MS);
+fn the_first_retries_are_quick_and_quiet_and_the_rest_are_a_visible_half_minute() {
+    // Two fast steps before anything is shown: a blip is over before a notice
+    // could be read.
+    assert_eq!(reconnect_delay_ms(1, false, None), 1_000);
+    assert_eq!(reconnect_delay_ms(2, false, None), 2_000);
+    for retry in 1..=QUIET_RETRIES {
+        let delay = reconnect_delay_ms(retry, false, None);
+        assert!(
+            retry_is_quiet(retry, false, delay),
+            "retry {retry} should be quiet"
+        );
     }
-    // Ten attempts covering a restart, and then it stops. Holding a turn open
-    // longer than that is not patience, it is a hang.
-    let budget: u64 = (1..MAX_CONNECT_ATTEMPTS).map(reconnect_window_ms).sum();
+    // Then a flat half-minute, jittered upward only a little, so the notice's
+    // "half a minute" is one. Every one of those is shown.
+    for retry in QUIET_RETRIES + 1..=MAX_RETRIES {
+        let delay = reconnect_delay_ms(retry, true, None);
+        assert!(
+            (VISIBLE_DELAY_MS..VISIBLE_DELAY_MS + 3_500).contains(&delay),
+            "retry {retry} waited {delay}ms"
+        );
+        assert!(
+            !retry_is_quiet(retry, true, delay),
+            "retry {retry} must be shown"
+        );
+    }
+    // Once shown, always shown: an early retry number after a notice is no
+    // longer quiet and no longer quick.
+    assert!(!retry_is_quiet(1, true, 1_000));
+    assert!(reconnect_delay_ms(1, true, None) >= VISIBLE_DELAY_MS);
+    // A quiet retry is quiet because it is quick: a server asking for a long
+    // wait on the first retry is asking for one the user should be told about.
+    assert!(!retry_is_quiet(1, false, QUIET_MAX_DELAY_MS + 1));
+
+    // Two visible waits at the same retry must not be identical, or the jitter
+    // is not doing the one job it exists for.
+    let draws = (0..24)
+        .map(|_| reconnect_delay_ms(5, true, None))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(draws.len() > 1, "the visible wait is not actually jittered");
+
+    // Ten visible half-minutes covers a restart or a model reload, and then it
+    // stops. Holding a turn open longer than that is not patience, it is a hang.
+    let budget =
+        QUIET_RETRIES as u64 * QUIET_MAX_DELAY_MS + VISIBLE_RETRIES as u64 * VISIBLE_DELAY_MS;
     assert!(
-        (60_000..=5 * 60_000).contains(&budget),
+        (3 * 60_000..=6 * 60_000).contains(&budget),
         "the retry ladder spans {budget}ms",
     );
-}
-
-#[test]
-fn every_wait_is_jittered_within_the_upper_half_of_its_window() {
-    // Equal jitter: never below half the window, so a long outage cannot
-    // degenerate into a fast poll; never above it, so the ladder stays bounded.
-    for window in [500_u64, 4_000, 60_000] {
-        assert_eq!(jittered_delay_ms(window, 0.0), window / 2);
-        assert_eq!(jittered_delay_ms(window, 1.0), window);
-        for fraction in [0.01, 0.25, 0.5, 0.99] {
-            let delay = jittered_delay_ms(window, fraction);
-            assert!(
-                (window / 2..=window).contains(&delay),
-                "{window} {fraction}"
-            );
-        }
-    }
-    // A nonsense fraction cannot escape the window either.
-    assert_eq!(jittered_delay_ms(1_000, -5.0), 500);
-    assert_eq!(jittered_delay_ms(1_000, 5.0), 1_000);
-
-    // Two consecutive waits at the same attempt must not be identical, or the
-    // jitter is not doing the one job it exists for.
-    let draws = (0..24)
-        .map(|_| reconnect_delay_ms(8, None))
-        .collect::<std::collections::BTreeSet<_>>();
-    assert!(draws.len() > 1, "the backoff is not actually jittered");
 }
 
 #[test]
@@ -53,7 +59,8 @@ fn a_server_that_says_when_to_come_back_is_obeyed_within_reason() {
     assert_eq!(retry_after_ms(Some("2")), Some(2_000));
     assert_eq!(retry_after_ms(Some("  30 ")), Some(30_000));
     // A header takes precedence over the computed backoff.
-    assert_eq!(reconnect_delay_ms(1, Some(9_000)), 9_000);
+    assert_eq!(reconnect_delay_ms(1, false, Some(9_000)), 9_000);
+    assert_eq!(reconnect_delay_ms(7, true, Some(9_000)), 9_000);
     // A wrong or hostile value cannot park a turn for an hour.
     assert_eq!(retry_after_ms(Some("86400")), Some(RECONNECT_MAX_DELAY_MS));
     // The HTTP-date form and anything unparseable fall back to the backoff.
@@ -72,6 +79,33 @@ fn only_statuses_that_could_answer_differently_are_repeated() {
     for status in [400, 401, 403, 404, 409, 422, 500, 501] {
         assert!(!retryable_status(status), "{status} must not be retried");
     }
+}
+
+#[test]
+fn a_runtime_that_rejected_the_request_is_not_a_lost_connection() {
+    // Veil answers 502 for anything its runtime refused. The runtime's own
+    // status decides: a template that raised on the prompt raises again.
+    let rejected = json!({"code": "model_service_rejected", "upstreamStatus": 500});
+    assert!(!retryable_veil_failure(502, Some(&rejected)));
+    let malformed = json!({"code": "model_service_rejected", "upstreamStatus": 400});
+    assert!(!retryable_veil_failure(502, Some(&malformed)));
+    // A runtime that is loading, busy, or gone answers differently in a while.
+    for upstream in [503, 429, 502, 504] {
+        let payload = json!({"code": "model_service_rejected", "upstreamStatus": upstream});
+        assert!(
+            retryable_veil_failure(502, Some(&payload)),
+            "upstream {upstream}"
+        );
+    }
+    // No upstream status means Veil never reached the runtime, and Veil's own
+    // status is the one to judge.
+    let unreachable = json!({"code": "model_service_unavailable"});
+    assert!(retryable_veil_failure(502, Some(&unreachable)));
+    assert!(retryable_veil_failure(503, None));
+    assert!(!retryable_veil_failure(401, None));
+    // A nonsense upstream status falls back to Veil's own.
+    let nonsense = json!({"upstreamStatus": 99_999});
+    assert!(retryable_veil_failure(502, Some(&nonsense)));
 }
 
 #[test]

@@ -15,38 +15,35 @@ use crate::{
     veil_client::VeilChatResult,
 };
 
-/// How many times a request that has committed nothing may be re-sent.
-///
-/// Ten, which with the ceiling below covers a server that is restarting or
-/// reloading a model — a few minutes — and then gives up. Stop stays live
-/// throughout, so the wait costs the user nothing they cannot interrupt.
-pub(crate) const MAX_CONNECT_ATTEMPTS: u32 = 10;
-pub(crate) const RECONNECT_BASE_DELAY_MS: u64 = 500;
-/// The ceiling on a single wait. Ten attempts covering minutes forces a large
-/// one: the two numbers trade directly against each other, and this is the
-/// side of that trade the attempt count leaves.
+/// Retries made before anyone is told. A blip — a socket reset, a server that
+/// is a second into a restart — is over before a notice could be read, and a
+/// counter that appears at "3/10" the instant the request fails reads as
+/// three failures the user was not warned about.
+pub(crate) const QUIET_RETRIES: u32 = 2;
+/// Retries the composer shows, each a full wait apart. Ten at half a minute
+/// covers a server that is restarting or reloading a model, and then gives up:
+/// holding a turn open longer than that is not patience, it is a hang. Stop
+/// stays live throughout, so the wait costs the user nothing they cannot
+/// interrupt.
+pub(crate) const VISIBLE_RETRIES: u32 = 10;
+pub(crate) const MAX_RETRIES: u32 = QUIET_RETRIES + VISIBLE_RETRIES;
+
+const QUIET_DELAYS_MS: [u64; QUIET_RETRIES as usize] = [1_000, 2_000];
+/// A quiet retry is quiet because it is quick. A server that asks for longer
+/// than this — a `Retry-After` on a 503 — is asking for a wait the user would
+/// otherwise sit through with a frozen composer and no explanation.
+pub(crate) const QUIET_MAX_DELAY_MS: u64 = 5_000;
+/// The wait between visible retries. Long enough that the count means
+/// something — each tick is a real half-minute the server has been down —
+/// rather than a number that climbs while the user watches.
+pub(crate) const VISIBLE_DELAY_MS: u64 = 30_000;
+/// A little spread over the visible wait, so every chat that lost the same
+/// server does not retry in lockstep and meet a server coming back all at
+/// once. Small on purpose: the notice says half a minute, and it should be one.
+const VISIBLE_JITTER_MS: u64 = 3_000;
+/// The ceiling on a single wait, `Retry-After` included, so a wrong or hostile
+/// header cannot park a turn for an hour.
 pub(crate) const RECONNECT_MAX_DELAY_MS: u64 = 60_000;
-
-/// The unjittered ceiling for one attempt: plain capped exponential growth.
-pub(crate) fn reconnect_window_ms(attempt: u32) -> u64 {
-    RECONNECT_BASE_DELAY_MS
-        .saturating_mul(1_u64 << attempt.saturating_sub(1).min(16))
-        .min(RECONNECT_MAX_DELAY_MS)
-}
-
-/// Equal jitter over that window: half the window, plus a uniform draw over the
-/// other half.
-///
-/// Jitter is the part of exponential backoff that is easiest to leave out and
-/// most worth keeping. Without it every chat that lost the same server retries
-/// in lockstep, so a server coming back is met by all of them at once and may
-/// go straight back down — and they stay synchronized on the next round.
-/// Halving rather than drawing over the whole window (full jitter) keeps a
-/// floor under the delay, so a long outage cannot degenerate into a fast poll.
-pub(crate) fn jittered_delay_ms(window_ms: u64, fraction: f64) -> u64 {
-    let half = window_ms / 2;
-    half + (half as f64 * fraction.clamp(0.0, 1.0)) as u64
-}
 
 /// A server that says when to come back is obeyed rather than guessed at.
 ///
@@ -54,8 +51,6 @@ pub(crate) fn jittered_delay_ms(window_ms: u64, fraction: f64) -> u64 {
 /// the classic way a well-behaved client becomes the reason a loaded server
 /// stays loaded. Only the delta-seconds form is honoured; the HTTP-date form is
 /// rare from an inference gateway and falling back to the backoff is safe.
-/// Bounded by the same ceiling as everything else, so a wrong or hostile header
-/// cannot park a turn for an hour.
 pub(crate) fn retry_after_ms(header: Option<&str>) -> Option<u64> {
     header?
         .trim()
@@ -76,10 +71,27 @@ pub(crate) fn retry_after_from(response: &reqwest::Response) -> Option<u64> {
     )
 }
 
-/// How long to wait before the next attempt.
-pub(crate) fn reconnect_delay_ms(attempt: u32, retry_after: Option<u64>) -> u64 {
-    retry_after
-        .unwrap_or_else(|| jittered_delay_ms(reconnect_window_ms(attempt), random_fraction()))
+/// How long to wait before retry number `retry` (1-based), given whether the
+/// user has already been shown a notice and whether the server named a wait.
+///
+/// The ladder is two quick quiet steps and then a flat half-minute: the early
+/// steps catch a blip cheaply, and once the wait is long enough to see it stays
+/// the same length so the count on screen is honest. Once shown, always shown —
+/// a notice that comes and goes between attempts is worse than one that stays.
+pub(crate) fn reconnect_delay_ms(retry: u32, shown: bool, retry_after: Option<u64>) -> u64 {
+    if let Some(after) = retry_after {
+        return after.min(RECONNECT_MAX_DELAY_MS);
+    }
+    if !shown && (1..=QUIET_RETRIES).contains(&retry) {
+        return QUIET_DELAYS_MS[(retry - 1) as usize];
+    }
+    VISIBLE_DELAY_MS + (VISIBLE_JITTER_MS as f64 * random_fraction()) as u64
+}
+
+/// Whether this retry happens without telling the user: an early one, before
+/// any notice, and short enough to be over before a notice would help.
+pub(crate) fn retry_is_quiet(retry: u32, shown: bool, delay_ms: u64) -> bool {
+    !shown && retry <= QUIET_RETRIES && delay_ms <= QUIET_MAX_DELAY_MS
 }
 
 /// A uniform draw in [0, 1).
@@ -98,6 +110,24 @@ fn random_fraction() -> f64 {
 /// only fail ten more times.
 pub(crate) fn retryable_status(status: u16) -> bool {
     matches!(status, 408 | 429 | 502 | 503 | 504)
+}
+
+/// Whether a failed Veil response is worth repeating.
+///
+/// Veil answers 502 for anything its runtime refused and says which status the
+/// runtime gave. That upstream status is the one that matters: a runtime that
+/// rejected the request outright — a chat template that raised on the prompt,
+/// a malformed field — will reject it the same way ten more times, and calling
+/// that "lost connection" for five minutes is a lie about what went wrong.
+/// Only when there is no upstream status, because Veil never reached the
+/// runtime, is Veil's own status the thing to judge.
+pub(crate) fn retryable_veil_failure(status: u16, payload: Option<&Value>) -> bool {
+    let upstream = payload
+        .and_then(|value| value.get("upstreamStatus"))
+        .and_then(Value::as_u64)
+        .filter(|value| *value <= u16::MAX as u64)
+        .map(|value| value as u16);
+    retryable_status(upstream.unwrap_or(status))
 }
 
 /// Whether this turn has produced anything the caller could already have acted
@@ -140,13 +170,20 @@ pub(crate) struct VeilAttemptInput {
 ///
 /// Emitted before the wait rather than after it, so the composer can show the
 /// attempt the user is currently sitting through instead of the one that has
-/// already elapsed.
-pub(crate) fn emit_reconnecting(session: &Session, sink: &EventSink, attempt: u32, delay_ms: u64) {
+/// already elapsed. `attempt` counts only the visible retries: the quiet ones
+/// were never announced, so they are not part of the tally the user sees.
+pub(crate) fn emit_reconnecting(
+    session: &Session,
+    sink: &EventSink,
+    attempt: u32,
+    max_attempts: u32,
+    delay_ms: u64,
+) {
     sink.emit(json!({
         "type": "provider.reconnecting",
         "taskId": session.task_id,
         "attempt": attempt,
-        "maxAttempts": MAX_CONNECT_ATTEMPTS,
+        "maxAttempts": max_attempts,
         "delayMs": delay_ms,
         "at": now_iso()
     }));

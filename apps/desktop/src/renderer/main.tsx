@@ -231,6 +231,7 @@ import { SkillsSettingsPanel } from "./SkillsSettings";
 import { formatFileSize, taskStatusDetail, taskStatusTitle } from "./taskStatusDisplay";
 import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
+import { ConnectionNotice } from "./connectionNotice";
 import { IdeIcon } from "./ideLogos";
 import {
   activityToolLabel,
@@ -248,6 +249,7 @@ export const streamingMarkdownRenderBatchIntervalMs = 50;
 const maxCachedTaskEventGroups = 24;
 const commandOutputPreviewCharacterLimit = 12000;
 const commandOutputPreviewLineLimit = 5;
+const TOAST_LIFETIME_MS = 5_000;
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
 const defaultStartupSettings: DesktopStartupSettings = {
   // Matches the main-process default so a failed startup read does not flip modes.
@@ -406,6 +408,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [busy, setBusy] = useState(false);
   const [stopPending, setStopPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A toast is a notice, not a state: it says its sentence and leaves. Anything
+  // that still matters after five seconds is on the panel it came from.
+  useEffect(() => {
+    if (!error) return;
+    const timer = window.setTimeout(() => setError(null), TOAST_LIFETIME_MS);
+    return () => window.clearTimeout(timer);
+  }, [error]);
   const connectionSettings = useConnectionSettings({
     api,
     backend,
@@ -4203,14 +4212,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               <span>{closedChatNotice}</span>
             </div>
           ) : null}
-          {providerReconnect ? (
-            <div className="connectionNotice" role="status" aria-live="polite">
-              <Loader2 className="connectionNoticeSpinner" size={14} aria-hidden="true" />
-              <span>Lost connection to the model server</span>
-              <b>Retry {providerReconnect.attempt}/{providerReconnect.maxAttempts}</b>
-            </div>
-          ) : null}
           <div className="composer" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+            {providerReconnect ? <ConnectionNotice state={providerReconnect} /> : null}
             {promptReferenceMenuOpen && !closedChatNotice ? (
               <div className="attachmentMenu" ref={attachmentMenuRef}>
                 <div className="attachmentMenuHeader">

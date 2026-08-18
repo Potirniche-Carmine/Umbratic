@@ -443,10 +443,8 @@ test("the prompt box is exactly as wide as the controls above it", () => {
   // long prompt pushes the box out past the row it is meant to match.
   const composer = composerStyles.slice(composerStyles.indexOf(".composer {"), composerStyles.indexOf("\n}"));
   assert.match(composer, /width: 0;\s*\n\s*min-width: 100%;/);
-  for (const notice of [".closedChatNotice", ".connectionNotice"]) {
-    const rule = dockStyles.slice(dockStyles.indexOf(`${notice} {`));
-    assert.match(rule.slice(0, rule.indexOf("\n}")), /width: 0;\s*\n\s*min-width: 100%;/);
-  }
+  const closedRule = dockStyles.slice(dockStyles.indexOf(".closedChatNotice {"));
+  assert.match(closedRule.slice(0, closedRule.indexOf("\n}")), /width: 0;\s*\n\s*min-width: 100%;/);
   // `fit-content()` is not valid inside `minmax()`, so the ceiling is a
   // max-width on the row rather than a second track argument.
   assert.match(dockStyles, /max-width: var\(--prompt-max-width\)/);

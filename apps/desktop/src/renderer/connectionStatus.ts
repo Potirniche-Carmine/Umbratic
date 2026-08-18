@@ -1,6 +1,11 @@
 import type { BackendUiEvent } from "../shared/backendEvents";
 
-export type ProviderReconnectState = { attempt: number; maxAttempts: number };
+export type ProviderReconnectState = {
+  attempt: number;
+  maxAttempts: number;
+  /** When the next attempt is due, in epoch ms, when the event said when it was sent. */
+  retryAt: number | null;
+};
 
 /// The live connection state, read from the reconnect lifecycle rather than
 /// inferred from error text.
@@ -16,7 +21,12 @@ export function providerReconnectFromEvents(
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     if (event.type === "provider.reconnecting") {
-      return { attempt: event.attempt, maxAttempts: event.maxAttempts };
+      const sentAt = event.at ? Date.parse(event.at) : Number.NaN;
+      return {
+        attempt: event.attempt,
+        maxAttempts: event.maxAttempts,
+        retryAt: Number.isFinite(sentAt) ? sentAt + event.delayMs : null,
+      };
     }
     if (
       event.type === "provider.reconnected"

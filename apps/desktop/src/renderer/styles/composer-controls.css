@@ -156,24 +156,33 @@
   background: color-mix(in srgb, var(--red) 14%, transparent);
 }
 
-/* Losing the server sits directly above the composer, where the user is
-   already looking at an input that has stopped responding. It is amber rather
-   than red: the turn is still trying, and nothing has been lost yet. */
+/* Losing the server is shown on the prompt box itself: a pill in the box's
+   top-right corner, where the user is already looking at an input that has
+   stopped responding. Absolutely positioned, so it never moves the box or the
+   conversation above it, and out of the corner where typing starts. Amber
+   rather than red: the turn is still trying, and nothing has been lost yet. */
 .connectionNotice {
-  display: flex;
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 3;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  width: 0;
-  min-width: 100%;
-  min-height: 34px;
-  padding: 8px 10px;
+  gap: 7px;
+  max-width: calc(100% - 20px);
+  min-width: 0;
+  min-height: 26px;
+  padding: 4px 9px 4px 8px;
   border: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
-  border-radius: var(--radius);
+  border-radius: 999px;
   color: color-mix(in srgb, var(--text) 84%, var(--amber));
-  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  background: color-mix(in srgb, var(--amber) 8%, var(--bg));
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  font-size: 11.5px;
+  pointer-events: none;
 }
 
-.connectionNotice svg {
+.connectionNotice > svg {
   flex: 0 0 auto;
   color: var(--amber);
 }
@@ -185,14 +194,15 @@
   white-space: nowrap;
 }
 
-/* The attempt counter is the part that changes, so it holds its own column and
-   does not reflow the sentence beside it as the numbers climb. */
+/* The attempt counter and countdown are the parts that change, so they hold
+   their own column and do not reflow the sentence beside them as the numbers
+   move. */
 .connectionNotice b {
   flex: 0 0 auto;
-  margin-left: auto;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-weight: 620;
+  white-space: nowrap;
 }
 
 .connectionNoticeSpinner {

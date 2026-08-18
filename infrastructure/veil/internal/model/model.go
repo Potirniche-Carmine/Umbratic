@@ -397,10 +397,38 @@ func (c *Client) ContextLength(ctx context.Context, modelID string) (int, error)
 	return c.contextLength, nil
 }
 
+// mergeLeadingSystemMessages folds Veil's own system prefix — the global
+// prompt, the route prompt, the skill catalog — into a single system message.
+//
+// Veil composes the prefix as separate messages because they change
+// independently, but a chat template only ever sees the joined result, and
+// several refuse anything else: Qwen-family templates that raise "System
+// message must be at the beginning" on the second one, Gemma's that folds only
+// the first into the user turn. One message is what every template accepts,
+// and it renders to the same text on the ones that would have taken three.
+// Only a leading run of string-content system messages is folded; anything
+// else is left exactly as it was.
+func mergeLeadingSystemMessages(messages []Message) []Message {
+	var parts []string
+	for _, message := range messages {
+		content, ok := message.Content.(string)
+		if message.Role != "system" || !ok {
+			break
+		}
+		parts = append(parts, content)
+	}
+	if len(parts) < 2 {
+		return messages
+	}
+	merged := make([]Message, 0, len(messages)-len(parts)+1)
+	merged = append(merged, Message{Role: "system", Content: strings.Join(parts, "\n\n")})
+	return append(merged, messages[len(parts):]...)
+}
+
 func (c *Client) doOpenAIChat(ctx context.Context, req ChatRequest) (*http.Response, error) {
 	body := map[string]any{
 		"model":       req.Model,
-		"messages":    req.Messages,
+		"messages":    mergeLeadingSystemMessages(req.Messages),
 		"stream":      req.Stream,
 		"temperature": req.Temperature,
 		"top_p":       req.TopP,
