@@ -36,6 +36,8 @@ import {
   chatAttachmentsSignature,
   chatCountLabel,
   chatDisplayTitle,
+  chatJumpNumbers,
+  visibleChatOrder,
   chatProjectKey,
   chatSubline,
   chatWorktreeKey,
@@ -85,7 +87,15 @@ import {
   type ComposerModelOption,
 } from "./ComposerControls";
 import { insertTranscript, useDictation } from "./dictation";
-import { setShortcutOverrides, shortcutForEvent, type ShortcutId, type ShortcutOverrides } from "./keyboardShortcuts";
+import {
+  chatJumpFromEvent,
+  chatJumpLimit,
+  chatJumpModifierHeld,
+  setShortcutOverrides,
+  shortcutForEvent,
+  type ShortcutId,
+  type ShortcutOverrides,
+} from "./keyboardShortcuts";
 import { ShortcutTooltip } from "./Tooltip";
 import { KeyboardSettingsPanel } from "./KeyboardSettings";
 import { AboutSettingsPanel } from "./AboutSettings";
@@ -134,7 +144,6 @@ import {
   ThumbsDown,
   ThumbsUp,
   Trash2,
-  TriangleAlert,
   Type,
   User,
   X,
@@ -231,6 +240,8 @@ import { SkillsSettingsPanel } from "./SkillsSettings";
 import { formatFileSize, taskStatusDetail, taskStatusTitle } from "./taskStatusDisplay";
 import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
+import { ConnectionNotice } from "./connectionNotice";
+import { ErrorToast } from "./errorToast";
 import { IdeIcon } from "./ideLogos";
 import {
   activityToolLabel,
@@ -327,6 +338,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [deleteCandidate, setDeleteCandidate] = useState<DeleteCandidate | null>(null);
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => new Set());
   const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
+  // True while the modifier that jumps to a chat is held down, which is when
+  // the sidebar wears its numbers. Holding the key is how the shortcut is
+  // discovered at all: the rows say nothing about it the rest of the time.
+  const [chatJumpKeysVisible, setChatJumpKeysVisible] = useState(false);
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(previewEnvironment?.events ?? []);
   const [responseFeedbackDialog, setResponseFeedbackDialog] = useState<ResponseFeedbackDialogState | null>(null);
@@ -485,6 +500,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // What each keyboard shortcut does, and whether any of them may fire. Refs
   // rather than effect dependencies: see where they are filled in below.
   const shortcutActionsRef = useRef<Partial<Record<ShortcutId, () => void>>>({});
+  // The numbered rows, read by the one key listener below. Same reason as the
+  // action table beside it: the listener subscribes once and the sidebar is
+  // rebuilt on every chat that arrives.
+  const chatJumpTargetsRef = useRef<ChatRecord[]>([]);
   const shortcutsBlockedRef = useRef(false);
   const visibleTaskIdRef = useRef<string | null>(previewEnvironment?.task.id ?? null);
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
@@ -826,6 +845,14 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         return left.name.localeCompare(right.name, undefined, { sensitivity: "base" }) || left.key.localeCompare(right.key);
       });
   }, [chats, projects]);
+  // Position badges for the visible rows, and the rows themselves in that same
+  // order — one is what the sidebar draws while the modifier is down, the other
+  // is what a number press lands on, and they cannot be allowed to disagree.
+  const visibleChats = useMemo(
+    () => visibleChatOrder(chatProjectGroups, collapsedProjectKeys, collapsedWorktreeKeys),
+    [chatProjectGroups, collapsedProjectKeys, collapsedWorktreeKeys],
+  );
+  const chatJumpNumbersById = useMemo(() => chatJumpNumbers(visibleChats), [visibleChats]);
   const layoutStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
     "--sidebar-reserved-width": `${sidebarDefaultWidth}px`,
@@ -1199,6 +1226,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     // nothing rather than as the run already ending.
     "run.stop": () => { if (isGenerating && !stopPending) void stopTask(); },
   };
+  chatJumpTargetsRef.current = visibleChats.slice(0, chatJumpLimit);
   // Read the same way, so a chord cannot reach past a dialog to a window the
   // user cannot currently see.
   shortcutsBlockedRef.current = modalOpen;
@@ -1207,6 +1235,18 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const runShortcut = (event: KeyboardEvent) => {
       // Never on the auto-repeat of a held key, and never mid-IME sequence.
       if (shortcutsBlockedRef.current || event.repeat || event.isComposing) return;
+      // The number keys first: they are nine chords for one gesture, so they
+      // are matched by position rather than looked up in the table. A number
+      // with no chat under it is left alone rather than swallowed.
+      const jumpPosition = chatJumpFromEvent(event);
+      const jumpTarget = jumpPosition ? chatJumpTargetsRef.current[jumpPosition - 1] : undefined;
+      if (jumpTarget) {
+        event.preventDefault();
+        // The badges stay up: the modifier is still down, and somebody who just
+        // pressed 3 is as likely as not about to press 4.
+        void selectChat(jumpTarget);
+        return;
+      }
       const shortcut = shortcutForEvent(event);
       const action = shortcut && shortcutActionsRef.current[shortcut.id];
       if (!action) return;
@@ -1215,6 +1255,31 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     };
     document.addEventListener("keydown", runShortcut, true);
     return () => document.removeEventListener("keydown", runShortcut, true);
+  }, []);
+
+  /**
+   * The numbers on the sidebar rows, raised and dropped with the modifier.
+   *
+   * Both events carry the modifier state, so holding it and letting it go are
+   * the same handler rather than a pair that can fall out of step — and a chord
+   * that starts with the modifier and ends somewhere else takes the badges down
+   * on its own way through.
+   */
+  useEffect(() => {
+    const sync = (event: KeyboardEvent) => {
+      setChatJumpKeysVisible(!shortcutsBlockedRef.current && chatJumpModifierHeld(event));
+    };
+    const clear = () => setChatJumpKeysVisible(false);
+    document.addEventListener("keydown", sync, true);
+    document.addEventListener("keyup", sync, true);
+    // A modifier let go of while another window has focus never reaches this
+    // one, and the badges would still be up when the user came back to it.
+    window.addEventListener("blur", clear);
+    return () => {
+      document.removeEventListener("keydown", sync, true);
+      document.removeEventListener("keyup", sync, true);
+      window.removeEventListener("blur", clear);
+    };
   }, []);
 
   useEffect(() => {
@@ -3556,6 +3621,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       : chat.modelEndpointMode === "local"
         ? "Local model"
         : "";
+    // The number takes the connection icon's place rather than sitting beside
+    // it: the slot is already the right size, so holding the modifier changes
+    // what the row starts with without moving a single word of it.
+    const jumpNumber = chatJumpKeysVisible ? chatJumpNumbersById.get(chat.id) : undefined;
     return (
       <div
         className={`chatRow ${activeChatId === chat.id ? "active" : ""} ${
@@ -3564,8 +3633,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         key={chat.id}
       >
         <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
-          <span className={`chatRowContent ${connectionLabel ? "hasConnection" : ""}`}>
-            {connectionLabel ? (
+          <span className={`chatRowContent ${connectionLabel || jumpNumber ? "hasConnection" : ""}`}>
+            {jumpNumber ? (
+              <span className="chatJumpKey" aria-hidden="true">{jumpNumber}</span>
+            ) : connectionLabel ? (
               <span className="chatConnectionIcon" role="img" aria-label={connectionLabel} title={connectionLabel}>
                 {chat.modelEndpointMode === "server" ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
               </span>
@@ -4203,14 +4274,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               <span>{closedChatNotice}</span>
             </div>
           ) : null}
-          {providerReconnect ? (
-            <div className="connectionNotice" role="status" aria-live="polite">
-              <Loader2 className="connectionNoticeSpinner" size={14} aria-hidden="true" />
-              <span>Lost connection to the model server</span>
-              <b>Retry {providerReconnect.attempt}/{providerReconnect.maxAttempts}</b>
-            </div>
-          ) : null}
           <div className="composer" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+            {providerReconnect ? <ConnectionNotice state={providerReconnect} /> : null}
             {promptReferenceMenuOpen && !closedChatNotice ? (
               <div className="attachmentMenu" ref={attachmentMenuRef}>
                 <div className="attachmentMenuHeader">
@@ -4888,15 +4953,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         />
       ) : null}
 
-      {error ? (
-        <div className="toast" role="alert">
-          <TriangleAlert size={16} />
-          <span>{error}</span>
-          <button type="button" onClick={() => setError(null)} aria-label="Dismiss error">
-            <X size={14} />
-          </button>
-        </div>
-      ) : null}
+      <ErrorToast message={error} onDismiss={() => setError(null)} />
 
     </div>
   );

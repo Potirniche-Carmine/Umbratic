@@ -471,6 +471,75 @@ func TestLocalDoChatForwardsOpenAIContentPartsAndToolChoice(t *testing.T) {
 	}
 }
 
+// Veil composes its protected prefix as several system messages; the runtime
+// gets one. Some chat templates (the abliterated Qwen3.8 build's, for one)
+// raise on a second system message, and the merged form renders identically on
+// the templates that would have accepted three.
+func TestDoChatSendsOneSystemMessageToTheRuntime(t *testing.T) {
+	var got map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientConfig{Mode: ModeLocal, BaseURL: server.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.DoChat(context.Background(), ChatRequest{
+		Model: "qwen3-8b",
+		Messages: []Message{
+			{Role: "system", Content: "global"},
+			{Role: "system", Content: "route"},
+			{Role: "system", Content: "skills"},
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "hi"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	messages := got["messages"].([]any)
+	if len(messages) != 3 {
+		t.Fatalf("expected the prefix folded into one system message, got %#v", messages)
+	}
+	first := messages[0].(map[string]any)
+	if first["role"] != "system" || first["content"] != "global\n\nroute\n\nskills" {
+		t.Fatalf("prefix was not joined in order: %#v", first)
+	}
+	if messages[1].(map[string]any)["role"] != "user" || messages[2].(map[string]any)["role"] != "assistant" {
+		t.Fatalf("conversation after the prefix was disturbed: %#v", messages)
+	}
+}
+
+func TestMergeLeadingSystemMessagesLeavesEverythingElseAlone(t *testing.T) {
+	// A single system message, or none, is already the shape the runtime wants.
+	single := []Message{{Role: "system", Content: "only"}, {Role: "user", Content: "hi"}}
+	if merged := mergeLeadingSystemMessages(single); len(merged) != 2 || merged[0].Content != "only" {
+		t.Fatalf("a lone system message was rewritten: %#v", merged)
+	}
+	none := []Message{{Role: "user", Content: "hi"}}
+	if merged := mergeLeadingSystemMessages(none); len(merged) != 1 {
+		t.Fatalf("a prefix-less conversation was rewritten: %#v", merged)
+	}
+	// Only the leading run folds; a system message with structured content ends
+	// it rather than being flattened into text it never was.
+	parts := []Message{
+		{Role: "system", Content: "a"},
+		{Role: "system", Content: []any{map[string]any{"type": "text", "text": "b"}}},
+		{Role: "user", Content: "hi"},
+	}
+	if merged := mergeLeadingSystemMessages(parts); len(merged) != 3 {
+		t.Fatalf("structured system content was flattened: %#v", merged)
+	}
+}
+
 // Some OpenAI-compatible runtimes answer /v1/models with `models` rather than
 // `data`, and repeat an id across shapes. The normalizer takes both and dedupes.
 func TestListModelsNormalizesAlternatePayloadsAndDedupes(t *testing.T) {

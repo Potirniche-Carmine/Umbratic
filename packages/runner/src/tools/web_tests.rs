@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::{
     ToolCall, execute_tool,
-    web::{check_public_url, parse_ddg_html, readable_text, set_test_http},
+    web::{check_public_url, parse_ddg_html, readable_text, set_test_http, truncate_page},
 };
 
 const DDG_HTML: &str = r#"
@@ -43,6 +43,35 @@ fn readable_text_strips_scripts_and_collapses_space() {
         readable_text("Chiba&#x27;s deluge and Israel&#8217;s assault"),
         "Chiba's deluge and Israel\u{2019}s assault",
     );
+    // Whole elements go, in one pass, whatever their case or attributes; a tag
+    // that merely starts with the name is not the element.
+    assert_eq!(
+        readable_text(
+            "<p>a</p><SCRIPT type=\"x\">1<2</ScRiPt ><style>b{}</style><scripts>keep</scripts><p>z</p>",
+        ),
+        "a keep z"
+    );
+    // An element that never closes swallows the rest, as it would in a browser.
+    assert_eq!(readable_text("<p>seen</p><script>never closed"), "seen");
+    // Nothing is copied from the lowercased shadow: the original case survives.
+    assert_eq!(
+        readable_text("<noscript>X</noscript><h1>Big Title</h1>"),
+        "Big Title"
+    );
+}
+
+#[test]
+fn a_long_page_is_cut_with_a_note_rather_than_refused() {
+    let page = "word ".repeat(40_000);
+    let text = truncate_page(&page);
+    assert!(text.chars().count() < page.chars().count());
+    assert!(text.ends_with(&format!(
+        "... (truncated: showing 100000 of {} characters)",
+        page.chars().count()
+    )));
+    // Under the budget it comes back untouched.
+    assert_eq!(truncate_page("short"), "short");
+    assert_eq!(truncate_page(""), "(page returned no readable text)");
 }
 
 #[test]

@@ -264,6 +264,25 @@ test("a streaming answer shows the text as it arrives, and a settled answer is c
   assert.match(settled, /The answer streams token by token/);
 });
 
+test("the streaming caret rides the end of the code being written, not the bottom of the message", () => {
+  const { AssistantAnswerContent } = loadRendererFile("markdownContent.tsx");
+  const render = (content) =>
+    renderToStaticMarkup(React.createElement(AssistantAnswerContent, { content, streaming: true }));
+
+  // An open fence: the caret is inside <code>, after the last streamed line.
+  const code = render("Here:\n\n```c\nint main() {\n  return 0;");
+  assert.match(code, /return 0;<span class="streamingTextCaret"[^>]*><\/span><\/code><\/pre>/);
+  assert.equal((code.match(/streamingTextCaret/g) ?? []).length, 1);
+
+  // A table in progress: the caret is in the last cell written.
+  const table = render("| a | b |\n| --- | --- |\n| 1 | 2 |");
+  assert.match(table, /2<span class="streamingTextCaret"[^>]*><\/span><\/td>/);
+
+  // A rule has nowhere to hold it, so it follows the block.
+  const rule = render("done\n\n---");
+  assert.match(rule, /<hr\/><span class="streamingTextCaret"/);
+});
+
 test("the review panel's close spring stays stable however long a frame takes", () => {
   const { reviewCloseSpring, reviewOpenSpring, reviewSpringStep } = loadRendererFile("reviewSpring.ts");
 
@@ -433,13 +452,19 @@ test("a dropped connection reports its retries and never outlives the outage", (
 
   const dropped = [
     { type: "user.message", taskId: "task-1", text: "go", at: "2026-01-01T00:00:00.000Z" },
-    { type: "provider.reconnecting", taskId: "task-1", attempt: 1, maxAttempts: 10, delayMs: 500, at: "2026-01-01T00:00:01.000Z" },
-    { type: "provider.reconnecting", taskId: "task-1", attempt: 2, maxAttempts: 10, delayMs: 1000, at: "2026-01-01T00:00:02.000Z" },
+    { type: "provider.reconnecting", taskId: "task-1", attempt: 1, maxAttempts: 10, delayMs: 30000, at: "2026-01-01T00:00:01.000Z" },
+    { type: "provider.reconnecting", taskId: "task-1", attempt: 2, maxAttempts: 10, delayMs: 30000, at: "2026-01-01T00:00:32.000Z" },
   ];
-  // The composer shows the latest attempt, not the first one.
+  // The composer shows the latest attempt, not the first one, and when the
+  // next one is due so it can count down to it.
   assert.deepEqual(
     JSON.parse(JSON.stringify(providerReconnectFromEvents(dropped))),
-    { attempt: 2, maxAttempts: 10 },
+    { attempt: 2, maxAttempts: 10, retryAt: Date.parse("2026-01-01T00:01:02.000Z") },
+  );
+  // An event with no timestamp still shows the count; it just cannot count down.
+  assert.equal(
+    providerReconnectFromEvents([{ type: "provider.reconnecting", taskId: "task-1", attempt: 1, maxAttempts: 10, delayMs: 30000 }]).retryAt,
+    null,
   );
 
   // An explicit reconnect clears it.
@@ -461,6 +486,39 @@ test("a dropped connection reports its retries and never outlives the outage", (
 
   // A healthy turn never shows it at all.
   assert.equal(providerReconnectFromEvents([dropped[0]]), null);
+});
+
+test("the connection notice sits on the prompt box and counts down to the next retry", () => {
+  const { secondsUntil } = loadRendererFile("connectionNotice.tsx");
+  assert.equal(secondsUntil(null, 0), null);
+  assert.equal(secondsUntil(30_000, 0), 30);
+  assert.equal(secondsUntil(30_000, 29_100), 1);
+  // Never negative: a wait that has elapsed reads as "now", not "-3s".
+  assert.equal(secondsUntil(30_000, 45_000), 0);
+
+  const renderer = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
+  // Inside the prompt box, absolutely positioned over its corner, so it never
+  // reflows the box or the conversation above it.
+  const composerOpen = renderer.indexOf('<div className="composer" onDrop=');
+  const composerHead = renderer.slice(composerOpen, composerOpen + 400);
+  assert.match(composerHead, /<ConnectionNotice state=\{providerReconnect\} \/>/);
+  assert.doesNotMatch(renderer, /className="connectionNotice"/);
+  const styles = fs.readFileSync(new URL("../src/renderer/styles/composer-controls.css", import.meta.url), "utf8");
+  const rule = styles.slice(styles.indexOf(".connectionNotice {"));
+  assert.match(rule.slice(0, rule.indexOf("\n}")), /position: absolute;/);
+});
+
+test("an error toast says its sentence and leaves", () => {
+  const { ErrorToast, TOAST_LIFETIME_MS } = loadRendererFile("errorToast.tsx");
+  assert.equal(TOAST_LIFETIME_MS, 5_000);
+  const shown = renderToStaticMarkup(React.createElement(ErrorToast, { message: "Health check failed", onDismiss() {} }));
+  assert.match(shown, /class="toast"/);
+  assert.match(shown, /Health check failed/);
+  assert.equal(renderToStaticMarkup(React.createElement(ErrorToast, { message: null, onDismiss() {} })), "");
+  const source = fs.readFileSync(new URL("../src/renderer/errorToast.tsx", import.meta.url), "utf8");
+  assert.match(source, /window\.setTimeout\(\(\) => dismiss\.current\(\), TOAST_LIFETIME_MS\)/);
+  const renderer = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
+  assert.match(renderer, /<ErrorToast message=\{error\} onDismiss=\{\(\) => setError\(null\)\} \/>/);
 });
 
 test("only the prose nothing follows is the turn's answer", () => {

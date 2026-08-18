@@ -721,6 +721,31 @@
   line-height: 0;
 }
 
+/*
+ * The jump key. A filled square with the number centred in it, in the slot the
+ * connection icon otherwise holds — so raising the numbers swaps one 13px mark
+ * for another and the titles beside them do not move. Tabular figures because
+ * 1 and 7 are not the same width in the UI face, and a column of badges that
+ * shimmied would read as nine different badges.
+ */
+.chatJumpKey {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  background: var(--control-hover);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.chatRow.active .chatJumpKey {
+  color: var(--text);
+}
+
 .chatRow:hover .chatConnectionIcon,
 .chatRow.active .chatConnectionIcon {
   color: var(--muted);

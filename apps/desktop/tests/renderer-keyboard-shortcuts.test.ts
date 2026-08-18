@@ -33,6 +33,9 @@ function loadTypeScriptModule(filePath) {
 
 const {
   bindingFromEvent,
+  chatJumpFromEvent,
+  chatJumpLimit,
+  chatJumpModifierHeld,
   conflictingShortcut,
   dictationToggleShortcut,
   matchesShortcut,
@@ -252,4 +255,43 @@ test("the keyboard page edits the table it prints", () => {
   // Reference-only rows are printed, not offered as editable.
   assert.match(panel, /const editable = !!row\.binding/);
   assert.doesNotMatch(panel, /These cannot be changed yet/);
+});
+
+test("the number keys jump to a chat on either platform", () => {
+  // ⌘1 on a Mac, Ctrl+1 elsewhere, and never the other platform's modifier —
+  // the same rule the rest of the table follows, applied to nine keys at once.
+  assert.equal(chatJumpFromEvent(keyEvent("1", { metaKey: true }), true), 1);
+  assert.equal(chatJumpFromEvent(keyEvent("9", { metaKey: true }), true), 9);
+  assert.equal(chatJumpFromEvent(keyEvent("1", { ctrlKey: true }), false), 1);
+  assert.equal(chatJumpFromEvent(keyEvent("1", { ctrlKey: true }), true), null);
+  assert.equal(chatJumpFromEvent(keyEvent("1", { metaKey: true }), false), null);
+  // Zero is not a tenth chat, and a bare number is somebody typing.
+  assert.equal(chatJumpFromEvent(keyEvent("0", { metaKey: true }), true), null);
+  assert.equal(chatJumpFromEvent(keyEvent("1"), true), null);
+  // Anything else held makes it a different chord, which this must not eat.
+  assert.equal(chatJumpFromEvent(keyEvent("1", { metaKey: true, shiftKey: true }), true), null);
+  assert.equal(chatJumpFromEvent(keyEvent("1", { metaKey: true, altKey: true }), true), null);
+  assert.equal(chatJumpLimit, 9);
+});
+
+test("the numbers appear only while the chord that uses them could fire", () => {
+  // The badges are a promise: they may only be up when pressing a number would
+  // actually land on that chat.
+  assert.equal(chatJumpModifierHeld(keyEvent("Meta", { metaKey: true }), true), true);
+  assert.equal(chatJumpModifierHeld(keyEvent("Control", { ctrlKey: true }), false), true);
+  assert.equal(chatJumpModifierHeld(keyEvent("Meta", { metaKey: true, altKey: true }), true), false);
+  assert.equal(chatJumpModifierHeld(keyEvent("Meta", { metaKey: true, shiftKey: true }), true), false);
+  assert.equal(chatJumpModifierHeld(keyEvent("Meta", { metaKey: true, ctrlKey: true }), true), false);
+  assert.equal(chatJumpModifierHeld(keyEvent("a"), true), false);
+});
+
+test("the jump is documented where the shortcuts are read", () => {
+  const jump = shortcutById("chat.jump");
+  // Reference only — nine chords cannot be one rebindable row — but it still
+  // has to name the right modifier on the machine reading it.
+  assert.equal(jump.binding, undefined);
+  assert.deepEqual(Array.from(shortcutKeys(jump, true) as string[]), ["⌘", "1"]);
+  assert.deepEqual(Array.from(shortcutKeys(jump, false) as string[]), ["Ctrl", "1"]);
+  assert.equal(shortcutLabel(jump, true), "⌘1");
+  assert.equal(shortcutLabel(jump, false), "Ctrl+1");
 });

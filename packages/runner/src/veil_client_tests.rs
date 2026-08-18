@@ -103,10 +103,37 @@ fn veil_failures_are_specific_without_echoing_untrusted_response_bodies() {
     assert!(!message.contains("leaked"));
 
     let stream = "data: {\"error\":\"hidden detail\",\"code\":\"model_service_stream_incomplete\"}";
+    let error = veil_stream_error(stream).expect("an error frame");
     assert_eq!(
-        veil_stream_error(stream).as_deref(),
-        Some("model request failed: the model service stream ended unexpectedly")
+        error.message,
+        "model request failed: the model service stream ended unexpectedly"
     );
+}
+
+#[test]
+fn a_runtime_that_went_away_mid_stream_is_retried_and_a_refusal_is_not() {
+    // The runtime dying after Veil opened the stream arrives as an error frame,
+    // not a status. Nothing was committed, so it is the same case as a dropped
+    // socket and gets the same retry.
+    for code in [
+        "model_service_stream_incomplete",
+        "model_service_unavailable",
+        "model_service_timeout",
+    ] {
+        let line = format!("data: {{\"error\":\"x\",\"code\":\"{code}\"}}");
+        assert!(veil_stream_error(&line).unwrap().retryable, "{code}");
+    }
+    // Anything else in an error frame is Veil's considered answer.
+    for code in [
+        "model_service_rejected",
+        "context_overflow_upstream",
+        "policy_denied",
+        "",
+    ] {
+        let line = format!("data: {{\"error\":\"x\",\"code\":\"{code}\"}}");
+        assert!(!veil_stream_error(&line).unwrap().retryable, "{code:?}");
+    }
+    assert!(veil_stream_error("data: {\"choices\":[]}").is_none());
 }
 
 #[test]
