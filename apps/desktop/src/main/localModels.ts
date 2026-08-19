@@ -7,13 +7,15 @@
  * stored model id into a file path and a running sidecar.
  */
 
-import { catalogAvailability, totalRamGB } from "./hardware";
+import { catalogAvailability, memoryFit, neededRamGB, totalRamGB } from "./hardware";
 import {
   catalogModel,
   catalogQuantBytes,
   defaultQuant,
   effectiveEffort,
   modelQuant,
+  quantMtpFile,
+  quantWeightsFile,
   samplingFor,
   type CatalogModel,
   type CatalogModelKind,
@@ -66,7 +68,8 @@ export function activeQuant(
 export function listLocalModels(dataRoot: string, kind: CatalogModelKind): LocalCatalogModel[] {
   const downloading = downloadingModelId();
   const selections = readLocalQuantSelections();
-  const rows = catalogAvailability(kind, totalRamGB()).map(({ model, recommended }) => ({ model, recommended, custom: false }));
+  const ram = totalRamGB();
+  const rows = catalogAvailability(kind, ram).map(({ model, recommended }) => ({ model, recommended, custom: false }));
   if (kind === "chat") {
     rows.push(...listCustomModels().map((model) => ({ model, recommended: false, custom: true })));
   }
@@ -77,9 +80,9 @@ export function listLocalModels(dataRoot: string, kind: CatalogModelKind): Local
       kind: model.kind,
       displayName: model.displayName,
       bytes: catalogQuantBytes(chosen),
-      minRamGB: model.minRamGB,
       recommended,
       uncensored: model.uncensored === true,
+      mtp: model.mtp === true,
       ...(model.role ? { role: model.role } : {}),
       custom,
       selectedQuant: chosen.quant,
@@ -88,7 +91,11 @@ export function listLocalModels(dataRoot: string, kind: CatalogModelKind): Local
         bytes: catalogQuantBytes(quant),
         recommended: index === 0,
         downloaded: modelDownloaded(dataRoot, model, quant),
+        fit: memoryFit(model, quant, ram),
+        neededRamGB: neededRamGB(model, quant),
       })),
+      fit: memoryFit(model, chosen, ram),
+      neededRamGB: neededRamGB(model, chosen),
       downloaded: modelDownloaded(dataRoot, model, chosen),
       downloading: downloading === model.id,
     };
@@ -111,11 +118,22 @@ export function selectedLocalChatModel(dataRoot: string, modelId: string): Catal
   return activeQuant(dataRoot, model) ? model : null;
 }
 
-/** The weights llama-server loads. Chat quantizations are a single file by construction. */
+/** The weights llama-server loads. */
 export function localModelWeightsPath(dataRoot: string, model: CatalogModel): string {
   const quant = activeQuant(dataRoot, model) ?? defaultQuant(model);
-  const weights = quant.files.find((file) => !file.name.startsWith("mmproj-")) ?? quant.files[0];
-  return modelFilePath(dataRoot, model, weights);
+  return modelFilePath(dataRoot, model, quantWeightsFile(quant));
+}
+
+/**
+ * What llama-server is told about drafting, or null to decode one token at a
+ * time: the model has to carry a head and the user has to want it used. A
+ * head that lives in its own file is named; one inside the weights is not.
+ */
+export function localModelMtp(dataRoot: string, model: CatalogModel, enabled: boolean): { draftFile: string | null } | null {
+  if (!enabled || !model.mtp) return null;
+  const quant = activeQuant(dataRoot, model) ?? defaultQuant(model);
+  const head = quantMtpFile(quant);
+  return { draftFile: head ? modelFilePath(dataRoot, model, head) : null };
 }
 
 /**
@@ -155,6 +173,8 @@ export async function ensureLocalChatRuntime(input: {
   dataRoot: string;
   settings: ActiveModelEndpointSettings;
   contextLength: number;
+  /** Whether to draft from the model's MTP head, on models that have one. */
+  mtp: boolean;
   dictation: DictationSettings;
   /** How hard to ask a thinking model to think. Ignored by models that do not read one. */
   reasoningEffort: ReasoningEffort;
@@ -168,6 +188,7 @@ export async function ensureLocalChatRuntime(input: {
       modelFile: localModelWeightsPath(input.dataRoot, model),
       modelId: model.id,
       contextLength: input.contextLength,
+      mtp: localModelMtp(input.dataRoot, model, input.mtp),
     },
     input.onLlamaDiagnostic,
   );

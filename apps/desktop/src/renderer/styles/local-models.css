@@ -251,6 +251,47 @@
   white-space: nowrap;
 }
 
+/* The machine the menu's fit notes are measured against, at the top of the
+   menu where "needs 32 GB" is read next to how much there is. */
+.localModelMenuHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 2px 3px 4px;
+  padding: 4px 6px 7px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.localModelMenuHead span:last-child {
+  color: var(--muted);
+  letter-spacing: 0.01em;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Headings that split what is here from what is a download away. Quiet: they
+   group, they do not compete with the rows. */
+.localModelSection {
+  margin: 6px 0 2px;
+  padding: 0 9px;
+  color: var(--faint);
+  font-size: 9.75px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.localModelSection + .localModelSection,
+.localModelMenuHead + .localModelSection {
+  margin-top: 2px;
+}
+
 /* The controls, on one line that never wraps. */
 .localModelRowMain {
   display: flex;
@@ -261,25 +302,55 @@
 }
 
 /*
- * What the model is for, on its own line under the row's controls.
- *
- * Given the whole row rather than a column beside the size and the
- * quantization: as a column it would be narrower on any row that also carries
- * a badge, so the one row with a "Recommended" pill would be the one whose
- * sentence got cut.
- *
- * Two lines at most, so a long sentence cannot turn one row into a paragraph.
- * Scoped to the row so it outranks `.modelPicker span`, which holds every span
- * in this dropdown to one unwrapped line — right for a trigger's label, wrong
- * for the only sentence in the list.
+ * The line under the row's controls: the model's role on the left, its memory
+ * fit on the right. Given the whole row rather than a column beside the size
+ * and the quantization: as a column it would be narrower on any row that also
+ * carries a badge, so the one row with a "Recommended" pill would be the one
+ * whose sentence got cut.
+ */
+.localModelRow .localModelRowUnder {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  margin: -1px 0 4px;
+}
+
+/* The memory verdict, in the register of the size it sits under: small,
+   tabular, flush right. Amber for a machine that will feel it, plain red-muted
+   for one that does not have the room — said, never shouted, and never used to
+   take the row away. */
+.localModelRow .localModelFit {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-top: 1px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.localModelRow .localModelFit.is-tight {
+  color: color-mix(in srgb, var(--amber) 80%, var(--muted));
+}
+
+.localModelRow .localModelFit.is-exceeds {
+  color: color-mix(in srgb, var(--red) 62%, var(--muted));
+}
+
+/*
+ * What the model is for. Two lines at most, so a long sentence cannot turn one
+ * row into a paragraph. Scoped to the row so it outranks `.modelPicker span`,
+ * which holds every span in this dropdown to one unwrapped line — right for a
+ * trigger's label, wrong for the only sentence in the list.
  */
 .localModelRow .localModelRole {
+  flex: 1 1 auto;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
   min-width: 0;
-  margin: -1px 0 4px;
   color: var(--faint);
   /* Clearly subordinate to the name above it: smaller, lighter, and dimmer, so
      the row reads as a title with a note under it rather than as two lines of
@@ -404,7 +475,7 @@
 }
 
 .quantPickerMenu {
-  width: 196px;
+  width: 240px;
   right: 0;
   left: auto;
   /* Portalled to <body> so the scrolling model menu cannot clip it, which puts
@@ -417,11 +488,29 @@
   gap: 8px;
 }
 
+/* Neither the label nor the size gives way: they are the two facts the row
+   exists to state, and an ellipsis in either is the row saying nothing. */
+.quantPickerOption .modelPickerOptionName,
+.quantPickerSize {
+  flex: 0 0 auto;
+}
+
 .quantPickerSize {
   margin-left: auto;
   color: var(--faint);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A size this machine will feel, or does not have, says so in its colour — the
+   same two colours the model rows use, so the picker and the list agree. */
+.quantPickerSize.is-tight {
+  color: color-mix(in srgb, var(--amber) 80%, var(--muted));
+}
+
+.quantPickerSize.is-exceeds {
+  color: color-mix(in srgb, var(--red) 62%, var(--muted));
 }
 
 /* The model's default quantization — the one to take when unsure. Overrides
@@ -489,6 +578,42 @@
   font-size: 10.5px;
   font-weight: 650;
   white-space: nowrap;
+}
+
+/* The drafting switch: a statement and a control, in the register of the
+   folder line under it rather than of a boxed settings row — it is one more
+   fact about the collection, not a section of its own. */
+.localMtpRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 2px;
+  padding: 2px 2px 0;
+}
+
+.localMtpText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.localMtpText strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.localMtpText span {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.localMtpRow .toggle {
+  flex: 0 0 auto;
 }
 
 /* The way in for a model the catalog does not carry. */

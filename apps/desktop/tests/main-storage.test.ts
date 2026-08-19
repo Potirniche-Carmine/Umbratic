@@ -878,6 +878,18 @@ test("everything else the app boots with survives a relaunch too", () => {
   assert.equal(loadStorage(userData).readStartupSettings().webTools, true);
 });
 
+// Drafting is on until someone turns it off: the same output faster is the
+// default worth having, and the switch exists for the machines where it is not.
+test("multi-token prediction is on by default and only an explicit off survives a relaunch", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-mtp-"));
+  const storage = loadStorage(userData);
+  assert.equal(storage.readLocalMtpSetting(), true);
+  assert.equal(storage.writeLocalMtpSetting(false), false);
+  assert.equal(loadStorage(userData).readLocalMtpSetting(), false);
+  assert.equal(storage.writeLocalMtpSetting("anything but false"), true);
+  assert.equal(loadStorage(userData).readLocalMtpSetting(), true);
+});
+
 test("the server model choice survives a relaunch", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-model-"));
   const storage = loadStorage(userData);

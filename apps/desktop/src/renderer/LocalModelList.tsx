@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "re
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Download, FolderOpen, HardDrive, Loader2, Plus, PowerOff, Star, Trash2, X } from "lucide-react";
 
-import type { DesktopApi, LocalCatalogModel, LocalModelQuant, ModelDownloadEvent } from "../shared/desktopApi";
+import type { DesktopApi, LocalCatalogModel, LocalMemoryFit, LocalModelQuant, ModelDownloadEvent, SystemProfile } from "../shared/desktopApi";
 
 /**
  * The local model collection, shared by Connection (chat) and Voice (dictation).
@@ -22,6 +22,21 @@ function formatBytes(bytes: number): string {
   const gigabytes = bytes / 1_000_000_000;
   if (gigabytes >= 1) return `${gigabytes.toFixed(1)} GB`;
   return `${Math.round(bytes / 1_000_000)} MB`;
+}
+
+/**
+ * What a row says about how it sits in this machine's memory. Nothing when it
+ * fits: the ordinary case should not shout, and a list where every row carries
+ * a verdict is a list where none of them reads. The other two are said with
+ * the number, because "too large" begs the question "how large is enough".
+ */
+function MemoryFitNote({ fit, neededRamGB }: { fit: LocalMemoryFit; neededRamGB: number }) {
+  if (fit === "comfortable") return null;
+  return (
+    <span className={`localModelFit is-${fit}`}>
+      {fit === "tight" ? `Tight fit · best with ${neededRamGB} GB` : `Needs ${neededRamGB} GB RAM`}
+    </span>
+  );
 }
 
 export function useLocalModelCatalog(api: DesktopApi, kind: "chat" | "dictation", active: boolean) {
@@ -126,7 +141,7 @@ function QuantPicker({
 
   if (quants.length < 2) return null;
 
-  const menuWidth = 208;
+  const menuWidth = 240;
 
   function toggleMenu() {
     if (menuAt) {
@@ -190,7 +205,12 @@ function QuantPicker({
             >
               <span className="modelPickerOptionName">{entry.quant}</span>
               {entry.recommended ? <Star className="quantPickerStar" size={11} aria-label="Recommended" /> : null}
-              <span className="quantPickerSize">{formatBytes(entry.bytes)}</span>
+              <span
+                className={`quantPickerSize is-${entry.fit}`}
+                title={entry.fit === "comfortable" ? undefined : `Wants ${entry.neededRamGB} GB of memory`}
+              >
+                {formatBytes(entry.bytes)}
+              </span>
               {/* Which quantizations are already on disk decides whether picking
                   one costs a download, so it is said in words rather than left
                   to a dot the user has to learn. */}
@@ -248,6 +268,11 @@ export type LocalModelMenuProps = {
   placeholder: string;
   /** An extra first row, used by Voice for "Off". */
   leadingOption?: { id: string; label: string };
+  /**
+   * The machine the fit notes are about. Said at the top of the menu because
+   * "needs 32 GB" is only an answer next to how much there is.
+   */
+  system?: Pick<SystemProfile, "totalRamGB" | "accelerator"> | null;
   onSelect: (id: string) => void;
   onDownload: (id: string) => void;
   onCancel: (id: string) => void;
@@ -267,6 +292,7 @@ export function LocalModelMenu({
   loaded = false,
   placeholder,
   leadingOption,
+  system,
   onSelect,
   onDownload,
   onCancel,
@@ -310,6 +336,167 @@ export function LocalModelMenu({
     choose(id);
   };
 
+  const renderRow = (model: LocalCatalogModel) => {
+    const downloading = progress?.id === model.id;
+    const selected = model.downloaded && selectedId === model.id;
+    const quantPicker = onQuantChange ? (
+      <QuantPicker
+        modelName={model.displayName}
+        quants={model.quants}
+        selected={model.selectedQuant}
+        disabled={disabled || downloading}
+        onSelect={(quant) => onQuantChange(model.id, quant)}
+      />
+    ) : null;
+    const removeButton = model.custom && onRemove && !downloading ? (
+      <RemoveModelButton modelName={model.displayName} onRemove={() => onRemove(model.id)} />
+    ) : null;
+    const badges = (
+      <>
+        {model.uncensored ? <span className="localModelBadge isPlain">Uncensored</span> : null}
+        {model.mtp ? (
+          <span className="localModelBadge isPlain" title="Carries a multi-token-prediction head, so it decodes faster with MTP on">
+            MTP
+          </span>
+        ) : null}
+        {model.recommended ? <span className="localModelBadge">Recommended</span> : null}
+      </>
+    );
+    // The line under the controls: what the model is for on the left, how it
+    // sits in this machine's memory on the right. Size answers "will this
+    // run"; the role answers "should I pick it", and they are not the same
+    // question — a 3 GB model chosen for agentic work reads as a broken app
+    // rather than as the wrong model. Given the row's full width, so a row
+    // carrying a badge does not get a narrower sentence than the row above it.
+    const under = model.role || model.fit !== "comfortable" ? (
+      <span className="localModelRowUnder">
+        <span className="localModelRole">
+          {model.role ? <strong>{model.role.label}</strong> : null}
+          {model.role?.detail}
+        </span>
+        <MemoryFitNote fit={model.fit} neededRamGB={model.neededRamGB} />
+      </span>
+    ) : null;
+
+    if (downloading) {
+      return (
+        <div className="localModelRow isMenuRow" key={model.id}>
+          <div className="localModelRowMain">
+          <span className="localModelName">{model.displayName}</span>
+          <span
+            className="localModelProgress"
+            role="progressbar"
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`Downloading ${model.displayName}`}
+          >
+            <span className="localModelProgressFill" style={{ width: `${percent}%` }} />
+          </span>
+          <span className="localModelNote">
+            {progress.state === "verifying" ? "Verifying" : `${percent}%`}
+          </span>
+          <span className="localModelAction">
+            <button
+              className="settingsIconButton"
+              type="button"
+              onClick={(event) => { event.stopPropagation(); onCancel(model.id); }}
+              aria-label={`Cancel downloading ${model.displayName}`}
+              title="Cancel"
+            >
+              <X size={14} />
+            </button>
+          </span>
+          </div>
+          {under}
+        </div>
+      );
+    }
+
+    if (!model.downloaded) {
+      return (
+        <div className="localModelRow isMenuRow" key={model.id}>
+          <div className="localModelRowMain">
+          <span className="localModelName">{model.displayName}</span>
+          {badges}
+          {quantPicker}
+          <span className="localModelNote">{formatBytes(model.bytes)}</span>
+          {removeButton}
+          <span className="localModelAction">
+            <button
+              className="settingsIconButton"
+              type="button"
+              disabled={disabled || progress !== null}
+              onClick={(event) => { event.stopPropagation(); onDownload(model.id); }}
+              aria-label={`Download ${model.displayName}`}
+              title={progress !== null ? "Another model is downloading" : "Download"}
+            >
+              <Download size={14} />
+            </button>
+          </span>
+          </div>
+          {under}
+        </div>
+      );
+    }
+
+    return (
+      <div
+        className={`localModelRow isMenuRow isDownloaded isSelectable ${selected ? "isSelected" : ""}`}
+        key={model.id}
+        role="option"
+        aria-selected={selected}
+        tabIndex={0}
+        onClick={() => { if (!disabled) choose(model.id); }}
+        onKeyDown={(event) => { if (!disabled) rowKeyDown(event, model.id); }}
+      >
+        <div className="localModelRowMain">
+        <span className="localModelName">{model.displayName}</span>
+        {badges}
+        {/* Unload lives on the model's own row rather than beside the
+            trigger: only the selected model can be resident, and a
+            control that appears and disappears next to the picker
+            shifts the whole field out from under the cursor. */}
+        {selected && onUnload && loaded && !loading ? (
+          <button
+            className="settingsInlineButton modelUnloadButton"
+            type="button"
+            disabled={disabled}
+            onClick={(event) => { event.stopPropagation(); setOpen(false); onUnload(); }}
+            title="Free the memory this model is using"
+          >
+            <PowerOff size={13} />
+            <span>Unload</span>
+          </button>
+        ) : null}
+        {quantPicker}
+        <span className="localModelNote">{formatBytes(model.bytes)}</span>
+        {removeButton}
+        <span className="localModelAction">
+          {selected ? <Check className="localModelTick" size={14} /> : null}
+        </span>
+        </div>
+        {under}
+      </div>
+    );
+  };
+
+  // What is on this computer leads, under its own heading once there is
+  // something below it to tell apart. A model a download away is an offer; one
+  // that is here is a choice.
+  const here = models.filter((model) => model.downloaded);
+  const away = models.filter((model) => !model.downloaded);
+  const sections = here.length === 0 || away.length === 0
+    ? models.map(renderRow)
+    : (
+      <>
+        <div className="localModelSection" aria-hidden="true">Downloaded</div>
+        {here.map(renderRow)}
+        <div className="localModelSection" aria-hidden="true">Available to download</div>
+        {away.map(renderRow)}
+      </>
+    );
+
   return (
     <div className="settingsField">
       <span>{label}</span>
@@ -349,6 +536,12 @@ export function LocalModelMenu({
         </button>
         {open ? (
           <div className="modelPickerMenu localModelMenu" role="listbox" aria-label={label}>
+            {system ? (
+              <div className="localModelMenuHead" aria-hidden="true">
+                <span>This computer</span>
+                <span>{system.totalRamGB} GB RAM{system.accelerator ? ` · ${system.accelerator}` : ""}</span>
+              </div>
+            ) : null}
             {leadingOption ? (
               <div
                 className="localModelRow isMenuRow isSelectable"
@@ -367,144 +560,7 @@ export function LocalModelMenu({
               </div>
             ) : null}
 
-            {models.map((model) => {
-              const downloading = progress?.id === model.id;
-              const selected = model.downloaded && selectedId === model.id;
-              const quantPicker = onQuantChange ? (
-                <QuantPicker
-                  modelName={model.displayName}
-                  quants={model.quants}
-                  selected={model.selectedQuant}
-                  disabled={disabled || downloading}
-                  onSelect={(quant) => onQuantChange(model.id, quant)}
-                />
-              ) : null;
-              const removeButton = model.custom && onRemove && !downloading ? (
-                <RemoveModelButton modelName={model.displayName} onRemove={() => onRemove(model.id)} />
-              ) : null;
-              const badges = (
-                <>
-                  {model.uncensored ? <span className="localModelBadge isPlain">Uncensored</span> : null}
-                  {model.recommended ? <span className="localModelBadge">Recommended</span> : null}
-                </>
-              );
-              // What the model is for. Size answers "will this run"; this
-              // answers "should I pick it", and they are not the same question
-              // — a 3 GB model chosen for agentic work reads as a broken app
-              // rather than as the wrong model.
-              //
-              // Its own line under the controls, given the row's full width, so
-              // a row carrying a badge does not get a narrower sentence than
-              // the row above it.
-              const role = model.role ? (
-                <span className="localModelRole">
-                  <strong>{model.role.label}</strong>
-                  {model.role.detail}
-                </span>
-              ) : null;
-
-              if (downloading) {
-                return (
-                  <div className="localModelRow isMenuRow" key={model.id}>
-                    <div className="localModelRowMain">
-                    <span className="localModelName">{model.displayName}</span>
-                    <span
-                      className="localModelProgress"
-                      role="progressbar"
-                      aria-valuenow={percent}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-label={`Downloading ${model.displayName}`}
-                    >
-                      <span className="localModelProgressFill" style={{ width: `${percent}%` }} />
-                    </span>
-                    <span className="localModelNote">
-                      {progress.state === "verifying" ? "Verifying" : `${percent}%`}
-                    </span>
-                    <span className="localModelAction">
-                      <button
-                        className="settingsIconButton"
-                        type="button"
-                        onClick={(event) => { event.stopPropagation(); onCancel(model.id); }}
-                        aria-label={`Cancel downloading ${model.displayName}`}
-                        title="Cancel"
-                      >
-                        <X size={14} />
-                      </button>
-                    </span>
-                    </div>
-                    {role}
-                  </div>
-                );
-              }
-
-              if (!model.downloaded) {
-                return (
-                  <div className="localModelRow isMenuRow" key={model.id}>
-                    <div className="localModelRowMain">
-                    <span className="localModelName">{model.displayName}</span>
-                    {badges}
-                    {quantPicker}
-                    <span className="localModelNote">{formatBytes(model.bytes)}</span>
-                    {removeButton}
-                    <span className="localModelAction">
-                      <button
-                        className="settingsIconButton"
-                        type="button"
-                        disabled={disabled || progress !== null}
-                        onClick={(event) => { event.stopPropagation(); onDownload(model.id); }}
-                        aria-label={`Download ${model.displayName}`}
-                        title={progress !== null ? "Another model is downloading" : "Download"}
-                      >
-                        <Download size={14} />
-                      </button>
-                    </span>
-                    </div>
-                    {role}
-                  </div>
-                );
-              }
-
-              return (
-                <div
-                  className={`localModelRow isMenuRow isDownloaded isSelectable ${selected ? "isSelected" : ""}`}
-                  key={model.id}
-                  role="option"
-                  aria-selected={selected}
-                  tabIndex={0}
-                  onClick={() => { if (!disabled) choose(model.id); }}
-                  onKeyDown={(event) => { if (!disabled) rowKeyDown(event, model.id); }}
-                >
-                  <div className="localModelRowMain">
-                  <span className="localModelName">{model.displayName}</span>
-                  {badges}
-                  {/* Unload lives on the model's own row rather than beside the
-                      trigger: only the selected model can be resident, and a
-                      control that appears and disappears next to the picker
-                      shifts the whole field out from under the cursor. */}
-                  {selected && onUnload && loaded && !loading ? (
-                    <button
-                      className="settingsInlineButton modelUnloadButton"
-                      type="button"
-                      disabled={disabled}
-                      onClick={(event) => { event.stopPropagation(); setOpen(false); onUnload(); }}
-                      title="Free the memory this model is using"
-                    >
-                      <PowerOff size={13} />
-                      <span>Unload</span>
-                    </button>
-                  ) : null}
-                  {quantPicker}
-                  <span className="localModelNote">{formatBytes(model.bytes)}</span>
-                  {removeButton}
-                  <span className="localModelAction">
-                    {selected ? <Check className="localModelTick" size={14} /> : null}
-                  </span>
-                  </div>
-                  {role}
-                </div>
-              );
-            })}
+            {sections}
           </div>
         ) : null}
       </div>
@@ -694,6 +750,43 @@ export function CustomModelAdd({
       >
         {busy ? <Loader2 className="spin" size={13} /> : <Plus size={13} />}
         <span>{busy ? "Resolving" : "Add"}</span>
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Multi-token prediction for the whole collection: the models that carry a
+ * head draft from it, the rest are unaffected. One switch rather than one per
+ * model because the reason to turn it off is the machine, not the model — on
+ * some hardware drafting is no faster, and the user is the one who can tell.
+ */
+export function LocalMtpToggle({
+  enabled,
+  disabled,
+  onChange,
+}: {
+  enabled: boolean | null;
+  disabled: boolean;
+  onChange: (enabled: boolean) => void;
+}) {
+  const on = enabled === true;
+  return (
+    <div className="localMtpRow">
+      <div className="localMtpText">
+        <strong>Faster decoding (MTP)</strong>
+        <span>Drafts several tokens per step on models with a prediction head. Turn off if replies get slower.</span>
+      </div>
+      <button
+        type="button"
+        className={`toggle ${on ? "isOn" : ""}`}
+        role="switch"
+        aria-checked={on}
+        aria-label="Faster decoding with multi-token prediction"
+        disabled={disabled}
+        onClick={() => onChange(!on)}
+      >
+        <span className="toggleKnob" />
       </button>
     </div>
   );

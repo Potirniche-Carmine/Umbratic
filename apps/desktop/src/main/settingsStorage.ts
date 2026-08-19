@@ -39,6 +39,7 @@ type RawSettings = {
   contextLength?: unknown;
   reasoningEffort?: unknown;
   showThinking?: unknown;
+  localMtp?: unknown;
   permissionMode?: unknown;
   companyCredential?: unknown;
   dictation?: unknown;
@@ -383,6 +384,21 @@ export function writeReasoningEffortSetting(value: unknown): ReasoningEffort {
 }
 
 /** Live thinking in Working. Absent or anything other than true is off. */
+/**
+ * Whether local models draft from their multi-token-prediction head. On unless
+ * turned off: it is the same output faster on most machines, and the switch
+ * exists for the ones where it is not.
+ */
+export function readLocalMtpSetting(): boolean {
+  return readRawSettings().localMtp !== false;
+}
+
+export function writeLocalMtpSetting(value: unknown): boolean {
+  const localMtp = value !== false;
+  writeRawSettings({ ...readRawSettings(), localMtp });
+  return localMtp;
+}
+
 export function readShowThinkingSetting(): boolean {
   return readRawSettings().showThinking === true;
 }

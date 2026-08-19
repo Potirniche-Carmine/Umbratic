@@ -20,6 +20,12 @@ export type LocalLlamaRequest = {
    */
   modelId: string;
   contextLength: number;
+  /**
+   * Multi-token prediction, when the model has a head and the user has it on.
+   * `draftFile` is a separate head on disk; null says the head is inside the
+   * weights, where llama-server finds it by itself.
+   */
+  mtp: { draftFile: string | null } | null;
 };
 
 const supervisor = createLlamaSupervisor({ label: "llama" });
@@ -61,6 +67,18 @@ export function localLlamaArgs(request: LocalLlamaRequest): string[] {
     "--parallel", "1",
     // Nothing should be reachable here but Veil.
     "--no-webui",
+    // Speculative decoding from the model's own MTP head: it drafts a couple
+    // of tokens and the model verifies them in one pass, which is the same
+    // output faster. Two is the draft length that holds up across GPUs; more
+    // pays off only on fast cards. A head that is not in the weights is named
+    // as the draft model.
+    ...(request.mtp
+      ? [
+          "--spec-type", "draft-mtp",
+          "--spec-draft-n-max", "2",
+          ...(request.mtp.draftFile ? ["--model-draft", request.mtp.draftFile] : []),
+        ]
+      : []),
   ];
 }
 
@@ -71,11 +89,19 @@ export async function ensureLocalLlama(
   if (!request.modelFile) throw new Error("Download a model in Settings → Connection");
   if (!fs.existsSync(request.modelFile)) throw new Error("Download a model in Settings → Connection");
   if (!request.modelId.trim()) throw new Error("Download a model in Settings → Connection");
+  if (request.mtp?.draftFile && !fs.existsSync(request.mtp.draftFile)) {
+    throw new Error("Download a model in Settings → Connection");
+  }
   if (!Number.isInteger(request.contextLength) || request.contextLength <= 0) {
     throw new Error("The local context length is not configured.");
   }
   return supervisor.ensure({
-    key: JSON.stringify({ modelFile: request.modelFile, modelId: request.modelId, contextLength: request.contextLength }),
+    key: JSON.stringify({
+      modelFile: request.modelFile,
+      modelId: request.modelId,
+      contextLength: request.contextLength,
+      mtp: request.mtp,
+    }),
     args: localLlamaArgs(request),
     onDiagnostic,
   });

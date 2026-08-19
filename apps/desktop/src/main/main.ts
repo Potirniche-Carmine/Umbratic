@@ -1,7 +1,7 @@
 import { getMainWindow } from "./mainRuntime";
 import { setMainWindow, setPermissionModeValue } from "./mainRuntime";
 import { onWorkspaceIndexProgress } from "./indexerService";
-import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveReasoningEffortSetting, saveShowThinkingSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
+import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveLocalMtpSetting, saveReasoningEffortSetting, saveShowThinkingSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
 import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
 import { clearUnsavedDraft, readUnsavedDraft, writeUnsavedDraft } from "./unsavedDrafts";
 import { createCheckpoint, deleteCheckpoint, forkCheckpoint, listTaskCheckpoints, restoreCheckpoint, setCheckpointPinned } from "./checkpointActions";
@@ -57,6 +57,7 @@ import { systemProfile } from "./hardware";
 import {
   readChats,
   readContextLengthSetting,
+  readLocalMtpSetting,
   readReasoningEffortSetting,
   readDictationSettings,
   readKeyBindings,
@@ -483,6 +484,8 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     saveHarnessProfile: (input) => saveHarnessProfileSetting(input),
     getContextLength: () => readContextLengthSetting(),
     saveContextLength: (input) => saveContextLengthSetting(input),
+    getLocalMtp: () => readLocalMtpSetting(),
+    saveLocalMtp: (input) => saveLocalMtpSetting(input),
     getReasoningEffort: () => readReasoningEffortSetting(),
     saveReasoningEffort: (input) => saveReasoningEffortSetting(input),
     saveShowThinking: (input) => saveShowThinkingSetting(input),

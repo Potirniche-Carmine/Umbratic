@@ -11,7 +11,14 @@ import { spawn } from "node:child_process";
 import * as os from "node:os";
 
 import { llamaServerBinaryPath } from "./llamaServer";
-import { catalogModels, type CatalogModel, type CatalogModelKind } from "./modelCatalog";
+import {
+  catalogModels,
+  catalogQuantBytes,
+  defaultQuant,
+  type CatalogModel,
+  type CatalogModelKind,
+  type CatalogQuant,
+} from "./modelCatalog";
 import type { SystemProfile } from "../shared/desktopApi";
 
 export function totalRamGB(totalBytes: number = os.totalmem()): number {
@@ -101,23 +108,56 @@ export function systemProfile(): Promise<SystemProfile> {
  * The model suggested for this machine.
  *
  * A suggestion only. Nothing is withheld from anyone: a smaller machine can
- * still choose the 27B and watch it run slowly, which is their call to make.
- * Uncensored builds are never suggested — a recommendation is what somebody
- * gets without choosing, and that is a choice worth making deliberately.
+ * still choose the largest row and watch it run slowly, which is their call to
+ * make. Uncensored builds are never suggested — a recommendation is what
+ * somebody gets without choosing, and that is a choice worth making
+ * deliberately.
+ *
+ * Derived from the catalog rather than spelled out as a ladder of ids: the
+ * catalog lists each kind from the lightest model to the most capable, and the
+ * suggestion is the most capable one whose comfortable memory this machine
+ * has. Adding a model to the catalog is then the whole job — there is no second
+ * table here to keep in step with it.
  */
 export function recommendedModelId(kind: CatalogModelKind, ram: number): string {
-  if (kind === "dictation") return ram < 16 ? "qwen3-asr-0.6b" : "qwen3-asr-1.7b";
-  if (ram < 12) return "gemma4-e2b";
-  if (ram < 16) return "gemma4-e4b";
-  // 32 GB, not 64: the 27B's default quantization is about 17 GB of weights,
-  // and with the KV cache for a long context on top it wants roughly 22 GB to
-  // be comfortable. A 32 GB machine has that, and the 27B is the only model
-  // here whose tool calling holds up over a long agentic run — recommending
-  // the 12B to a 48 GB laptop was sending the machine's whole advantage
-  // unused. Below 32 the 12B is still the one that will feel good, and the
-  // 27B stays one click away for anyone who wants it.
-  if (ram < 32) return "gemma4-12b";
-  return "qwen38-27b";
+  const candidates = catalogModels(kind).filter((model) => !model.uncensored);
+  const fitting = candidates.filter((model) => model.minRamGB <= ram);
+  return (fitting[fitting.length - 1] ?? candidates[0]).id;
+}
+
+/**
+ * How one quantization of a model sits in this machine's memory.
+ *
+ * - `comfortable`: the weights and a long context both fit, with room for the
+ *   rest of the machine.
+ * - `tight`: the weights fit and it will run, but memory will be short and the
+ *   machine will feel it.
+ * - `exceeds`: the weights alone are more than the machine has; it will swap,
+ *   stall, or refuse to load.
+ *
+ * Said on every row rather than used to hide any of them: what runs slowly on
+ * someone's hardware is their call, but it should be a call they made knowing.
+ */
+export type MemoryFit = "comfortable" | "tight" | "exceeds";
+
+/**
+ * The memory a quantization wants to be comfortable in. `minRamGB` is recorded
+ * for the model's default quantization; the others scale with their size, so
+ * a Q8_0 that is twice the bytes asks for twice the room.
+ */
+export function neededRamGB(model: CatalogModel, quant: CatalogQuant): number {
+  const scale = catalogQuantBytes(quant) / catalogQuantBytes(defaultQuant(model));
+  return Math.ceil(model.minRamGB * scale);
+}
+
+export function memoryFit(model: CatalogModel, quant: CatalogQuant, ram: number): MemoryFit {
+  const needed = neededRamGB(model, quant);
+  if (ram >= needed) return "comfortable";
+  // The comfortable figure carries headroom for context and the rest of the
+  // machine; three quarters of it is about where the weights themselves stop
+  // fitting.
+  if (ram >= needed * 0.75) return "tight";
+  return "exceeds";
 }
 
 export type CatalogModelAvailability = {

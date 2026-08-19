@@ -10,7 +10,7 @@ const localLlama = loadTypeScriptModule(new URL("../src/main/localLlama.ts", imp
 const llamaServerSource = fs.readFileSync(new URL("../src/main/llamaServer.ts", import.meta.url), "utf8");
 
 test("the chat sidecar is launched with the weights, the whole context, and one slot", () => {
-  const args = localLlama.localLlamaArgs({ modelFile: "/models/gemma4-e4b.gguf", modelId: "gemma4-e4b", contextLength: 64000 });
+  const args = localLlama.localLlamaArgs({ modelFile: "/models/gemma4-e4b.gguf", modelId: "gemma4-e4b", contextLength: 64000, mtp: null });
 
   assert.deepEqual([...args], [
     "-m", "/models/gemma4-e4b.gguf",
@@ -30,24 +30,37 @@ test("the chat sidecar is launched with the weights, the whole context, and one 
   assert.equal(args[args.indexOf("--parallel") + 1], "1");
 });
 
+test("a model with an MTP head drafts from it when asked, naming a separate head as the draft model", () => {
+  const base = { modelFile: "/models/qwen38-27b.gguf", modelId: "qwen38-27b", contextLength: 64000 };
+  // The head is inside the weights: llama-server is told to draft and finds it there.
+  const embedded = localLlama.localLlamaArgs({ ...base, mtp: { draftFile: null } });
+  assert.deepEqual([...embedded.slice(-4)], ["--spec-type", "draft-mtp", "--spec-draft-n-max", "2"]);
+  assert.ok(!embedded.includes("--model-draft"));
+  // The head is its own file: it is named, and still drafted from.
+  const sidecar = localLlama.localLlamaArgs({ ...base, mtp: { draftFile: "/models/mtp-qwen38-27b.gguf" } });
+  assert.deepEqual([...sidecar.slice(-6)], ["--spec-type", "draft-mtp", "--spec-draft-n-max", "2", "--model-draft", "/models/mtp-qwen38-27b.gguf"]);
+  // Off, or a model without a head, decodes one token at a time.
+  assert.ok(!localLlama.localLlamaArgs({ ...base, mtp: null }).includes("--spec-type"));
+});
+
 test("a missing or unconfigured model sends the user to the connection panel, not to a stack trace", async () => {
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: "", modelId: "gemma4-e4b", contextLength: 64000 }),
+    () => localLlama.ensureLocalLlama({ modelFile: "", modelId: "gemma4-e4b", contextLength: 64000, mtp: null }),
     /Download a model in Settings/,
   );
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: path.join(os.tmpdir(), "umbratic-absent.gguf"), modelId: "gemma4-e4b", contextLength: 64000 }),
+    () => localLlama.ensureLocalLlama({ modelFile: path.join(os.tmpdir(), "umbratic-absent.gguf"), modelId: "gemma4-e4b", contextLength: 64000, mtp: null }),
     /Download a model in Settings/,
   );
 
   const present = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-llama-")), "weights.gguf");
   fs.writeFileSync(present, "");
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: present, modelId: "", contextLength: 64000 }),
+    () => localLlama.ensureLocalLlama({ modelFile: present, modelId: "", contextLength: 64000, mtp: null }),
     /Download a model in Settings/,
   );
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: present, modelId: "gemma4-e4b", contextLength: 0 }),
+    () => localLlama.ensureLocalLlama({ modelFile: present, modelId: "gemma4-e4b", contextLength: 0, mtp: null }),
     /context length is not configured/,
   );
 });

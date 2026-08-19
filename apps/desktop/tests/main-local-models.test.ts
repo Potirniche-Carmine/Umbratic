@@ -45,18 +45,23 @@ test("dictation models ship their projector alongside the weights", () => {
   }
 });
 
-test("every catalog id is unique and every chat quantization is a single GGUF", () => {
+test("every catalog id is unique and every chat quantization is one weights file, plus at most an MTP head", () => {
   const ids = catalog.modelCatalog.map((model) => model.id);
   assert.equal(new Set(ids).size, ids.length, "duplicate catalog id");
   for (const model of catalog.catalogModels("chat")) {
     const labels = model.quants.map((quant) => quant.quant);
     assert.equal(new Set(labels).size, labels.length, `${model.id} repeats a quant label`);
     for (const quant of model.quants) {
-      assert.equal(quant.files.length, 1, `${model.id}@${quant.quant} should be a single GGUF`);
+      const weights = quant.files.filter((file) => !/^mtp-/i.test(file.name));
+      assert.equal(weights.length, 1, `${model.id}@${quant.quant} should be a single weights GGUF`);
+      assert.equal(catalog.quantWeightsFile(quant), weights[0]);
       assert.ok(
-        quant.files[0].name.toUpperCase().includes(quant.quant.toUpperCase()),
+        weights[0].name.toUpperCase().includes(quant.quant.toUpperCase()),
         `${model.id}@${quant.quant} label should match its file name`,
       );
+      // A separate head only travels with a model that says it drafts.
+      const head = catalog.quantMtpFile(quant);
+      if (head) assert.equal(model.mtp, true, `${model.id} ships an MTP head it does not claim`);
     }
   }
 });
@@ -77,6 +82,46 @@ test("the recommendation follows installed memory", () => {
 
   assert.equal(hardware.recommendedModelId("dictation", 8), "qwen3-asr-0.6b");
   assert.equal(hardware.recommendedModelId("dictation", 16), "qwen3-asr-1.7b");
+});
+
+// The suggestion is read off the catalog's order, so the catalog has to keep
+// that order meaningful: the most capable safety-trained model a machine runs
+// comfortably is what it is offered, and the uncensored builds trail.
+test("the recommendation is the most capable safety-trained model the machine runs comfortably", () => {
+  for (const ram of [4, 8, 12, 16, 24, 32, 64]) {
+    const suggested = catalog.catalogModel(hardware.recommendedModelId("chat", ram));
+    const fitting = catalog.catalogModels("chat").filter((model) => !model.uncensored && model.minRamGB <= ram);
+    const expected = fitting[fitting.length - 1] ?? catalog.catalogModels("chat")[0];
+    assert.equal(suggested.id, expected.id, `at ${ram} GB`);
+  }
+  // Ornith is offered at the same memory as the 27B and listed ahead of it, so
+  // the 27B — the one this app has run long agentic sessions on — stays the
+  // suggestion at 32 GB while Ornith sits one row away.
+  assert.equal(hardware.recommendedModelId("chat", 32), "qwen38-27b");
+  assert.equal(catalog.catalogModel("ornith-1.5-35b-a3b").minRamGB, 32);
+});
+
+test("memory fit is quant-aware and never hides a row", () => {
+  const qwen = catalog.catalogModel("qwen38-27b");
+  const q4 = catalog.modelQuant(qwen, "Q4_K_M");
+  const q8 = catalog.modelQuant(qwen, "Q8_0");
+  const q3 = catalog.modelQuant(qwen, "Q3_K_M");
+  // The default quantization wants exactly what the catalog says.
+  assert.equal(hardware.neededRamGB(qwen, q4), 32);
+  // The others scale with their bytes: a Q8_0 that is 1.7x the size wants
+  // 1.7x the room, and the Q3_K_M wants less.
+  assert.equal(hardware.neededRamGB(qwen, q8), Math.ceil(32 * (q8.files[0].bytes / q4.files[0].bytes)));
+  assert.ok(hardware.neededRamGB(qwen, q3) < 32);
+
+  assert.equal(hardware.memoryFit(qwen, q4, 32), "comfortable");
+  assert.equal(hardware.memoryFit(qwen, q4, 64), "comfortable");
+  // Three quarters of the comfortable figure is about where the weights
+  // themselves still fit: 24 GB holds 17 GB of weights, tightly.
+  assert.equal(hardware.memoryFit(qwen, q4, 24), "tight");
+  assert.equal(hardware.memoryFit(qwen, q4, 16), "exceeds");
+  // Picking a heavier quantization moves the verdict on the same machine.
+  assert.equal(hardware.memoryFit(qwen, q8, 32), "exceeds");
+  assert.equal(hardware.memoryFit(qwen, q3, hardware.neededRamGB(qwen, q3)), "comfortable");
 });
 
 test("every chat model says what it is for, not just how big it is", () => {

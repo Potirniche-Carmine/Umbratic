@@ -2,6 +2,13 @@
 
 export type LocalCatalogModelKind = "chat" | "dictation";
 
+/**
+ * How a download sits in this machine's memory: room to spare, will run but
+ * short of memory, or more than the machine has. Shown on every row rather
+ * than used to hide any — what runs slowly is the user's call, made knowing.
+ */
+export type LocalMemoryFit = "comfortable" | "tight" | "exceeds";
+
 /** One quantization a model is offered at. */
 export type LocalModelQuant = {
   /** Quantization label as the repository spells it, e.g. "Q4_K_M". */
@@ -10,6 +17,9 @@ export type LocalModelQuant = {
   /** The model's default: the balance point the collection stands behind. */
   recommended: boolean;
   downloaded: boolean;
+  fit: LocalMemoryFit;
+  /** The memory this quantization wants to be comfortable in. */
+  neededRamGB: number;
 };
 
 /**
@@ -24,10 +34,12 @@ export type LocalCatalogModel = {
   kind: LocalCatalogModelKind;
   displayName: string;
   bytes: number;
-  minRamGB: number;
+  /** The suggestion for this machine: the most capable model it runs comfortably. */
   recommended: boolean;
   /** Safety training removed. Shown, never suggested. */
   uncensored: boolean;
+  /** Carries a multi-token-prediction head, so it decodes faster when MTP is on. */
+  mtp: boolean;
   /**
    * What the model is for, in a tag and a sentence. Absent for dictation
    * weights, which are chosen by size, and for models added from a Hugging
@@ -38,6 +50,9 @@ export type LocalCatalogModel = {
   custom: boolean;
   selectedQuant: string;
   quants: LocalModelQuant[];
+  /** The fit of `selectedQuant`, repeated here so the row need not look it up. */
+  fit: LocalMemoryFit;
+  neededRamGB: number;
   downloaded: boolean;
   downloading: boolean;
 };
