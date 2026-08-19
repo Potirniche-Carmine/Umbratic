@@ -192,13 +192,10 @@ test("command aggregation, pending permissions, and timelines reflect real event
   assert.equal(escapedPlanTimeline[1].segments[0].text, "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.");
   assert.equal(escapedPlanTimeline[2].text, "Done — the script passed five test cases.");
 
-  // A multi-round turn never relocates what the user has read. Prose that
-  // streamed below a block with real work in it stands exactly there: the
-  // block above settles and the next tool opens a new block beneath it.
-  // Folding that prose into the block instead — the old rule — moved a
-  // paragraph mid-read, which is the flash this replaces. Guided tool-step
-  // preambles stay out of assistant.delta, so a split happens at a
-  // substantial mid-turn report, not at every sentence.
+  // A multi-round turn is one Working block, however many rounds it took. The
+  // report the run wrote between the two listings is narration like the
+  // opening sentence was, so it joins them inside the block rather than
+  // standing between two blocks as a muted paragraph that reads like a reply.
   const multiRoundTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "can you tell me about this folder?", at: "2026-01-01T00:00:00.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "I'll start by listing all the contents of the root directory.", at: "2026-01-01T00:00:01.000Z" },
@@ -212,36 +209,40 @@ test("command aggregation, pending permissions, and timelines reflect real event
   ], undefined, "completed")));
   assert.deepEqual(
     multiRoundTimeline.map((item) => item.type),
-    ["user", "activity", "assistant", "activity", "assistant"],
+    ["user", "activity", "assistant"],
   );
-  // The opening sentence arrived before any work, so it joins the first
-  // block's narration — it was never rendered anywhere else.
+  // Both rounds and both narration passages, in the order they happened.
   assert.deepEqual(
     multiRoundTimeline[1].segments.map((segment) => segment.type),
-    ["reasoning", "command"],
+    ["reasoning", "command", "reasoning", "command"],
   );
   assert.equal(multiRoundTimeline[1].segments[0].text, "I'll start by listing all the contents of the root directory.");
-  // The mid-turn report streamed below the first block and stays there.
-  assert.equal(multiRoundTimeline[2].text, "I have listed the root. Now I will list the main subdirectories.");
-  assert.deepEqual(multiRoundTimeline[3].segments.map((segment) => segment.type), ["command"]);
-  assert.equal(multiRoundTimeline[4].text, "This repository is a Next.js application.");
+  assert.equal(multiRoundTimeline[1].segments[2].text, "I have listed the root. Now I will list the main subdirectories.");
+  // The answer is the one thing left outside the block.
+  assert.equal(multiRoundTimeline[2].text, "This repository is a Next.js application.");
+  assert.equal(multiRoundTimeline[2].final, true);
 
-  // The reported regression: the answer used to stream inside the open Working
-  // block and only move outside once the run settled, so it arrived as a jump
-  // rather than a stream. Prose now closes the block and streams in place.
+  // After tools have run, live prose stays in Working until the turn ends.
+  // It might still be a mid-round report; promoting it on the first token made
+  // that report look like the answer, then jump back in when the next tool
+  // started. Direct answers (no tools yet) still stream outside from the first
+  // token.
   const streamingMidTurnTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "can you tell me about this folder?", at: "2026-01-01T00:00:00.000Z" },
     { type: "command.started", taskId: "task-1", id: "ls-1", command: "ls .", cwd: "C:/repo", kind: "read", commandClass: "read", at: "2026-01-01T00:00:01.000Z" },
     { type: "command.finished", taskId: "task-1", id: "ls-1", exitCode: 0, at: "2026-01-01T00:00:02.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "Now I will list the main subdirectories.", at: "2026-01-01T00:00:03.000Z" },
   ], undefined, "running")));
-  assert.deepEqual(streamingMidTurnTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
-  // The block settles the moment prose starts, so it shows its elapsed time
-  // instead of staying open behind the text.
-  assert.equal(streamingMidTurnTimeline[1].finished, true);
-  assert.deepEqual(streamingMidTurnTimeline[1].segments.map((segment) => segment.type), ["command"]);
-  assert.equal(streamingMidTurnTimeline[2].text, "Now I will list the main subdirectories.");
-  assert.equal(streamingMidTurnTimeline[2].streaming, true);
+  assert.deepEqual(streamingMidTurnTimeline.map((item) => item.type), ["user", "activity"]);
+  assert.equal(streamingMidTurnTimeline[1].finished, false);
+  assert.deepEqual(streamingMidTurnTimeline[1].segments.map((segment) => segment.type), ["command", "reasoning"]);
+  assert.equal(streamingMidTurnTimeline[1].segments[1].text, "Now I will list the main subdirectories.");
+  assert.equal(streamingMidTurnTimeline[1].segments[1].held, true);
+  assert.equal(streamingMidTurnTimeline[1].segments[1].finished, false);
+  assert.match(
+    activitySummary(streamingMidTurnTimeline[1], Date.parse("2026-01-01T00:00:08.000Z")),
+    /^Working/,
+  );
 
   // A stopped turn ends where it was: no error bubble, and whatever had already
   // streamed stays exactly where the user saw it, partial text included.
@@ -279,7 +280,7 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "assistant.delta", taskId: "task-1", text: "Partial answer", at: "2026-01-01T00:00:03.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:04.000Z" },
   ], undefined, "completed")));
-  assert.equal(activitySummary(failedToolTimeline[1]), "Worked for 3 seconds");
+  assert.equal(activitySummary(failedToolTimeline[1]), "Worked for 4 seconds");
 
   const delayedFirstTokenTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "Summarize the attachment", at: "2026-01-01T00:00:00.000Z" },
@@ -554,3 +555,37 @@ test("live tool output is only for a streaming shell command that has bytes", ()
   );
 });
 
+
+test("a turn that talks between rounds of tools is still one Working block", () => {
+  const { composerTimelineFromEvents } = loadRendererFile("composerTimeline.ts");
+  const at = (second) => `2026-01-01T00:00:${String(second).padStart(2, "0")}.000Z`;
+
+  // The reported shape, from a web-search turn: the run concedes it has the
+  // tool, searches twice, says so again, reads two pages, then answers. The
+  // two conceding sentences are narration; only the last message is the reply.
+  const timeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "don't you have a web search tool?", at: at(0) },
+    { type: "assistant.delta", taskId: "task-1", text: "You're right — I do have a web search tool.", at: at(1) },
+    { type: "command.started", taskId: "task-1", id: "s1", command: "web_search top stories", cwd: ".", kind: "read", at: at(2) },
+    { type: "command.finished", taskId: "task-1", id: "s1", exitCode: 0, at: at(3) },
+    { type: "command.started", taskId: "task-1", id: "s2", command: "web_search good news", cwd: ".", kind: "read", at: at(4) },
+    { type: "command.finished", taskId: "task-1", id: "s2", exitCode: 0, at: at(5) },
+    { type: "assistant.delta", taskId: "task-1", text: "Yes, I do — let me pull the actual stories.", at: at(6) },
+    { type: "command.started", taskId: "task-1", id: "r1", command: "web_fetch apnews.com", cwd: ".", kind: "read", at: at(7) },
+    { type: "command.finished", taskId: "task-1", id: "r1", exitCode: 0, at: at(8) },
+    { type: "assistant.delta", taskId: "task-1", text: "Here's what's going on today.", at: at(9) },
+    { type: "assistant.done", taskId: "task-1", at: at(10) },
+  ], undefined, "completed")));
+
+  assert.deepEqual(timeline.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.deepEqual(
+    timeline[1].segments.map((segment) => segment.type),
+    ["reasoning", "command", "command", "reasoning", "command"],
+  );
+  assert.equal(timeline[1].segments[3].text, "Yes, I do — let me pull the actual stories.");
+  // One elapsed figure covering the whole stretch of work, not one per round.
+  assert.equal(timeline[1].startedAt, at(0));
+  assert.equal(timeline[1].endedAt, at(10));
+  assert.equal(timeline[2].text, "Here's what's going on today.");
+  assert.equal(timeline[2].final, true);
+});

@@ -271,6 +271,26 @@
   }
 }
 
+@keyframes answerLiftRestyle {
+  from {
+    color: color-mix(in srgb, var(--text) 62%, var(--muted));
+  }
+
+  to {
+    color: color-mix(in srgb, var(--text) 90%, var(--muted));
+  }
+}
+
+@keyframes answerLiftRail {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 0.8;
+  }
+}
+
 @keyframes activityDotPulse {
   0%,
   72%,
@@ -397,6 +417,11 @@
   .activityChevron {
     transition-delay: 0ms !important;
     transition-duration: 80ms !important;
+  }
+
+  .timelineMessage.assistantMessage.isLifted {
+    animation: none !important;
+    transform: none !important;
   }
 
   .skillPreviewPanel {

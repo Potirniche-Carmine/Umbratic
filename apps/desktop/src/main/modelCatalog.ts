@@ -69,9 +69,11 @@ export type CatalogModel = {
    */
   quants: CatalogQuant[];
   /**
-   * The memory this model wants to be comfortable in. Nothing is withheld
-   * because of it — the list stays complete and every row stays selectable —
-   * it only decides which row is suggested and what the size hint says.
+   * The memory this model wants to be comfortable in, at its default
+   * quantization: weights, a long context's KV cache, and room for the rest of
+   * the machine. Nothing is withheld because of it — the list stays complete
+   * and every row stays selectable — it decides which row is suggested and
+   * what each row says about how it will sit in this machine's memory.
    */
   minRamGB: number;
   /**
@@ -103,6 +105,16 @@ export type CatalogModel = {
    */
   uncensored?: boolean;
   /**
+   * Whether llama-server drafts from this model's multi-token-prediction head.
+   * Dense models only: a mixture-of-experts already decodes cheaply, and
+   * drafting from its head is a net loss. The head is either inside the GGUF
+   * — Qwen3.5-family dense builds ship it as an extra block — or the `mtp-`
+   * file listed among the quant's files. Recorded from the GGUF header or the
+   * repository's file list, not assumed from the family: an abliterated
+   * rebuild can drop the head, and a MoE can keep one we do not use.
+   */
+  mtp?: boolean;
+  /**
    * What this model is actually good for, in one line, shown on its row.
    *
    * Size is not the answer to "which of these should I pick": the thing that
@@ -118,6 +130,21 @@ export type CatalogModel = {
    * is the honest answer there.
    */
   role?: ModelRole;
+  /**
+   * Weights that were already in the models folder rather than fetched from
+   * the catalog: a file someone downloaded from Hugging Face themselves, or a
+   * model this collection does not offer. There is no repository behind them,
+   * so there is nothing to download and nothing to verify against — they are
+   * listed because they are here, and running them is the user's call.
+   */
+  discovered?: boolean;
+  /**
+   * Where the files actually live, when that is not the directory named after
+   * the model's id. Only discovered models set it: a loose GGUF sits in the
+   * models folder itself, and a folder somebody made is named whatever they
+   * named it.
+   */
+  localDirectory?: string;
 };
 
 /**
@@ -166,6 +193,28 @@ const gemmaReasoning = {
   sampling: { thinking: gemmaSampling, instruct: gemmaSampling },
 };
 
+/**
+ * Gemma 4 12B's multi-token-prediction head. Google ships it as a separate
+ * drafter rather than inside the weights, so each 12B quantization lists it
+ * alongside the GGUF: one download brings both. The E-series are
+ * mixture-of-experts and we do not draft from them, so they do not carry a
+ * head. This is the Q8_0 build at the repository root, the one the card's
+ * own examples load.
+ */
+const gemma12BHead: CatalogFile = {
+  name: "mtp-gemma-4-12b-it.gguf",
+  bytes: 465_109_248,
+  sha256: "145db9094bc0f85f1701e255a2ed216dcc9800fc8bc8631ad00905b456bd451b",
+};
+
+/**
+ * Ordered, within each kind, from the lightest model to the most capable. The
+ * order is load-bearing: the machine's suggestion is the most capable
+ * safety-trained model whose comfortable memory it has, read straight off this
+ * list, so a new model goes where its capability puts it rather than at the
+ * end. Uncensored builds sit after the models they derive from and are never
+ * suggested, so their position only decides where they are listed.
+ */
 export const modelCatalog: readonly CatalogModel[] = [
   {
     id: "gemma4-e2b",
@@ -284,7 +333,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-12b-it-Q4_K_M.gguf",
           bytes: 7_121_861_440,
           sha256: "0a270ec9fe6b34f4a0d33992b6135117b484ebc4766ab76b51d4ae8c457e4c42",
-        }],
+        }, gemma12BHead],
       },
       {
         quant: "Q3_K_M",
@@ -292,7 +341,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-12b-it-Q3_K_M.gguf",
           bytes: 5_693_872_960,
           sha256: "dbf58f4c413b82b27106867eb42f7087e4172a172f6f201e2e11598a6582e504",
-        }],
+        }, gemma12BHead],
       },
       {
         quant: "Q5_K_M",
@@ -300,7 +349,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-12b-it-Q5_K_M.gguf",
           bytes: 8_413_576_000,
           sha256: "32c554c7d1338a23837ae39b3db482213a4a642f96df3b2619f516a2375d16cd",
-        }],
+        }, gemma12BHead],
       },
       {
         quant: "Q6_K",
@@ -308,7 +357,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-12b-it-Q6_K.gguf",
           bytes: 9_786_022_720,
           sha256: "6f394336500bb5409bd68c31aa9d75097b5e6104f6cf30c82a09a7b64df41faf",
-        }],
+        }, gemma12BHead],
       },
       {
         quant: "Q8_0",
@@ -316,15 +365,83 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-12b-it-Q8_0.gguf",
           bytes: 12_669_647_680,
           sha256: "f20e7ff1be28c283eeeb18fc895733791c56a5851d5cd3fe9691b7f7d12afa72",
-        }],
+        }, gemma12BHead],
       },
     ],
     minRamGB: 16,
+    mtp: true,
     role: {
       label: "Light agentic",
       detail: "Steadier tool calling than the E-series, and still light. Fine for short agentic runs.",
     },
     ...gemmaReasoning,
+  },
+  {
+    id: "ornith-1.5-35b-a3b",
+    kind: "chat",
+    displayName: "Ornith 1.5 35B A3B",
+    hfRepo: "ornith-ai/Ornith-1.5-35B-A3B-GGUF",
+    hfRevision: "5ae357e3eaf951ae221e8d784c71a8a3cdb6aa5f",
+    // The repository's own ladder starts at Q4_K_M; there is no Q3_K_M, and
+    // the BF16 and the vision projector are left out — the one is 71 GB and
+    // the other serves a vision path chat here does not take. The files drop
+    // "A3B" from their names, as the repository spells them.
+    quants: [
+      {
+        quant: "Q4_K_M",
+        files: [{
+          name: "Ornith-1.5-35B-Q4_K_M.gguf",
+          bytes: 21_713_462_848,
+          sha256: "ca6ea26329c88b78ffd90a85163be2e746c2fafd1024f56db47e499f117f9a7f",
+        }],
+      },
+      {
+        quant: "Q5_K_M",
+        files: [{
+          name: "Ornith-1.5-35B-Q5_K_M.gguf",
+          bytes: 25_347_532_352,
+          sha256: "2ac3a45979ffbdff1c7a6f3334e6d4c347274adbc33531d23bde6fa1dfdcb994",
+        }],
+      },
+      {
+        quant: "Q6_K",
+        files: [{
+          name: "Ornith-1.5-35B-Q6_K.gguf",
+          bytes: 29_208_731_200,
+          sha256: "1c4e5bb98a74c89a5d93a2488b5748b7b331daf77f6dbb64bd9b2ff864b64eb3",
+        }],
+      },
+      {
+        quant: "Q8_0",
+        files: [{
+          name: "Ornith-1.5-35B-Q8_0.gguf",
+          bytes: 37_802_149_120,
+          sha256: "854cf83f80cd37a061ed86df1fa7201162e4e1fb820b91068cc12a11d2746c9e",
+        }],
+      },
+    ],
+    // 35B of weights on disk, 3B of them active per token: it wants the memory
+    // of a large model and answers at the speed of a small one. The Q4_K_M is
+    // 21.7 GB, so it is comfortable where the 27B is.
+    minRamGB: 32,
+    role: {
+      label: "Agentic coding",
+      detail: "Trained for terminal coding agents and tool calling. Mixture-of-experts, so it answers fast for its size.",
+    },
+    // The GGUF carries a nextn head in block 40, but this is a
+    // mixture-of-experts: 3B active params already decode cheaply, and
+    // drafting from that head is a net loss. MTP is for dense models.
+    reasoning: true,
+    // Its template reads `enable_thinking` and nothing finer — thinking is on
+    // unless told off — so the choice is binary, like Gemma's.
+    reasoningEfforts: ["off", "on"],
+    // The card's numbers for general use (it reproduces its benchmarks at
+    // temperature 1.0, which is not what a desktop wants). One set for both
+    // modes; the card draws no distinction.
+    sampling: {
+      thinking: { temperature: 0.6, topP: 0.95, topK: 20, minP: 0.0, presencePenalty: 0.0, repetitionPenalty: 1.0 },
+      instruct: { temperature: 0.6, topP: 0.95, topK: 20, minP: 0.0, presencePenalty: 0.0, repetitionPenalty: 1.0 },
+    },
   },
   {
     id: "qwen38-27b",
@@ -379,6 +496,9 @@ export const modelCatalog: readonly CatalogModel[] = [
       label: "Agentic",
       detail: "Reliable tool calling over long multi-step runs. The one to pick for agentic work.",
     },
+    // The GGUF header carries `qwen35.nextn_predict_layers = 1` and a 65th
+    // block of `nextn` tensors: the drafting head is inside the weights.
+    mtp: true,
     reasoning: true,
     // Its chat template reads `reasoning_effort` and refuses anything but low,
     // medium and xhigh — "high" is remapped to xhigh by the template itself,
@@ -401,7 +521,9 @@ export const modelCatalog: readonly CatalogModel[] = [
     hfRepo: "HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive",
     hfRevision: "45b6a334b4bcd1d7f37179df58b3b1d66a184e5d",
     // The upper rungs are this repository's own K_P builds; it does not publish
-    // a plain Q6_K or Q8_0.
+    // a plain Q6_K or Q8_0. No MTP: the GGUFs carry no head and the repository
+    // ships no drafter, and Google's E4B drafter was trained against the
+    // safety-trained weights, not this rebuild.
     quants: [
       {
         quant: "Q4_K_M",
@@ -454,54 +576,58 @@ export const modelCatalog: readonly CatalogModel[] = [
     kind: "chat",
     displayName: "Qwen3.8 27B Abliterated",
     hfRepo: "Blackfrost-AI/Qwen3.8-27B-ABLITERATED-GGUF",
-    hfRevision: "ad53dea7863fcc212b2b084e2634420b4d5f7d2e",
+    hfRevision: "4f6732ce2123ced5d9df722a934f700619e066a8",
     // The plain K-quant ladder, Q4_K_M first as the card's own default. The
     // repository also publishes vision projectors; they are left out because
     // chat here is text-only and an mmproj nobody loads is a gigabyte of
-    // download for nothing.
+    // download for nothing. Pinned at the August 16 re-upload, which is the
+    // first revision of this build to keep Qwen's MTP head in the weights.
     quants: [
       {
         quant: "Q4_K_M",
         files: [{
           name: "Qwen3.8-27B-ABLITERATED-Q4_K_M.gguf",
-          bytes: 16_547_401_920,
-          sha256: "202bbe49a634f531f82d71bb0cab35b25bbfd97242cf30a5b3d92ad3ceaa977b",
+          bytes: 16_810_716_384,
+          sha256: "5d53637a59cfcd3a4d8354e254ffd44943e5a693da2405a3e228c62962355509",
         }],
       },
       {
         quant: "Q3_K_M",
         files: [{
           name: "Qwen3.8-27B-ABLITERATED-Q3_K_M.gguf",
-          bytes: 13_301_444_800,
-          sha256: "9d6c6b7bca3a27c7ee4b217602651a4bde8ed261edad95ad6a1d6656cd884b6b",
+          bytes: 13_500_738_784,
+          sha256: "18580f97cc179c2042ccca8ec52fa32921255ade624b5e28b69733c36ce4de2f",
         }],
       },
       {
         quant: "Q5_K_M",
         files: [{
           name: "Qwen3.8-27B-ABLITERATED-Q5_K_M.gguf",
-          bytes: 19_231_101_120,
-          sha256: "5a06d1dfe87aeebca0beba56cebbccaaf591a5e7210b93ae62804731fb598b46",
+          bytes: 19_535_703_264,
+          sha256: "37e02edc312a35e73eca50ae26d72458f341e17427eeb1724d9927723256c49c",
         }],
       },
       {
         quant: "Q6_K",
         files: [{
           name: "Qwen3.8-27B-ABLITERATED-Q6_K.gguf",
-          bytes: 22_082_531_520,
-          sha256: "3d78a14fa954c1b66fe9f80191f6698a26caf916608bccbaf1480a5223e49440",
+          bytes: 22_431_001_824,
+          sha256: "34264197c0188b1b09da05692fcdd4625b7d2231d40b07a4b29836bdb7b4d2a1",
         }],
       },
       {
         quant: "Q8_0",
         files: [{
           name: "Qwen3.8-27B-ABLITERATED-Q8_0.gguf",
-          bytes: 28_595_765_440,
-          sha256: "fe89cb15122c29b31b79f34e7ffe0e18c053e7e1798944adf5608d3ab0be180a",
+          bytes: 29_047_086_304,
+          sha256: "c01b61cf17a2ca61ed1476d0910f652388279fa91f0c223721a391457787cf39",
         }],
       },
     ],
     minRamGB: 32,
+    // `qwen35.nextn_predict_layers = 1` with block 64 present in every
+    // quantization at this revision; the earlier upload had stripped it.
+    mtp: true,
     role: {
       label: "Security agentic",
       detail: "Security and offensive research, with tool calling solid enough for agentic runs.",
@@ -570,7 +696,9 @@ export const modelCatalog: readonly CatalogModel[] = [
         },
       ],
     }],
-    minRamGB: 12,
+    // Dictation runs beside the chat model, not instead of it, so the larger
+    // transcriber is only comfortable once there is room for both.
+    minRamGB: 16,
     reasoning: false,
   },
 ];
@@ -624,6 +752,16 @@ export function defaultQuant(model: CatalogModel): CatalogQuant {
 /** The named quantization, or null when the model does not offer it. */
 export function modelQuant(model: CatalogModel, quant: string): CatalogQuant | null {
   return model.quants.find((entry) => entry.quant === quant) ?? null;
+}
+
+/** The weights llama-server loads: not the projector, not the drafting head. */
+export function quantWeightsFile(quant: CatalogQuant): CatalogFile {
+  return quant.files.find((file) => !/^(mmproj|mtp)-/i.test(file.name)) ?? quant.files[0];
+}
+
+/** The separate multi-token-prediction head, when the quant ships one. */
+export function quantMtpFile(quant: CatalogQuant): CatalogFile | null {
+  return quant.files.find((file) => /^mtp-/i.test(file.name)) ?? null;
 }
 
 /** Total download size of one quantization, which is what the user is agreeing to. */

@@ -140,6 +140,18 @@
   margin: 0 auto;
 }
 
+/* A long transcript is mostly off screen, and laying out and painting all of
+   it on every scroll is what made a long chat feel heavy. Skipping the work for
+   what is not visible leaves the page identical — the remembered size keeps the
+   scrollbar honest — and the browser only pays for the screenful in front of
+   the reader. The user bubble is left out: it casts a shadow past its own
+   box, which the paint containment this brings with it would clip. */
+.timeline > .timelineMessage.assistantMessage,
+.timeline > .timelineActivity {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
+}
+
 .timelineMessage {
   position: relative;
   min-width: 0;
@@ -230,9 +242,27 @@
   padding: 0 0 0 18px;
   /* One rise on mount, never per token: the element persists across streaming
      re-renders, so the animation runs exactly once, when the message first
-     appears. Its first tokens land right as the Working block above starts to
-     settle, and without this the hand-off reads as a pop. */
+     appears. Direct answers use this. A lift from Working skips it — that
+     text is already on the page, and the restyle below is the hand-off. */
   animation: assistantMessageIn 280ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+/* The same words, promoted: skip the entrance pop, restyle from narration
+   colour to answer colour, and let the rail fade in. Transform to the in-flow
+   slot is applied in layout so the paragraph does not drop then rise. */
+.timeline > .timelineMessage.assistantMessage.isLifted {
+  content-visibility: visible;
+  animation: none;
+}
+
+.timelineMessage.assistantMessage.isLifted::before {
+  animation: answerLiftRail 480ms cubic-bezier(0.22, 1, 0.32, 1) both;
+}
+
+.timelineMessage.assistantMessage.isLifted .markdownContent,
+.timelineMessage.assistantMessage.isLifted .markdownContent p,
+.timelineMessage.assistantMessage.isLifted .markdownContent li {
+  animation: answerLiftRestyle 480ms cubic-bezier(0.22, 1, 0.32, 1) both;
 }
 
 .timelineActivity + .timelineMessage.assistantMessage {
@@ -431,9 +461,10 @@
   transition: opacity 130ms ease-out 45ms;
 }
 
-/* Finished-block close is slower so folding narration does not snap. */
+/* After the answer has lifted out, tuck the log away slowly so the reply
+   rides up with the closing body rather than jumping. */
 .timelineActivity.isFinished .activityBody:not(.open) {
-  transition: grid-template-rows 460ms cubic-bezier(0.3, 0, 0.12, 1) 120ms;
+  transition: grid-template-rows 520ms cubic-bezier(0.22, 1, 0.32, 1);
 }
 
 .timelineActivity.isFinished .activityBody:not(.open) .activityBodyContent {

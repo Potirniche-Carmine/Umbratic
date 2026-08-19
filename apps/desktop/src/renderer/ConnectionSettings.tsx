@@ -10,7 +10,7 @@ import type {
 import { CompanyServerActions } from "./CompanyServerActions";
 import { Combobox } from "./Combobox";
 import { contextBadge } from "./ComposerControls";
-import { CustomModelAdd, LocalModelFolder, LocalModelMenu, useLocalModelCatalog } from "./LocalModelList";
+import { CustomModelAdd, LocalModelFolder, LocalModelMenu, LocalMtpToggle, useLocalModelCatalog } from "./LocalModelList";
 import {
   defaultModelEndpointSettings,
   endpointDefaultsForMode,
@@ -68,6 +68,15 @@ export function useConnectionSettings({
   const localLoadCountRef = useRef(0);
   const [message, setMessage] = useState<string | null>(null);
   const localCatalog = useLocalModelCatalog(api, "chat", settingsOpen && active);
+  // Whether local models draft from their MTP head. Read when the panel opens;
+  // null until then, so the switch does not flash a default it may not be.
+  const [localMtp, setLocalMtp] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!settingsOpen || !active) return;
+    let cancelled = false;
+    void api.getLocalMtp().then((value) => { if (!cancelled) setLocalMtp(value); }, () => undefined);
+    return () => { cancelled = true; };
+  }, [api, settingsOpen, active]);
   // What the connected Veil publishes. Empty on a server too old to publish a
   // registry, which is the same state as "not connected yet" — both mean there
   // is no choice to offer here.
@@ -292,6 +301,26 @@ export function useConnectionSettings({
       }
     } finally {
       if (requestId === saveSequenceRef.current) setLocalModelUnloading(false);
+    }
+  }
+
+  /** Turns drafting on or off. The running stack comes back up with it. */
+  async function setLocalMtpEnabled(enabled: boolean) {
+    const requestId = saveSequenceRef.current + 1;
+    saveSequenceRef.current = requestId;
+    setMessage(null);
+    const previous = localMtp;
+    setLocalMtp(enabled);
+    try {
+      const result = await api.saveLocalMtp(enabled);
+      if (requestId !== saveSequenceRef.current) return;
+      setLocalMtp(result.mtp);
+      onBackendStatus(result.status);
+    } catch (cause) {
+      if (requestId === saveSequenceRef.current) {
+        setLocalMtp(previous);
+        setMessage(String(cause instanceof Error ? cause.message : cause));
+      }
     }
   }
 
@@ -523,6 +552,8 @@ export function useConnectionSettings({
     editingEnabled,
     formDisabled,
     localCatalog,
+    localMtp,
+    setLocalMtpEnabled,
     refreshDisabled,
     displayState,
     statusLabel,
@@ -651,6 +682,11 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
             />
             <CustomModelAdd disabled={formDisabled} onAdd={(reference) => localCatalog.addCustom(reference)} />
             {localCatalog.message ? <p className="settingsMessage">{localCatalog.message}</p> : null}
+            <LocalMtpToggle
+              enabled={controller.localMtp}
+              disabled={formDisabled || controller.localMtp === null}
+              onChange={(enabled) => void controller.setLocalMtpEnabled(enabled)}
+            />
             <LocalModelFolder api={controller.api} />
           </>
         ) : companyServerConnected && companyConnection.state === "enrolled" ? (

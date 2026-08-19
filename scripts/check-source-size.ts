@@ -37,7 +37,7 @@ const lineLimit = 1_000;
 // decomposition is behavior-preserving — a change that deserves its own review.
 // The limit is pinned to the file's exact current size, so it can only shrink.
 const grandfatheredLimits = new Map<string, number>([
-  ["apps/desktop/src/renderer/main.tsx", 4_927],
+  ["apps/desktop/src/renderer/main.tsx", 4_857],
 ]);
 
 function sourceFiles(directory: string): string[] {

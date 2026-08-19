@@ -39,13 +39,11 @@ export function composerTimelineFromEvents(
     items.push({ type: "user", id: "user-prompt", text: visiblePrompt.text, rawText: prompt, reviewFeedback: visiblePrompt.feedback, attachedFiles: [] });
   }
 
-  // Assistant prose renders where it first appeared and never moves again.
-  //
-  // The runner streams the answer as `assistant.delta` while it is generated.
-  // Guided tool-calling steps omit accompanying prose, so orientation and the
-  // tool rows are the mid-run story, and the answer lands in this buffer from
-  // its first token. Mid-plan prose on a step that already has tool results is
-  // the one case that still reaches here — holding it would delay the answer.
+  // Assistant prose is the answer only once nothing follows it. The runner
+  // streams it as `assistant.delta` while it is generated. Guided tool-calling
+  // steps omit accompanying prose, so orientation and the tool rows are the
+  // mid-run story. After tools, a live burst is held inside Working until the
+  // turn ends — it might still be a mid-round report.
   const flushAssistant = (streaming = false) => {
     const text = assistantBuffer.trim();
     if (!text) { assistantBuffer = ""; assistantNeedsSeparator = false; return; }
@@ -120,7 +118,7 @@ export function composerTimelineFromEvents(
     activityEndedAt = undefined;
   };
 
-  const flushReasoning = (finished = true) => {
+  const flushReasoning = (finished = true, held = false) => {
     const text = reasoningBuffer.trim();
     const kind = reasoningKind;
     const startedAt = reasoningStartedAt;
@@ -140,13 +138,13 @@ export function composerTimelineFromEvents(
       durationMs: thoughtDurationMs(startedAt, endedAt, finished),
       finished,
       ...(kind ? { kind } : {}),
+      ...(held ? { held: true } : {}),
     });
   };
 
-  // Prose that arrives before any real work joins the narration inside the
-  // block: it was never rendered anywhere else, so it has no place to keep.
-  // Thinking is a different register, so a live thinking passage is closed
-  // first rather than concatenated into the orientation sentence.
+  // Prose the run wrote before its next piece of work joins the narration
+  // inside the block. Thinking is a different register, so a live thinking
+  // passage is closed first rather than concatenated into the sentence.
   const foldProseIntoNarration = () => {
     if (!assistantBuffer.trim()) return;
     if (reasoningKind === "thinking" && reasoningBuffer.trim()) flushReasoning();
@@ -157,26 +155,23 @@ export function composerTimelineFromEvents(
     reasoningKind = undefined;
   };
 
-  // Streamed prose never relocates. It renders below the open block from its
-  // first token, so when more work follows it, the block above settles, the
-  // prose stands exactly where the user read it, and the new work opens a new
-  // block beneath it. Folding it into the block instead — the previous rule —
-  // moved a paragraph the user was mid-way through reading, which is the flash
-  // this replaces. Guided tool-step preambles stay off this path entirely, so
-  // a split only happens at a substantial mid-turn report, not at every
-  // sentence — the failure that originally motivated folding.
-  const proseStandsOrFolds = () => {
-    if (assistantBuffer.trim() && activityHasTools(activitySegments)) {
-      flushReasoning();
-      flushActivity();
-      flushAssistant();
-      return;
-    }
-    foldProseIntoNarration();
-  };
-
+  // Everything the run says before it goes back to work is narration, wherever
+  // in the turn it was said. A turn is therefore one Working block holding the
+  // whole account of the work — orientation, tools, the report between rounds,
+  // more tools — and the only prose left standing on the page is the answer.
+  //
+  // Letting a mid-turn report stand as its own message instead was the previous
+  // rule, and it split one turn into "Worked for 4 seconds", a muted paragraph,
+  // "Worked for 2 seconds", and only then the answer: three blocks for one
+  // stretch of work, with a sentence marooned between them that read like a
+  // reply and was not one.
+  //
+  // The cost is that a paragraph the reader may be mid-way through moves when
+  // the next tool starts. It moves into the open block directly above it rather
+  // than off the page, and the block is expanded while the run is live, so the
+  // text lands close to where it was — which is the price of not stranding it.
   const narrateAssistantForActivity = () => {
-    proseStandsOrFolds();
+    foldProseIntoNarration();
     flushReasoning();
   };
 
@@ -199,11 +194,12 @@ export function composerTimelineFromEvents(
       continue;
     }
     if (event.type === "assistant.delta") {
-      // The work is over once the model starts speaking, so the first token of a
-      // burst closes the elapsed window. Later tokens of the same answer must not
-      // keep inflating it. A tool afterwards reopens it: the run was not done
-      // talking, and this prose was narration.
-      if (!assistantBuffer) markActivityTime(undefined, event.at);
+      // Direct answers close the wait on the first token. After tools the burst
+      // is still held in Working, so each token can extend the elapsed window
+      // until the turn ends and that passage is promoted out.
+      if (activityHasTools(activitySegments) || !assistantBuffer) {
+        markActivityTime(undefined, event.at);
+      }
       const separator = assistantNeedsSeparator
         && assistantBuffer.trim()
         && !/\s$/.test(assistantBuffer)
@@ -244,10 +240,9 @@ export function composerTimelineFromEvents(
       continue;
     }
     if (event.type === "assistant.progress.delta") {
-      // Prose already buffered came first. Before real work it joins the
-      // passage ahead of this line; after real work it stands where it
-      // streamed, and this line opens the narration of the next block.
-      proseStandsOrFolds();
+      // Prose already buffered came first, so it joins the passage ahead of
+      // this line rather than being interleaved with it.
+      foldProseIntoNarration();
       const nextKind = progressKind(event);
       if (reasoningBuffer.trim() && reasoningKind !== nextKind) flushReasoning();
       reasoningKind = nextKind;
@@ -263,23 +258,21 @@ export function composerTimelineFromEvents(
       // same run, so without this the second answer continued the first one's
       // buffer and the two rendered as a single message.
       //
-      // A stopped turn ends where it was: whatever had streamed stays exactly
-      // where the user saw it, and the Working block settles around the tools
-      // that did run. Prose keeps its place as a message rather than being
-      // folded into the block — nothing follows it now, so it was the last
-      // thing the run said.
+      // After tools, live prose was held inside Working. Ending the turn is
+      // what promotes the last passage out as the answer — including a stop,
+      // which is still the last thing the run said.
       //
       // Block first, then the prose: the work came before the sentence that was
       // still arriving when the turn ended.
       flushReasoning();
+      if (activityHasTools(activitySegments)) markActivityTime(undefined, event.at);
       flushActivity();
       flushAssistant();
       continue;
     }
     if (event.type === "assistant.done") {
       flushReasoning();
-      // Streaming the answer is not work, so completing it does not extend the
-      // elapsed window either.
+      if (activityHasTools(activitySegments)) markActivityTime(undefined, event.at);
       flushActivity();
       flushAssistant();
 
@@ -441,18 +434,23 @@ export function composerTimelineFromEvents(
       flushAssistant();
     }
   }
-  // Trailing text is flushed as an assistant message whether or not the run has
-  // settled, so a streaming answer renders outside the Working block from its
-  // first token rather than appearing there once the run finishes.
-  //
-  // An answer under way also settles the block above it. The work is what the
-  // block is timing, and the model has moved on from it — leaving a clock
-  // ticking on finished work while the reply streams underneath reads as though
-  // two things are happening at once.
+  // After tools have run, live prose stays inside Working until the turn ends.
+  // It might still be a mid-round report; promoting it on the first token made
+  // that report look like the answer, then jump back in when the next tool
+  // started. Direct answers (no tools yet) still stream outside from the first
+  // token, so a question with no work never grows a Working block around the
+  // reply.
   const answering = assistantBuffer.trim().length > 0;
-  flushReasoning(taskState !== "running" || answering);
-  flushActivity(taskState !== "running" || answering);
-  flushAssistant(taskState === "running");
+  const holdInBlock = taskState === "running" && answering && activityHasTools(activitySegments);
+  if (holdInBlock) {
+    foldProseIntoNarration();
+    flushReasoning(false, true);
+    flushActivity(false);
+  } else {
+    flushReasoning(taskState !== "running" || answering);
+    flushActivity(taskState !== "running" || answering);
+    flushAssistant(taskState === "running");
+  }
 
   // The turn's answer is the prose nothing follows *within its own turn*.
   // Deciding it by position rather than by the run having settled is what keeps

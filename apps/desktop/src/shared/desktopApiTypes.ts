@@ -596,7 +596,7 @@ export type SystemProfile = {
   quality: "optimal" | "good" | "cpu";
 };
 
-export type { LocalCatalogModel, LocalCatalogModelKind, LocalModelQuant, ModelDownloadEvent } from "./localModels";
+export type { LocalCatalogModel, LocalCatalogModelKind, LocalMemoryFit, LocalModelQuant, ModelDownloadEvent } from "./localModels";
 
 export type DesktopApi = {
   listProjects(): Promise<RepositoryInfo[]>;
@@ -755,6 +755,9 @@ export type DesktopApi = {
     contextLength: number;
     status: BackendStatus;
   }>;
+  /** Whether local models draft from their multi-token-prediction head. */
+  getLocalMtp(): Promise<boolean>;
+  saveLocalMtp(input: boolean): Promise<{ mtp: boolean; status: BackendStatus }>;
   getReasoningEffort(): Promise<ReasoningEffort>;
   saveReasoningEffort(input: ReasoningEffort): Promise<{
     reasoningEffort: ReasoningEffort;

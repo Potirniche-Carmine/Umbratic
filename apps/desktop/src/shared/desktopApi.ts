@@ -51,6 +51,8 @@ export const desktopIpcChannels = {
   saveHarnessProfile: "umbratic:save-harness-profile",
   getContextLength: "umbratic:get-context-length",
   saveContextLength: "umbratic:save-context-length",
+  getLocalMtp: "umbratic:get-local-mtp",
+  saveLocalMtp: "umbratic:save-local-mtp",
   getReasoningEffort: "umbratic:get-reasoning-effort",
   saveReasoningEffort: "umbratic:save-reasoning-effort",
   saveShowThinking: "umbratic:save-show-thinking",

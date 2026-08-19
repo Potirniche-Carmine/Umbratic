@@ -1,7 +1,7 @@
 import { getMainWindow } from "./mainRuntime";
 import { setMainWindow, setPermissionModeValue } from "./mainRuntime";
 import { onWorkspaceIndexProgress } from "./indexerService";
-import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveReasoningEffortSetting, saveShowThinkingSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
+import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveLocalMtpSetting, saveReasoningEffortSetting, saveShowThinkingSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
 import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
 import { clearUnsavedDraft, readUnsavedDraft, writeUnsavedDraft } from "./unsavedDrafts";
 import { createCheckpoint, deleteCheckpoint, forkCheckpoint, listTaskCheckpoints, restoreCheckpoint, setCheckpointPinned } from "./checkpointActions";
@@ -57,6 +57,7 @@ import { systemProfile } from "./hardware";
 import {
   readChats,
   readContextLengthSetting,
+  readLocalMtpSetting,
   readReasoningEffortSetting,
   readDictationSettings,
   readKeyBindings,
@@ -414,7 +415,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
       listLocalModels(app.getPath("userData"), input?.kind === "dictation" ? "dictation" : "chat"),
     downloadLocalModel: async (input) => {
       try {
-        const model = resolveLocalModel(String(input?.id ?? ""));
+        const model = resolveLocalModel(String(input?.id ?? ""), app.getPath("userData"));
         if (!model) throw new Error("That model is not in the collection.");
         await downloadLocalModel(app.getPath("userData"), model, selectedQuant(model));
         return { ok: true as const };
@@ -430,7 +431,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
       return { ok: true as const };
     },
     setLocalModelQuant: async (input) => {
-      const model = resolveLocalModel(String(input?.id ?? ""));
+      const model = resolveLocalModel(String(input?.id ?? ""), app.getPath("userData"));
       const quant = String(input?.quant ?? "");
       if (!model) return { ok: false as const, message: "That model is not in the collection." };
       if (!model.quants.some((entry) => entry.quant === quant)) {
@@ -483,6 +484,8 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     saveHarnessProfile: (input) => saveHarnessProfileSetting(input),
     getContextLength: () => readContextLengthSetting(),
     saveContextLength: (input) => saveContextLengthSetting(input),
+    getLocalMtp: () => readLocalMtpSetting(),
+    saveLocalMtp: (input) => saveLocalMtpSetting(input),
     getReasoningEffort: () => readReasoningEffortSetting(),
     saveReasoningEffort: (input) => saveReasoningEffortSetting(input),
     saveShowThinking: (input) => saveShowThinkingSetting(input),

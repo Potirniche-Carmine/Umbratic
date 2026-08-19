@@ -40,6 +40,7 @@ import type {
 import { type ContextPromptPart } from "./promptContext";
 import {
   appendTaskEvent,
+  appendTaskEvents,
   compactTaskEvents,
   filterReviewPaths,
   hiddenRendererReviewPaths,
@@ -229,7 +230,7 @@ export function taskWithAppendedEvents(task: TaskRecord, events: BackendUiEvent[
   if (events.length === 0) return task;
   return {
     ...task,
-    events: events.reduce<BackendUiEvent[]>((current, event) => appendTaskEvent(current, event, 500), task.events ?? []),
+    events: appendTaskEvents(task.events ?? [], events, 500),
   };
 }
 

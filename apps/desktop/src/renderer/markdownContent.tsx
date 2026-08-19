@@ -312,17 +312,33 @@ export function MarkdownContent({
   trailingInline,
 }: { content: string; trailingInline?: React.ReactNode } & ReviewReferenceOptions) {
   const blocks = useMemo(() => parseMarkdown(content), [content]);
+  const blockKeys = useMemo(() => blocks.map((block) => JSON.stringify(block)), [blocks]);
   const referenceOptions = useMemo(() => ({ onReviewFileClick, reviewFiles }), [onReviewFileClick, reviewFiles]);
+  // Everything but the last block goes through the memo, same as the streaming
+  // path. A settled message re-renders whenever anything in the app does, and
+  // in a long chat that is every message on every streamed token; the memo
+  // means React reconciles the paragraphs it already has only when their own
+  // text changes. The last block stays direct because it carries the caller's
+  // trailing node, which the memo deliberately does not compare.
   return (
     <div className="markdownContent">
-      {blocks.map((block, index) => (
-        <MarkdownBlockView
-          key={index}
-          block={block}
-          referenceOptions={referenceOptions}
-          trailingInline={index === blocks.length - 1 ? trailingInline : undefined}
-        />
-      ))}
+      {blocks.map((block, index) =>
+        index < blocks.length - 1 ? (
+          <MemoizedMarkdownBlockView
+            key={index}
+            block={block}
+            blockKey={blockKeys[index]}
+            referenceOptions={referenceOptions}
+          />
+        ) : (
+          <MarkdownBlockView
+            key={index}
+            block={block}
+            referenceOptions={referenceOptions}
+            trailingInline={trailingInline}
+          />
+        ),
+      )}
     </div>
   );
 }

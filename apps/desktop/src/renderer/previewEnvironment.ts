@@ -101,6 +101,8 @@ function createPreviewApi(): DesktopApi {
   let previewCompanyConnection: CompanyConnectionStatus = { state: "not_enrolled" };
   let previewCompanySessionConnected = false;
   const previewUnsavedDrafts = new Map<string, UnsavedChatDraft>();
+let previewLocalMtp = true;
+
   const previewApi: DesktopApi = {
   listProjects: async () => readPreviewProjects(),
   listChats: async () => readPreviewChats(),
@@ -397,6 +399,11 @@ function createPreviewApi(): DesktopApi {
     const contextLength = normalizeContextLength(input);
     writePreviewContextLength(contextLength);
     return { contextLength, status: await previewApi.getBackendStatus() };
+  },
+  getLocalMtp: async () => previewLocalMtp,
+  saveLocalMtp: async (input) => {
+    previewLocalMtp = input !== false;
+    return { mtp: previewLocalMtp, status: await previewApi.getBackendStatus() };
   },
   getModelEndpointSettings: async () => readPreviewEndpointSettings(),
   getDictationSettings: async () => ({ model: "off" as const, language: null, deviceId: null }),

@@ -73,6 +73,8 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["saveHarnessProfile", ["marketing"], "umbratic:save-harness-profile"],
     ["getContextLength", [], "umbratic:get-context-length", undefined],
     ["saveContextLength", [64000], "umbratic:save-context-length"],
+    ["getLocalMtp", [], "umbratic:get-local-mtp", undefined],
+    ["saveLocalMtp", [false], "umbratic:save-local-mtp"],
     ["saveShowThinking", [true], "umbratic:save-show-thinking"],
     ["getModelEndpointSettings", [{ mode: "local" }], "umbratic:get-model-endpoint-settings"],
     ["getDictationSettings", [], "umbratic:get-dictation-settings", undefined],

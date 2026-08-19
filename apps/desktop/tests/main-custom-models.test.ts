@@ -179,7 +179,7 @@ test("the active quantization follows the choice only once it is on disk", (t) =
   // failing assertion leaves nothing behind either: without it every run of
   // the suite abandoned another few gigabytes in the system temp directory.
   t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }));
-  const model = catalog.catalogModel("gemma4-e2b");
+  const model = catalog.catalogModel("gemma4-12b");
   const q4 = catalog.defaultQuant(model);
   const q6 = model.quants.find((quant: { quant: string }) => quant.quant === "Q6_K");
 
@@ -188,11 +188,22 @@ test("the active quantization follows the choice only once it is on disk", (t) =
   assert.equal(localModels.activeQuant(dataRoot, model), null);
   assert.equal(localModels.selectedLocalChatModel(dataRoot, model.id), null);
 
-  // The default lands on disk at its exact size.
+  // The weights alone are not the download: Gemma 12B's drafting head travels
+  // with them, and a quantization counts as here only when both are.
   fs.mkdirSync(downloads.modelDirectory(dataRoot, model), { recursive: true });
   const q4Path = downloads.modelFilePath(dataRoot, model, q4.files[0]);
   writeSizedPlaceholder(q4Path, q4.files[0].bytes);
+  assert.equal(localModels.activeQuant(dataRoot, model), null);
+  const head = catalog.quantMtpFile(q4);
+  assert.ok(head, "Gemma 4 12B ships its MTP head with every quantization");
+  writeSizedPlaceholder(downloads.modelFilePath(dataRoot, model, head), head.bytes);
   assert.equal(localModels.activeQuant(dataRoot, model).quant, "Q4_K_M");
+  // With drafting on, the head is named to llama-server; off, it is not.
+  assert.equal(
+    localModels.localModelMtp(dataRoot, model, true)?.draftFile,
+    downloads.modelFilePath(dataRoot, model, head),
+  );
+  assert.equal(localModels.localModelMtp(dataRoot, model, false), null);
   assert.equal(localModels.selectedLocalChatModel(dataRoot, model.id)?.id, model.id);
 
   // Choosing Q6_K before downloading it keeps the working Q4_K_M running.
@@ -201,6 +212,7 @@ test("the active quantization follows the choice only once it is on disk", (t) =
   assert.equal(localModels.activeQuant(dataRoot, model).quant, "Q4_K_M");
 
   // Once Q6_K is on disk the choice takes over, including the weights path.
+  // The head is the same file for every quantization, so it is already here.
   const q6Path = downloads.modelFilePath(dataRoot, model, q6.files[0]);
   writeSizedPlaceholder(q6Path, q6.files[0].bytes);
   assert.equal(localModels.activeQuant(dataRoot, model).quant, "Q6_K");
@@ -214,4 +226,8 @@ test("the active quantization follows the choice only once it is on disk", (t) =
     row.quants.filter((quant: { downloaded: boolean }) => quant.downloaded).map((quant: { quant: string }) => quant.quant).sort().join(","),
     "Q4_K_M,Q6_K",
   );
+
+  // Mixture-of-experts keep their nextn tensors; we still do not draft from them.
+  assert.equal(localModels.localModelMtp(dataRoot, catalog.catalogModel("ornith-1.5-35b-a3b"), true), null);
+  assert.equal(localModels.localModelMtp(dataRoot, catalog.catalogModel("gemma4-e2b"), true), null);
 });

@@ -241,7 +241,7 @@
 /* The title of the row. A step up from the note under it in size and weight
    both, so which one is the model's name is never a question. */
 .localModelName {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   font-size: 13px;
   font-weight: 640;
@@ -251,35 +251,141 @@
   white-space: nowrap;
 }
 
+/*
+ * The heading that splits what is here from what is a download away.
+ *
+ * A label, its count, and a rule running out to the edge. The rule is the part
+ * that works: in a menu long enough to scroll, a row of small caps on its own
+ * reads as one more faint line among the rows rather than as the seam between
+ * two different kinds of thing. What is on the machine is stated in the text
+ * colour; what is only on offer steps back.
+ */
+.localModelSection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  padding: 0 9px;
+  font-size: 9.75px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.localModelSection:first-child {
+  margin-top: 2px;
+}
+
+.localModelSectionLabel {
+  flex: 0 0 auto;
+}
+
+.localModelSectionCount {
+  flex: 0 0 auto;
+  min-width: 15px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-3) 78%, transparent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.localModelSectionRule {
+  flex: 1 1 auto;
+  height: 1px;
+  min-width: 12px;
+  background: currentColor;
+  opacity: 0.4;
+}
+
+.localModelSection.is-here {
+  color: color-mix(in srgb, var(--text) 62%, var(--accent));
+}
+
+/* A gap wider than the one between rows, so the seam is felt as well as seen. */
+.localModelSection.is-away {
+  margin-top: 14px;
+  color: var(--faint);
+}
+
 /* The controls, on one line that never wraps. */
 .localModelRowMain {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-height: 30px;
   min-width: 0;
 }
 
 /*
- * What the model is for, on its own line under the row's controls.
+ * Every control on the row, kept together at the right edge.
  *
- * Given the whole row rather than a column beside the size and the
- * quantization: as a column it would be narrower on any row that also carries
- * a badge, so the one row with a "Recommended" pill would be the one whose
- * sentence got cut.
- *
- * Two lines at most, so a long sentence cannot turn one row into a paragraph.
- * Scoped to the row so it outranks `.modelPicker span`, which holds every span
- * in this dropdown to one unwrapped line — right for a trigger's label, wrong
- * for the only sentence in the list.
+ * Fixed width by design: without it the name is the only flexible thing on the
+ * line, so each control added to a row came out of the name, and a row with a
+ * quantization, a size, and an Unload button showed a model called "Q…".
+ */
+.localModelRowSide {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-left: 4px;
+}
+
+/*
+ * The line under the row's controls: the model's role on the left, its memory
+ * fit on the right. Given the whole row rather than a column beside the size
+ * and the quantization: as a column it would be narrower on any row that also
+ * carries a badge, so the one row with a "Recommended" pill would be the one
+ * whose sentence got cut.
+ */
+.localModelRow .localModelRowUnder {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  margin: -1px 0 4px;
+}
+
+/* The memory verdict, in the register of the size it sits under: small,
+   tabular, flush right. Amber for a machine that will feel it, plain red-muted
+   for one that does not have the room — said, never shouted, and never used to
+   take the row away. */
+.localModelRow .localModelFit {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-top: 1px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.localModelRow .localModelFit.is-tight {
+  color: color-mix(in srgb, var(--amber) 80%, var(--muted));
+}
+
+.localModelRow .localModelFit.is-exceeds {
+  color: color-mix(in srgb, var(--red) 62%, var(--muted));
+}
+
+/*
+ * What the model is for. Two lines at most, so a long sentence cannot turn one
+ * row into a paragraph. Scoped to the row so it outranks `.modelPicker span`,
+ * which holds every span in this dropdown to one unwrapped line — right for a
+ * trigger's label, wrong for the only sentence in the list.
  */
 .localModelRow .localModelRole {
+  flex: 1 1 auto;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
   min-width: 0;
-  margin: -1px 0 4px;
   color: var(--faint);
   /* Clearly subordinate to the name above it: smaller, lighter, and dimmer, so
      the row reads as a title with a note under it rather than as two lines of
@@ -312,6 +418,23 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * A plain fact about the model — that it drafts, that it is uncensored, that it
+ * was found in the folder rather than downloaded here. Said as small text
+ * beside the name, not as an outlined pill: three pills on one row is three
+ * things asking to be read first, and a fact is not an invitation.
+ */
+.localModelTrait {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* The one mark that is a suggestion rather than a fact keeps its pill. */
 .localModelBadge {
   flex: 0 0 auto;
   padding: 1px 7px;
@@ -321,12 +444,6 @@
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-}
-
-/* A statement of fact about the model, not a suggestion to pick it. */
-.localModelBadge.isPlain {
-  border-color: color-mix(in srgb, var(--line) 84%, transparent);
-  color: var(--faint);
 }
 
 .localModelProgress {
@@ -404,7 +521,7 @@
 }
 
 .quantPickerMenu {
-  width: 196px;
+  width: 240px;
   right: 0;
   left: auto;
   /* Portalled to <body> so the scrolling model menu cannot clip it, which puts
@@ -417,11 +534,29 @@
   gap: 8px;
 }
 
+/* Neither the label nor the size gives way: they are the two facts the row
+   exists to state, and an ellipsis in either is the row saying nothing. */
+.quantPickerOption .modelPickerOptionName,
+.quantPickerSize {
+  flex: 0 0 auto;
+}
+
 .quantPickerSize {
   margin-left: auto;
   color: var(--faint);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A size this machine will feel, or does not have, says so in its colour — the
+   same two colours the model rows use, so the picker and the list agree. */
+.quantPickerSize.is-tight {
+  color: color-mix(in srgb, var(--amber) 80%, var(--muted));
+}
+
+.quantPickerSize.is-exceeds {
+  color: color-mix(in srgb, var(--red) 62%, var(--muted));
 }
 
 /* The model's default quantization — the one to take when unsure. Overrides
@@ -489,6 +624,42 @@
   font-size: 10.5px;
   font-weight: 650;
   white-space: nowrap;
+}
+
+/* The drafting switch: a statement and a control, in the register of the
+   folder line under it rather than of a boxed settings row — it is one more
+   fact about the collection, not a section of its own. */
+.localMtpRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 2px;
+  padding: 2px 2px 0;
+}
+
+.localMtpText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.localMtpText strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.localMtpText span {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.localMtpRow .toggle {
+  flex: 0 0 auto;
 }
 
 /* The way in for a model the catalog does not carry. */

@@ -3,6 +3,7 @@ import { normalizeRelativePath } from "./utils";
 import { isDocumentReviewSidecarPath } from "../shared/documentReview";
 import {
   appendTaskEvent as appendSharedTaskEvent,
+  appendTaskEvents as appendSharedTaskEvents,
   compactTaskEvents as compactSharedTaskEvents,
   taskEventSignature,
 } from "../shared/taskEvents";
@@ -20,6 +21,10 @@ export function visibleTaskEvents(events: BackendUiEvent[]): BackendUiEvent[] {
 
 export function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit: number): BackendUiEvent[] {
   return appendSharedTaskEvent(visibleTaskEvents(events), event, limit) as BackendUiEvent[];
+}
+
+export function appendTaskEvents(events: BackendUiEvent[], batch: readonly BackendUiEvent[], limit: number): BackendUiEvent[] {
+  return appendSharedTaskEvents(visibleTaskEvents(events), batch, limit) as BackendUiEvent[];
 }
 
 export function compactTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEvent[] {

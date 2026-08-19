@@ -164,6 +164,29 @@
   margin-top: 4px;
 }
 
+.shortcutFooter .settingsMessage {
+  /* The sentence takes the wrapping. The button beside it is two words that
+     mean nothing broken across two lines, and it was the half giving way. */
+  min-width: 0;
+}
+
+.shortcutResetAllButton {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* Undoing work is a quieter thing than doing it: the button reads as text with
+   an icon until the cursor is on it, and only then draws its own edge. */
+.shortcutResetAllButton:not(:hover):not(:focus-visible) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.shortcutResetAllButton:hover {
+  color: var(--text);
+}
+
 @keyframes shortcutListeningPulse {
   50% {
     border-color: var(--line);

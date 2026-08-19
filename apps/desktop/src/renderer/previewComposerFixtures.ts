@@ -19,6 +19,9 @@ const composerTestRunning = composerTestParams.get("composerTest") === "running"
 const composerTestDirectAnswer = composerTestParams.has("directAnswer");
 const composerTestWaitingOnly = composerTestParams.has("waitingOnly");
 const composerTestEscapedPlan = composerTestParams.has("escapedPlan");
+// A turn that goes back to work after reporting on the round it just finished.
+// Everything it said belongs in the one Working block; only the reply stands.
+const composerTestMultiRound = composerTestParams.has("multiRound");
 // A conversation that has moved on. The answer to the first question has to
 // still read as an answer once the second one is asked.
 const composerTestTwoTurns = composerTestParams.has("twoTurns");
@@ -31,7 +34,7 @@ const composerTestLiveWork = composerTestParams.has("liveWork");
 const composerTestTurnOutcome = ["model_gave_up", "safety_limit"].includes(composerTestParams.get("turnOutcome") ?? "")
   ? composerTestParams.get("turnOutcome") as "model_gave_up" | "safety_limit"
   : null;
-const composerTestAttachments: ChatAttachment[] = composerTestDirectAnswer || composerTestWaitingOnly || composerTestEscapedPlan || composerTestParallelWeb ? [] : [
+const composerTestAttachments: ChatAttachment[] = composerTestDirectAnswer || composerTestWaitingOnly || composerTestEscapedPlan || composerTestMultiRound || composerTestParallelWeb ? [] : [
   { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
   { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
 ];
@@ -111,8 +114,8 @@ const composerTestStageEvents: BackendUiEvent[] = composerTestStage ? [
     { type: "command.started" as const, taskId: "composer-test", id: "stage-curl", command: "curl -s localhost:3000/health", cwd: "/workspace/Umbratic", kind: "bash" as const, commandClass: "network" as const, at: new Date(Date.now() - 5_000).toISOString() },
     { type: "command.output" as const, taskId: "composer-test", id: "stage-curl", stream: "stdout" as const, text: "{\"status\":\"ok\"}\n", at: new Date(Date.now() - 4_000).toISOString() },
     { type: "command.finished" as const, taskId: "composer-test", id: "stage-curl", exitCode: 0, at: new Date(Date.now() - 3_000).toISOString() },
-    // No `assistant.done`: the answer is still arriving, which is what puts the
-    // caret at the end of it and keeps the actions off it.
+    // No `assistant.done`: the answer is still arriving, so it stays inside
+    // the open Working block with a caret, and the message actions stay off it.
     { type: "assistant.delta" as const, taskId: "composer-test", text: "The endpoint is live at `/health` and returns `{\"status\":\"ok\"}`.\n\nIt is registered before the auth middleware, so an uptime check can reach it without a", at: new Date(Date.now() - 1_000).toISOString() },
   ] : []),
 ] : [];
@@ -156,6 +159,20 @@ const composerTestEvents: BackendUiEvent[] = composerTestTour ? composerTestTour
   { type: "assistant.done", taskId: "composer-test", at: new Date().toISOString() },
 ] : composerTestWaitingOnly ? [
   { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 8_000).toISOString() },
+] : composerTestMultiRound ? [
+  { type: "user.message", taskId: "composer-test", text: "don’t you have a web search tool?", at: new Date(Date.now() - 12_000).toISOString() },
+  { type: "assistant.delta", taskId: "composer-test", text: "You’re right — I do have a web search tool. Let me pull today’s news.", at: new Date(Date.now() - 11_500).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "search-top", command: "web_search top stories today", cwd: "/workspace/Umbratic", kind: "read", commandClass: "network", toolKind: "web_search", at: new Date(Date.now() - 11_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "search-top", exitCode: 0, at: new Date(Date.now() - 10_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "search-good", command: "web_search good news today", cwd: "/workspace/Umbratic", kind: "read", commandClass: "network", toolKind: "web_search", at: new Date(Date.now() - 10_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "search-good", exitCode: 0, at: new Date(Date.now() - 9_000).toISOString() },
+  { type: "assistant.delta", taskId: "composer-test", text: "Yes, I do — let me read the two most promising pages before I summarize.", at: new Date(Date.now() - 8_500).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "read-ap", command: "web_fetch apnews.com", cwd: "/workspace/Umbratic", kind: "read", commandClass: "network", toolKind: "web_fetch", at: new Date(Date.now() - 8_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "read-ap", exitCode: 0, at: new Date(Date.now() - 6_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "read-good", command: "web_fetch goodnewsnetwork.org", cwd: "/workspace/Umbratic", kind: "read", commandClass: "network", toolKind: "web_fetch", at: new Date(Date.now() - 6_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "read-good", exitCode: 0, at: new Date(Date.now() - 4_000).toISOString() },
+  { type: "assistant.delta", taskId: "composer-test", text: "Here’s what’s going on today.\n\n* **Tariffs delayed.** A three-day extension on the 50% Canada tariffs.\n* **A gold hoard.** A construction worker struck a gold bar under an old brewery.\n* **A booster landed.** LandSpace joined the reusable-rocket club.", at: new Date(Date.now() - 2_000).toISOString() },
+  { type: "assistant.done", taskId: "composer-test", at: new Date().toISOString() },
 ] : composerTestEscapedPlan ? [
   { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 11_000).toISOString() },
   // Orientation and other run narration land inside the Working block.

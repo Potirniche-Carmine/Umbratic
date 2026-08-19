@@ -19,6 +19,7 @@ export type ShortcutId =
   | "dictation.toggle"
   | "chat.new"
   | "chat.jump"
+  | "chat.delete"
   | "app.settings"
   | "app.shortcuts"
   | "review.toggle"
@@ -84,6 +85,17 @@ export const shortcuts: readonly ShortcutDefinition[] = [
     detail: "Hold the modifier to number the first nine chats in the sidebar, then press that number to open one.",
     display: ["1"],
     displayPrimary: true,
+  },
+  {
+    id: "chat.delete",
+    section: "Chats and panels",
+    label: "Delete this chat",
+    // Backspace with both modifiers, the way the Finder and every mail client
+    // spell "throw this away" — and never Backspace alone, which is a key the
+    // prompt box needs far more often than the sidebar does. The chord asks
+    // before it deletes: the same confirmation the trash button raises.
+    detail: "Asks before deleting the chat you are in.",
+    binding: { key: "Backspace", primary: true, shift: true },
   },
   {
     id: "review.toggle",

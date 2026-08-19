@@ -56,6 +56,7 @@ import {
 import {
   hasStoredModelEndpointSettings,
   readContextLengthSetting,
+  readLocalMtpSetting,
   readDictationSettings,
   readLocalDiagnosticInfo,
   readLocalDiagnostics,
@@ -70,6 +71,7 @@ import {
   clearLocalDiagnostics,
   writeHarnessProfileSetting,
   writeContextLengthSetting,
+  writeLocalMtpSetting,
   writeReasoningEffortSetting,
   writeShowThinkingSetting,
   writeDictationSettings,
@@ -333,6 +335,18 @@ export async function saveContextLengthSetting(input: unknown) {
   return { contextLength, status };
 }
 
+/** MTP is a llama-server flag, so changing it means the sidecar comes back up. */
+export async function saveLocalMtpSetting(input: unknown) {
+  if (activeRunnerProcesses.size > 0) {
+    throw new Error("Wait for the active run to finish before changing this.");
+  }
+  const wasRunning = currentLocalVeilConnection() !== null;
+  const mtp = writeLocalMtpSetting(input);
+  stopLocalVeil();
+  const status = await getBackendStatus(wasRunning ? "always" : "never");
+  return { mtp, status };
+}
+
 /**
  * Changing the dictation model changes what local Veil advertises, and Veil
  * learns that from its environment, so the chain restarts. The ASR sidecar
@@ -392,6 +406,7 @@ export async function resolveSelectedModel(
           dataRoot: app.getPath("userData"),
           settings,
           contextLength: readContextLengthSetting(),
+          mtp: readLocalMtpSetting(),
           dictation: readDictationSettings(),
           reasoningEffort: readReasoningEffortSetting(),
           onLlamaDiagnostic: (diagnostic) => recordLocalDiagnostic({ ...diagnostic, source: "desktop" }),
@@ -425,7 +440,7 @@ export async function resolveSelectedModel(
   // Whether the model takes direction on how hard to think comes from the
   // catalog, not from Veil: llama-server does not publish what its chat
   // template reads, and the catalog is where that was reviewed and recorded.
-  const localEntry = settings.mode === "local" ? resolveLocalModel(settings.modelId) : null;
+  const localEntry = settings.mode === "local" ? resolveLocalModel(settings.modelId, app.getPath("userData")) : null;
   // The catalog's answer stands on its own: it is what was reviewed and
   // recorded, and a health payload that says nothing about capabilities must
   // not take the effort levels down with it.

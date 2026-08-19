@@ -129,6 +129,7 @@ export function reconcileActivityDisclosureState(
   items: ComposerTimelineItem[],
   taskId: string | undefined,
   currentAutoOpenedKeys: Set<string>,
+  keepFinishedOpen = false,
 ): { expandedIds: Set<string>; autoOpenedKeys: Set<string>; newlyOpenedIds: string[] } {
   const activities = items.filter(
     (item): item is Extract<ComposerTimelineItem, { type: "activity" }> => item.type === "activity",
@@ -153,7 +154,11 @@ export function reconcileActivityDisclosureState(
       newlyOpenedIds.push(activity.id);
       continue;
     }
-    if ((!opensLive || activity.finished) && nextAutoOpenedKeys.delete(key)) {
+    if ((!opensLive || activity.finished) && nextAutoOpenedKeys.has(key)) {
+      // Keep the block open while the last passage lifts out of it, so the
+      // answer restyles in place rather than dropping as the log tucks away.
+      if (keepFinishedOpen && activity.finished) continue;
+      nextAutoOpenedKeys.delete(key);
       nextExpandedIds.delete(activity.id);
     }
   }
