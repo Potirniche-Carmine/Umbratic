@@ -62,11 +62,22 @@
 }
 
 /* Thinking is the model's private scratch, shown only when asked. It stays
-   inside the Working block beside orientation, but quieter so the plan is
-   still the thing you read. Mixing toward `--muted` lifted it; mixing toward
-   `--bg` keeps it below the header and the orientation sentence. */
+   inside the Working block beside orientation, but quieter and in italics so
+   the plan is still the thing you read. Mixing toward `--muted` lifted it;
+   mixing toward `--bg` keeps it below the header and the orientation sentence. */
+.activityThinkingLabel {
+  display: block;
+  margin: 0 0 4px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.35;
+}
+
 .activityLogEntry.reasoningLog.isThinking .workMarkdownContent .markdownContent {
   color: color-mix(in srgb, var(--faint) 72%, var(--bg));
+  font-style: italic;
 }
 
 .activityLogEntry.reasoningLog.isThinking .workMarkdownContent .markdownContent h3,
@@ -78,7 +89,12 @@
 .activityLogEntry.reasoningLog.isThinking .workMarkdownContent .markdownContent em,
 .activityLogEntry.reasoningLog.isThinking .workMarkdownContent .markdownContent code {
   color: inherit;
+  font-style: normal;
   background: color-mix(in srgb, var(--faint) 12%, transparent);
+}
+
+.activityLogEntry.reasoningLog.isThinking .workMarkdownContent .markdownCodeBlock {
+  font-style: normal;
 }
 
 /* A tool row is the same register as the header above it and the narration

@@ -38,7 +38,7 @@ export type LocalCatalogModel = {
   recommended: boolean;
   /** Safety training removed. Shown, never suggested. */
   uncensored: boolean;
-  /** Carries a multi-token-prediction head, so it decodes faster when MTP is on. */
+  /** Dense model that drafts from its multi-token-prediction head when MTP is on. */
   mtp: boolean;
   /**
    * What the model is for, in a tag and a sentence. Absent for dictation
@@ -48,6 +48,11 @@ export type LocalCatalogModel = {
   role?: { label: string; detail: string };
   /** Added by the user from a Hugging Face reference, so it can be removed too. */
   custom: boolean;
+  /**
+   * Found in the models folder rather than downloaded here: nothing was
+   * reviewed, verified, or pinned, and there is nothing to fetch.
+   */
+  discovered: boolean;
   selectedQuant: string;
   quants: LocalModelQuant[];
   /** The fit of `selectedQuant`, repeated here so the row need not look it up. */

@@ -14,7 +14,8 @@ function fitFor(neededRamGB: number): LocalMemoryFit {
  * Chosen to put every state the list can be in on one screen: one model already
  * downloaded, several only an icon away, one suggestion, a row larger than the
  * machine has, the uncensored builds that are offered but never suggested,
- * and custom additions with their remove control.
+ * custom additions with their remove control, and a model found sitting in the
+ * models folder.
  */
 export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] {
   const row = (
@@ -22,7 +23,15 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
     displayName: string,
     bytes: number,
     minRamGB: number,
-    extra: { recommended?: boolean; downloaded?: boolean; uncensored?: boolean; mtp?: boolean; custom?: boolean; role?: LocalCatalogModel["role"] } = {},
+    extra: {
+      recommended?: boolean;
+      downloaded?: boolean;
+      uncensored?: boolean;
+      mtp?: boolean;
+      custom?: boolean;
+      discovered?: boolean;
+      role?: LocalCatalogModel["role"];
+    } = {},
   ): LocalCatalogModel => {
     const quantRow = (quant: string, scale: number, recommended: boolean) => {
       const needed = Math.ceil(minRamGB * scale);
@@ -45,6 +54,7 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
       mtp: extra.mtp === true,
       ...(extra.role ? { role: extra.role } : {}),
       custom: extra.custom === true,
+      discovered: extra.discovered === true,
       selectedQuant: kind === "dictation" ? "Q8_0" : "Q4_K_M",
       quants: kind === "dictation"
         ? [quantRow("Q8_0", 1, true)]
@@ -80,10 +90,13 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
   };
   // Downloaded first, matching the main process's ordering.
   return [
-    row("gemma4-e2b", "Gemma 4 E2B", 3_204_555_936, 8, { downloaded: true, mtp: true, role: chatRole }),
+    row("gemma4-e2b", "Gemma 4 E2B", 3_106_738_272, 8, { downloaded: true, role: chatRole }),
     row("custom-thebloke-mistral-7b", "Mistral 7B Instruct", 4_368_439_296, 8, { custom: true, downloaded: true }),
     row("custom-glm-4.7", "GLM 4.7", 68_900_000_000, 96, { custom: true }),
-    row("gemma4-e4b", "Gemma 4 E4B", 5_075_824_832, 12, { mtp: true, role: chatRole }),
+    // A GGUF somebody put in the models folder themselves: here, runnable, and
+    // nothing this collection has read a card for.
+    row("local-qwen3-coder-30b", "Qwen3 Coder 30B", 18_600_000_000, 28, { downloaded: true, discovered: true }),
+    row("gemma4-e4b", "Gemma 4 E4B", 4_977_171_584, 12, { role: chatRole }),
     row("gemma4-12b", "Gemma 4 12B", 7_586_970_688, 16, {
       mtp: true,
       role: {
@@ -92,7 +105,6 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
       },
     }),
     row("ornith-1.5-35b-a3b", "Ornith 1.5 35B A3B", 21_713_462_848, 32, {
-      mtp: true,
       role: {
         label: "Agentic coding",
         detail: "Trained for terminal coding agents and tool calling. Mixture-of-experts, so it answers fast for its size.",

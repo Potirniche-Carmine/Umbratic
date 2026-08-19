@@ -673,7 +673,6 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
               loading={localModelLoading || refreshing}
               loaded={backend?.endpoint === "ready" || backend?.endpoint === "degraded"}
               placeholder="Choose or download a model"
-              system={backend?.system ?? null}
               onSelect={(modelId) => void controller.selectLocalModel(modelId)}
               onDownload={(modelId) => void localCatalog.download(modelId)}
               onCancel={(modelId) => void localCatalog.cancel(modelId)}

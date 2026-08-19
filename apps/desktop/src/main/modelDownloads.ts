@@ -52,7 +52,9 @@ function publish(event: ModelDownloadEvent): void {
 }
 
 export function modelDirectory(dataRoot: string, model: CatalogModel): string {
-  return path.join(modelsDirectory(dataRoot), model.id);
+  // A discovered model names its own directory: its files were put there by
+  // hand, under whatever name the person who put them there chose.
+  return model.localDirectory ?? path.join(modelsDirectory(dataRoot), model.id);
 }
 
 export function modelFilePath(dataRoot: string, model: CatalogModel, file: CatalogFile): string {
@@ -281,6 +283,9 @@ async function downloadFile(
  */
 export async function downloadLocalModel(dataRoot: string, model: CatalogModel, quant: CatalogQuant): Promise<void> {
   if (active) throw new Error("Another model is already downloading.");
+  // Nothing to fetch and nothing to verify against: these files are only known
+  // because they are already on disk.
+  if (model.discovered) throw new Error("That model is already in the models folder.");
 
   const { id } = model;
   const totalBytes = quant.files.reduce((total, file) => total + file.bytes, 0);

@@ -58,3 +58,27 @@ test("response feedback can be toggled off without removing other ratings", asyn
     [events[1]],
   );
 });
+
+test("a batch folds in one pass and matches folding the events one at a time", async () => {
+  const shared = await loadTypeScriptModule(sharedTaskEventsPath, { cache: new Map() });
+  const at = (index) => new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
+  const batch = [];
+  for (let index = 0; index < 400; index += 1) {
+    batch.push({ type: "assistant.delta", taskId: "task-1", text: `t${index} `, at: at(index) });
+    if (index % 40 === 0) {
+      batch.push({ type: "command.started", taskId: "task-1", id: `c${index}`, command: "ls", cwd: ".", at: at(index) });
+      batch.push({ type: "command.output", taskId: "task-1", id: `c${index}`, stream: "stdout", text: "out", at: at(index) });
+      batch.push({ type: "command.finished", taskId: "task-1", id: `c${index}`, exitCode: 0, at: at(index) });
+    }
+  }
+  const oneAtATime = batch.reduce((events, event) => shared.appendTaskEvent(events, event, 500), []);
+  const inOnePass = shared.appendTaskEvents([], batch, 500);
+  assert.deepEqual(inOnePass, oneAtATime);
+
+  // A batch that changes nothing hands back the caller's own array, so React
+  // can skip the render rather than diffing an identical transcript.
+  const userMessage = { type: "user.message", taskId: "task-1", text: "hi", at: at(0) };
+  const withMessage = shared.appendTaskEvents([], [userMessage], 500);
+  assert.equal(shared.appendTaskEvents(withMessage, [userMessage], 500), withMessage);
+  assert.equal(shared.appendTaskEvents(withMessage, [], 500), withMessage);
+});

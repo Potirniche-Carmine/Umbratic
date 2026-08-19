@@ -1,8 +1,9 @@
 /**
  * Local mode's model list and startup chain.
  *
- * The catalog and the user's custom additions say what exists, the machine's
- * memory says what is suggested, and the download directory says what is here.
+ * The catalog, the user's custom additions, and whatever GGUF files are sitting
+ * in the models folder say what exists; the machine's memory says what is
+ * suggested; and the download directory says what is here.
  * This module is where those meet, and it is the only place that turns a
  * stored model id into a file path and a running sidecar.
  */
@@ -22,6 +23,7 @@ import {
   type CatalogQuant,
 } from "./modelCatalog";
 import { customModel, listCustomModels } from "./customModels";
+import { discoveredModel, listDiscoveredModels } from "./discoveredModels";
 import { downloadingModelId, modelDownloaded, modelFilePath } from "./modelDownloads";
 import { readLocalQuantSelections } from "./settingsStorage";
 import { ensureLocalLlama } from "./localLlama";
@@ -35,9 +37,13 @@ import type { LocalVeilDiagnostic } from "./localVeil";
 /** What the user must do before local mode can work at all. */
 export const chooseLocalModelMessage = "Download a model in Settings → Connection";
 
-/** Catalog rows and custom additions answer to one id namespace. */
-export function resolveLocalModel(id: string): CatalogModel | null {
-  return catalogModel(id) ?? customModel(id);
+/**
+ * Catalog rows, custom additions, and whatever is already in the models folder
+ * all answer to one id namespace. The folder is only searched when a data root
+ * is given, because a caller without one has no folder to search.
+ */
+export function resolveLocalModel(id: string, dataRoot?: string): CatalogModel | null {
+  return catalogModel(id) ?? customModel(id) ?? (dataRoot ? discoveredModel(dataRoot, id) : null);
 }
 
 /** The quantization the user chose for a model, or the model's default. */
@@ -72,6 +78,9 @@ export function listLocalModels(dataRoot: string, kind: CatalogModelKind): Local
   const rows = catalogAvailability(kind, ram).map(({ model, recommended }) => ({ model, recommended, custom: false }));
   if (kind === "chat") {
     rows.push(...listCustomModels().map((model) => ({ model, recommended: false, custom: true })));
+    // Never suggested: nothing here was reviewed, and a suggestion is what
+    // someone gets without choosing.
+    rows.push(...listDiscoveredModels(dataRoot).map((model) => ({ model, recommended: false, custom: false })));
   }
   const listed = rows.map(({ model, recommended, custom }) => {
     const chosen = selectedQuant(model, selections);
@@ -85,6 +94,7 @@ export function listLocalModels(dataRoot: string, kind: CatalogModelKind): Local
       mtp: model.mtp === true,
       ...(model.role ? { role: model.role } : {}),
       custom,
+      discovered: model.discovered === true,
       selectedQuant: chosen.quant,
       quants: model.quants.map((quant, index) => ({
         quant: quant.quant,
@@ -113,7 +123,7 @@ export function listLocalModels(dataRoot: string, kind: CatalogModelKind): Local
  * connection panel to pick and download one.
  */
 export function selectedLocalChatModel(dataRoot: string, modelId: string): CatalogModel | null {
-  const model = resolveLocalModel(modelId.trim());
+  const model = resolveLocalModel(modelId.trim(), dataRoot);
   if (!model || model.kind !== "chat") return null;
   return activeQuant(dataRoot, model) ? model : null;
 }
@@ -173,7 +183,7 @@ export async function ensureLocalChatRuntime(input: {
   dataRoot: string;
   settings: ActiveModelEndpointSettings;
   contextLength: number;
-  /** Whether to draft from the model's MTP head, on models that have one. */
+  /** Whether to draft from the model's MTP head, on dense models that have one. */
   mtp: boolean;
   dictation: DictationSettings;
   /** How hard to ask a thinking model to think. Ignored by models that do not read one. */

@@ -59,10 +59,23 @@ test("every catalog id is unique and every chat quantization is one weights file
         weights[0].name.toUpperCase().includes(quant.quant.toUpperCase()),
         `${model.id}@${quant.quant} label should match its file name`,
       );
-      // A separate head only travels with a model that says it drafts.
+      // A separate head only travels with a dense model that we draft from.
       const head = catalog.quantMtpFile(quant);
       if (head) assert.equal(model.mtp, true, `${model.id} ships an MTP head it does not claim`);
     }
+  }
+});
+
+test("MTP is for dense models; mixture-of-experts do not draft", () => {
+  for (const id of ["gemma4-e2b", "gemma4-e4b", "gemma4-e4b-uncensored", "ornith-1.5-35b-a3b"]) {
+    const model = catalog.catalogModel(id);
+    assert.notEqual(model.mtp, true, `${id} is mixture-of-experts and should not draft`);
+    for (const quant of model.quants) {
+      assert.equal(catalog.quantMtpFile(quant), null, `${id} should not download a drafting head`);
+    }
+  }
+  for (const id of ["gemma4-12b", "qwen38-27b", "qwen38-27b-abliterated"]) {
+    assert.equal(catalog.catalogModel(id).mtp, true, `${id} is dense and should draft`);
   }
 });
 

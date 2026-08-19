@@ -105,13 +105,13 @@ export type CatalogModel = {
    */
   uncensored?: boolean;
   /**
-   * The weights carry a multi-token-prediction head llama.cpp can draft from,
-   * so decoding can verify several tokens per step instead of producing one.
-   * Either the head is inside the GGUF itself — Qwen3.5-family builds ship
-   * it as an extra block — or it is the `mtp-` file listed among the quant's
-   * files, downloaded alongside the weights so having it is never a second
-   * decision. Recorded from the GGUF header or the repository's file list,
-   * not assumed from the family: an abliterated rebuild can drop the head.
+   * Whether llama-server drafts from this model's multi-token-prediction head.
+   * Dense models only: a mixture-of-experts already decodes cheaply, and
+   * drafting from its head is a net loss. The head is either inside the GGUF
+   * — Qwen3.5-family dense builds ship it as an extra block — or the `mtp-`
+   * file listed among the quant's files. Recorded from the GGUF header or the
+   * repository's file list, not assumed from the family: an abliterated
+   * rebuild can drop the head, and a MoE can keep one we do not use.
    */
   mtp?: boolean;
   /**
@@ -130,6 +130,21 @@ export type CatalogModel = {
    * is the honest answer there.
    */
   role?: ModelRole;
+  /**
+   * Weights that were already in the models folder rather than fetched from
+   * the catalog: a file someone downloaded from Hugging Face themselves, or a
+   * model this collection does not offer. There is no repository behind them,
+   * so there is nothing to download and nothing to verify against — they are
+   * listed because they are here, and running them is the user's call.
+   */
+  discovered?: boolean;
+  /**
+   * Where the files actually live, when that is not the directory named after
+   * the model's id. Only discovered models set it: a loose GGUF sits in the
+   * models folder itself, and a folder somebody made is named whatever they
+   * named it.
+   */
+  localDirectory?: string;
 };
 
 /**
@@ -179,23 +194,13 @@ const gemmaReasoning = {
 };
 
 /**
- * Gemma 4's multi-token-prediction heads. Google ships them as separate
- * drafter models rather than inside the weights, so each quantization below
- * lists its head alongside the GGUF: one download brings both, and the head
- * is shared by every quantization of the model — the same file under the same
- * name, fetched once. These are the Q8_0 builds at the repository root, the
- * ones the card's own examples load.
+ * Gemma 4 12B's multi-token-prediction head. Google ships it as a separate
+ * drafter rather than inside the weights, so each 12B quantization lists it
+ * alongside the GGUF: one download brings both. The E-series are
+ * mixture-of-experts and we do not draft from them, so they do not carry a
+ * head. This is the Q8_0 build at the repository root, the one the card's
+ * own examples load.
  */
-const gemmaE2BHead: CatalogFile = {
-  name: "mtp-gemma-4-E2B-it.gguf",
-  bytes: 97_817_664,
-  sha256: "9eba819938efccfd6044f8af84e3bbfddc639a2bcf32ebc36420e6a649191919",
-};
-const gemmaE4BHead: CatalogFile = {
-  name: "mtp-gemma-4-E4B-it.gguf",
-  bytes: 98_653_248,
-  sha256: "b6a723115efa510d3b3215db1e26790dae84cd08c2134a764f3d194f1f0c3376",
-};
 const gemma12BHead: CatalogFile = {
   name: "mtp-gemma-4-12b-it.gguf",
   bytes: 465_109_248,
@@ -224,7 +229,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E2B-it-Q4_K_M.gguf",
           bytes: 3_106_738_272,
           sha256: "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
-        }, gemmaE2BHead],
+        }],
       },
       {
         quant: "Q3_K_M",
@@ -232,7 +237,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E2B-it-Q3_K_M.gguf",
           bytes: 2_536_786_016,
           sha256: "086e2f5ba85057f8f19712e3160a644728f74f323c9feeac4cd73fab11b43085",
-        }, gemmaE2BHead],
+        }],
       },
       {
         quant: "Q5_K_M",
@@ -240,7 +245,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E2B-it-Q5_K_M.gguf",
           bytes: 3_356_037_216,
           sha256: "90293b8cdaf9c973012bf4df8a1e92bde7d74ad66a4fe56cf905ccd563d660c5",
-        }, gemmaE2BHead],
+        }],
       },
       {
         quant: "Q6_K",
@@ -248,7 +253,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E2B-it-Q6_K.gguf",
           bytes: 4_501_721_184,
           sha256: "f7b8980ecc1c115898fd8d9a3d421d90becbac984194a44b478669c26815843d",
-        }, gemmaE2BHead],
+        }],
       },
       {
         quant: "Q8_0",
@@ -256,11 +261,10 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E2B-it-Q8_0.gguf",
           bytes: 5_048_352_864,
           sha256: "605d3c2647d7c58c1e4b5375ccb5702acf94c2611b4c8d4877812f8fdd32d053",
-        }, gemmaE2BHead],
+        }],
       },
     ],
     minRamGB: 8,
-    mtp: true,
     role: chatOnlyRole,
     ...gemmaReasoning,
   },
@@ -277,7 +281,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E4B-it-Q4_K_M.gguf",
           bytes: 4_977_171_584,
           sha256: "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
-        }, gemmaE4BHead],
+        }],
       },
       {
         quant: "Q3_K_M",
@@ -285,7 +289,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E4B-it-Q3_K_M.gguf",
           bytes: 4_058_137_728,
           sha256: "0980898d0e7d9c75cea05141bf4010393312101ef6cf5b31f8197e0de18655f4",
-        }, gemmaE4BHead],
+        }],
       },
       {
         quant: "Q5_K_M",
@@ -293,7 +297,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E4B-it-Q5_K_M.gguf",
           bytes: 5_481_798_784,
           sha256: "a5d6e634db151368d2caa4270fd32ab604d96c2d1291950586989f46d8e17d36",
-        }, gemmaE4BHead],
+        }],
       },
       {
         quant: "Q6_K",
@@ -301,7 +305,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E4B-it-Q6_K.gguf",
           bytes: 7_074_929_792,
           sha256: "fd83f3ef44d22e00ff0f638753dde9a66a83e8ccf79c11024f47d383c489531b",
-        }, gemmaE4BHead],
+        }],
       },
       {
         quant: "Q8_0",
@@ -309,11 +313,10 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E4B-it-Q8_0.gguf",
           bytes: 8_192_953_472,
           sha256: "f8854aa4480df62585a279e7ca0a881554fc18a41c59c4f62642d16a2ae47012",
-        }, gemmaE4BHead],
+        }],
       },
     ],
     minRamGB: 12,
-    mtp: true,
     role: chatOnlyRole,
     ...gemmaReasoning,
   },
@@ -425,8 +428,9 @@ export const modelCatalog: readonly CatalogModel[] = [
       label: "Agentic coding",
       detail: "Trained for terminal coding agents and tool calling. Mixture-of-experts, so it answers fast for its size.",
     },
-    // `qwen35moe.nextn_predict_layers = 1`, with the head in block 40.
-    mtp: true,
+    // The GGUF carries a nextn head in block 40, but this is a
+    // mixture-of-experts: 3B active params already decode cheaply, and
+    // drafting from that head is a net loss. MTP is for dense models.
     reasoning: true,
     // Its template reads `enable_thinking` and nothing finer — thinking is on
     // unless told off — so the choice is binary, like Gemma's.

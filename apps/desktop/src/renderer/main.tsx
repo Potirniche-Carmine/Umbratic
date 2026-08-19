@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   BackendStatus,
   BackendUiEvent,
@@ -139,7 +139,6 @@ import {
   Sparkles,
   Square,
   SquarePen,
-  SquareTerminal,
   Sun,
   ThumbsDown,
   ThumbsUp,
@@ -161,7 +160,7 @@ import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
 import { AssistantMessage } from "./assistantMessage";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
-import { appendTaskEvent, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
+import { appendTaskEvent, appendTaskEvents, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
 import {
   responseFeedbackReasons,
   type ResponseFeedbackReason,
@@ -183,11 +182,8 @@ import {
   taskEventEffects,
   type TaskPermissionRequest,
 } from "./taskEventReducer";
-import { activityHasNarration, activityHasTools, activitySummary } from "./activityTiming";
 import { composerTimelineFromEvents } from "./composerTimeline";
 import {
-  activityToolGroups,
-  commandRunsFromEvents,
   pendingPermissionFromEvents,
   reconcileActivityDisclosureState,
 } from "./composerActivity";
@@ -195,8 +191,9 @@ import { copyPlainText } from "./copyPlainText";
 import {
   AssistantAnswerContent,
   MarkdownContent,
-  WorkMarkdownContent,
 } from "./markdownContent";
+import { useAnswerLift } from "./answerLift";
+import { WorkingBlock } from "./workingBlock";
 import { filterSkillsBySource, skillPreviewMarkdown } from "./skillDisplay";
 import { reviewCloseSpring, reviewOpenSpring, reviewSpringStep, type ReviewSpring } from "./reviewSpring";
 import {
@@ -220,10 +217,10 @@ import {
 } from "./composerChrome";
 import {
   clamp,
+  followElementToBottom,
   isElementAtBottom,
   isElementNearBottom,
   placeElementAtBottom,
-  scrollElementToBottom,
 } from "./composerScroll";
 import { defaultHarnessProfileId, isHarnessProfileId } from "./harnessProfile";
 import { HarnessSettingsPanel } from "./HarnessSettings";
@@ -243,22 +240,9 @@ import { providerReconnectFromEvents } from "./connectionStatus";
 import { ConnectionNotice } from "./connectionNotice";
 import { ErrorToast } from "./errorToast";
 import { IdeIcon } from "./ideLogos";
-import {
-  activityToolLabel,
-  commandDetailLabel,
-  commandHasVisibleDetails,
-  commandLabel,
-  commandLiveOutputPreview,
-  commandShellText,
-  commandSummary,
-  type CommandClass,
-  type CommandRun,
-} from "./commandDisplay";
 
 export const streamingMarkdownRenderBatchIntervalMs = 50;
 const maxCachedTaskEventGroups = 24;
-const commandOutputPreviewCharacterLimit = 12000;
-const commandOutputPreviewLineLimit = 5;
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
 const defaultStartupSettings: DesktopStartupSettings = {
   // Matches the main-process default so a failed startup read does not flip modes.
@@ -289,6 +273,10 @@ let api: DesktopApi;
 
 function appendBackendEvent(events: BackendUiEvent[], event: BackendUiEvent, limit = 500): BackendUiEvent[] {
   return appendTaskEvent(events, event, limit) as BackendUiEvent[];
+}
+
+function appendBackendEvents(events: BackendUiEvent[], batch: readonly BackendUiEvent[], limit = 500): BackendUiEvent[] {
+  return appendTaskEvents(events, batch, limit) as BackendUiEvent[];
 }
 
 export function compactBackendEvents(events: BackendUiEvent[], limit = 500): BackendUiEvent[] {
@@ -696,6 +684,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const composerItemSoftLimit = 120;
     return items.length <= composerItemSoftLimit ? items : items.slice(-composerItemSoftLimit);
   }, [task?.prompt, task?.state, visibleEvents]);
+  const { liftedAssistantId, keepFinishedOpen } = useAnswerLift(composerItems);
   const lastAssistantItemId = [...composerItems].reverse().find((item) => item.type === "assistant")?.id;
   const reviewReadyForDisplay =
     task?.state === "review_ready"
@@ -893,7 +882,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     for (const [taskId, group] of grouped) {
       const cached = taskEventsByTaskIdRef.current.get(taskId) ?? [];
       taskEventsByTaskIdRef.current.delete(taskId);
-      taskEventsByTaskIdRef.current.set(taskId, compactBackendEvents([...cached, ...group], 500));
+      // Fold the batch into what is already cached rather than replaying the
+      // whole task through the reducer again. This runs on every flush — about
+      // twenty times a second while a run streams — so replaying was doing
+      // quadratic work against a chat that only grows.
+      taskEventsByTaskIdRef.current.set(taskId, appendBackendEvents(cached, group, 500));
     }
     while (taskEventsByTaskIdRef.current.size > maxCachedTaskEventGroups) {
       const oldestTaskId = taskEventsByTaskIdRef.current.keys().next().value;
@@ -1004,6 +997,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         composerItems,
         task?.id,
         autoOpenedActivityIdsRef.current,
+        Boolean(keepFinishedOpen),
       );
       autoOpenedActivityIdsRef.current = next.autoOpenedKeys;
       for (const id of next.newlyOpenedIds) {
@@ -1021,7 +1015,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       }
       return changed ? next : current;
     });
-  }, [composerItems, task?.id]);
+  }, [composerItems, keepFinishedOpen, task?.id]);
 
   useEffect(() => {
     void refreshStatus();
@@ -1046,7 +1040,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       const visibleTaskId = visibleTaskIdRef.current;
       const visibleTaskEvents = visibleTaskId ? batch.filter((event) => event.taskId === visibleTaskId) : [];
       if (visibleTaskEvents.length) {
-        setEvents((current) => visibleTaskEvents.reduce((next, event) => appendBackendEvent(next, event, 500), current));
+        setEvents((current) => appendBackendEvents(current, visibleTaskEvents, 500));
       }
       for (const event of batch) {
         const isVisibleTaskEvent = event.taskId === visibleTaskIdRef.current;
@@ -1217,6 +1211,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   shortcutActionsRef.current = {
     "dictation.toggle": toggleDictation,
     "chat.new": () => void newChat(),
+    // Raises the same confirmation the sidebar's trash button does rather than
+    // deleting outright: a chat is gone for good, and a chord is far easier to
+    // press by accident than a button is to click by accident.
+    "chat.delete": () => { if (activeChat) setDeleteCandidate({ kind: "chat", chat: activeChat }); },
     "app.settings": () => openSettings(),
     "app.shortcuts": () => openSettings("keyboard"),
     "review.toggle": () => (reviewClosing ? openReviewPanel() : toggleReviewPanel()),
@@ -1346,7 +1344,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       placeElementAtBottom(node);
       return;
     }
-    if (followComposerScrollRef.current) scrollElementToBottom(node);
+    if (followComposerScrollRef.current) followElementToBottom(node);
   }, [activeChat?.taskId, composerItems, task, prompt, reviewFiles.length, expandedReviewPaths, reviewOpen]);
 
   useLayoutEffect(() => {
@@ -1365,9 +1363,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       const node = activityBodyRefs.current.get(item.id);
       if (!node || !expanded || item.finished) continue;
       if (activityFollowScrollRef.current.get(item.id) ?? true) {
-        // Streaming updates arrive many times per second; direct following avoids
-        // accumulating smooth-scroll animations beneath active wheel input.
-        scrollElementToBottom(node);
+        // Streaming updates arrive many times per second; following on the
+        // frame avoids both smooth-scroll animations piling up beneath active
+        // wheel input and a forced layout per update.
+        followElementToBottom(node);
       }
     }
     for (const id of activityFollowScrollRef.current.keys()) {
@@ -1669,7 +1668,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setVisibleTask(null);
     closeReviewPanel();
     setPendingPermission(null);
-    setEvents((current) => nextEvents.reduce((events, event) => appendBackendEvent(events, event), current));
+    setEvents((current) => appendBackendEvents(current, nextEvents));
     await persistDraft(chatId, prompt, attachedFiles);
   }
 
@@ -2924,6 +2923,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     openReviewPanel(filePath);
   }
 
+  // Handed to every rendered message, so it has to keep its identity across
+  // renders: a fresh function each time defeats the per-block memo in the
+  // markdown renderer and puts the whole transcript back through
+  // reconciliation on every streamed token.
+  const openReviewReferenceRef = useRef(openReviewReference);
+  openReviewReferenceRef.current = openReviewReference;
+  const handleReviewReference = useCallback((filePath: string) => {
+    openReviewReferenceRef.current(filePath);
+  }, []);
+
   async function changeReviewScope(scope: "task" | "worktree") {
     if (!task) {
       if (tasklessReviewScope === scope && scope !== "worktree") return;
@@ -3931,6 +3940,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         settled={!isGenerating || item.id !== lastAssistantItemId}
                         rating={responseFeedback.get(item.id)}
                         copyText={item.text}
+                        lifted={item.id === liftedAssistantId}
                         onCopy={(text) => void copyText(text)}
                         onRate={openResponseFeedbackDialog}
                         documents={
@@ -3953,165 +3963,28 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       >
                         <AssistantAnswerContent
                           content={item.text}
-                          onReviewFileClick={openReviewReference}
+                          onReviewFileClick={handleReviewReference}
                           reviewFiles={reviewFiles}
                           streaming={Boolean(item.streaming)}
                         />
                       </AssistantMessage>
                     ) : (
-                      (() => {
-                        const hasTools = activityHasTools(item.segments);
-                        // The bare status line is for a block with nothing in
-                        // it yet — the wait before the run has said anything.
-                        // Once it holds narration there is something to read,
-                        // so it takes the ordinary expandable shape instead of
-                        // throwing its own segments away.
-                        if (!item.finished && !hasTools && !activityHasNarration(item.segments)) {
-                          return (
-                            <article className="timelineActivity isGenerating isStatusOnly" key={item.id}>
-                              <div className="activityHeader" role="status">
-                                <span className="activityHeaderText">
-                                  <strong>
-                                    {activitySummary(item, activityClock)}
-                                    <span className="activityDots" aria-hidden="true">
-                                      <span>.</span><span>.</span><span>.</span>
-                                    </span>
-                                  </strong>
-                                </span>
-                              </div>
-                            </article>
-                          );
-                        }
-                        const expanded = expandedActivityIds.has(item.id);
-                        return (
-                          <article
-                            className={`timelineActivity ${item.finished ? "isFinished" : "isGenerating"} ${expanded ? "isExpanded" : ""}`}
-                            key={item.id}
-                          >
-                            <button
-                              className="activityHeader"
-                              type="button"
-                              onClick={() => {
-                                if (!expanded) {
-                                  activityFollowScrollRef.current.set(item.id, true);
-                                }
-                                setExpandedActivityIds((current) => {
-                                  const next = new Set(current);
-                                  if (expanded) {
-                                    next.delete(item.id);
-                                  } else {
-                                    next.add(item.id);
-                                  }
-                                  return next;
-                                });
-                              }}
-                              aria-expanded={expanded}
-                            >
-                              <span className="activityHeaderText">
-                                <strong>
-                                  {activitySummary(item, activityClock)}
-                                  {!item.finished ? (
-                                    <span className="activityDots" aria-hidden="true">
-                                      <span>.</span>
-                                      <span>.</span>
-                                      <span>.</span>
-                                    </span>
-                                  ) : null}
-                                </strong>
-                              </span>
-                              <ChevronRight className="activityChevron" size={13} />
-                            </button>
-                            <div className={`activityBody ${expanded ? "open" : ""}`} aria-hidden={!expanded}>
-                              <div
-                                className="activityBodyInner"
-                                ref={(node) => setActivityBodyRef(item.id, node)}
-                                onPointerDown={(event) => handleActivityPointerDown(item.id, event)}
-                                onScroll={(event) => handleActivityScroll(item.id, event)}
-                                onTouchMove={(event) => handleActivityTouchMove(item.id, event)}
-                                onWheel={(event) => handleActivityWheel(item.id, event)}
-                              >
-                                <div className="activityBodyContent">
-                                  {item.segments.map((segment) => {
-                                    if (segment.type === "reasoning") {
-                                      return (
-                                        <section
-                                          className={`activityLogEntry reasoningLog ${segment.kind === "thinking" ? "isThinking" : ""} ${segment.finished ? "" : "isStreaming"}`}
-                                          key={segment.id}
-                                        >
-                                          <WorkMarkdownContent content={segment.text.trim()} streaming={!item.finished && !segment.finished} />
-                                        </section>
-                                      );
-                                    }
-                                    if (segment.type === "skill") {
-                                      const skillName = skills.find((skill) => skill.id === segment.skillId)?.name ?? segment.skillId;
-                                      return (
-                                        <section className="activityLogEntry skillLog" key={segment.id}>
-                                          <Sparkles size={12} aria-hidden="true" />
-                                          <span>Skill</span>
-                                          <strong>{skillName}</strong>
-                                        </section>
-                                      );
-                                    }
-                                    const { label } = activityToolLabel(segment.run);
-                                    const toolDisclosureId = `${item.id}:${segment.id}`;
-                                    const toolExpanded = expandedActivityToolIds.has(toolDisclosureId);
-                                    const hasVisibleDetails = commandHasVisibleDetails(segment.run);
-                                    const liveOutput = toolExpanded ? undefined : commandLiveOutputPreview(segment.run);
-                                    const toolLabelContent = (
-                                      <>
-                                        <SquareTerminal className="activityToolKindIcon" size={11} aria-hidden="true" />
-                                        <span title={segment.run.command}>{label}</span>
-                                      </>
-                                    );
-                                    return (
-                                      <section
-                                        className={`activityLogEntry commandLog ${segment.run.status} ${
-                                          toolExpanded ? "isExpanded" : ""
-                                        }`}
-                                        key={segment.id}
-                                      >
-                                        {hasVisibleDetails ? (
-                                          <button
-                                            className="activityToolToggle"
-                                            type="button"
-                                            onClick={() => {
-                                              setExpandedActivityToolIds((current) => {
-                                                const next = new Set(current);
-                                                if (toolExpanded) {
-                                                  next.delete(toolDisclosureId);
-                                                } else {
-                                                  next.add(toolDisclosureId);
-                                                }
-                                                return next;
-                                              });
-                                            }}
-                                            aria-expanded={toolExpanded}
-                                          >
-                                            {toolLabelContent}
-                                            {toolExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                                          </button>
-                                        ) : (
-                                          <div className="activityToolToggle activityToolStatic">
-                                            {toolLabelContent}
-                                          </div>
-                                        )}
-                                        {liveOutput ? <pre className="activityLiveOutput" aria-live="polite">{liveOutput}</pre> : null}
-                                        {hasVisibleDetails && toolExpanded ? (
-                                          <div className="activityToolGroupDetails">
-                                            <div>
-                                              <pre>{commandShellText(segment.run)}</pre>
-                                            </div>
-                                          </div>
-                                        ) : null}
-                                      </section>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            </div>
-                          </article>
-                        );
-                      })()
+                      <WorkingBlock
+                        key={item.id}
+                        item={item}
+                        clock={activityClock}
+                        expanded={expandedActivityIds.has(item.id)}
+                        expandedToolIds={expandedActivityToolIds}
+                        skills={skills}
+                        followScrollRef={activityFollowScrollRef}
+                        setExpanded={setExpandedActivityIds}
+                        setExpandedTools={setExpandedActivityToolIds}
+                        setBodyRef={setActivityBodyRef}
+                        onPointerDown={handleActivityPointerDown}
+                        onScroll={handleActivityScroll}
+                        onTouchMove={handleActivityTouchMove}
+                        onWheel={handleActivityWheel}
+                      />
                     ),
                   )}
                   {codeReviewFiles.length && reviewReadyForDisplay ? (

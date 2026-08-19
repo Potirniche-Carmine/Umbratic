@@ -415,7 +415,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
       listLocalModels(app.getPath("userData"), input?.kind === "dictation" ? "dictation" : "chat"),
     downloadLocalModel: async (input) => {
       try {
-        const model = resolveLocalModel(String(input?.id ?? ""));
+        const model = resolveLocalModel(String(input?.id ?? ""), app.getPath("userData"));
         if (!model) throw new Error("That model is not in the collection.");
         await downloadLocalModel(app.getPath("userData"), model, selectedQuant(model));
         return { ok: true as const };
@@ -431,7 +431,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
       return { ok: true as const };
     },
     setLocalModelQuant: async (input) => {
-      const model = resolveLocalModel(String(input?.id ?? ""));
+      const model = resolveLocalModel(String(input?.id ?? ""), app.getPath("userData"));
       const quant = String(input?.quant ?? "");
       if (!model) return { ok: false as const, message: "That model is not in the collection." };
       if (!model.quants.some((entry) => entry.quant === quant)) {

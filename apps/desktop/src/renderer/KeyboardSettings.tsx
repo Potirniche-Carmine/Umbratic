@@ -151,10 +151,22 @@ export function KeyboardSettingsPanel({ api }: { api: DesktopApi }) {
         <p className="settingsMessage">
           Rows without a button are keys the window or the field you are in already handles.
         </p>
-        <button className="settingsInlineButton" type="button" onClick={resetAll} disabled={changed === 0}>
-          <RotateCcw size={13} aria-hidden="true" />
-          <span>Reset all</span>
-        </button>
+        {/* Named for what it will actually undo. "Reset all" beside a page of
+            untouched rows reads as a button that throws away the whole table;
+            with the count on it, it can only be as big as the changes are — and
+            it is gone entirely when there is nothing to undo, rather than
+            sitting there greyed out as a control the user has to work out. */}
+        {changed > 0 ? (
+          <button
+            className="settingsInlineButton shortcutResetAllButton"
+            type="button"
+            onClick={resetAll}
+            title={`Put ${changed === 1 ? "the changed shortcut" : `all ${changed} changed shortcuts`} back to the shipped chord`}
+          >
+            <RotateCcw size={13} aria-hidden="true" />
+            <span>{changed === 1 ? "Reset 1 change" : `Reset ${changed} changes`}</span>
+          </button>
+        ) : null}
       </div>
     </div>
   );

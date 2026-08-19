@@ -440,7 +440,7 @@ export async function resolveSelectedModel(
   // Whether the model takes direction on how hard to think comes from the
   // catalog, not from Veil: llama-server does not publish what its chat
   // template reads, and the catalog is where that was reviewed and recorded.
-  const localEntry = settings.mode === "local" ? resolveLocalModel(settings.modelId) : null;
+  const localEntry = settings.mode === "local" ? resolveLocalModel(settings.modelId, app.getPath("userData")) : null;
   // The catalog's answer stands on its own: it is what was reviewed and
   // recorded, and a health payload that says nothing about capabilities must
   // not take the effort levels down with it.

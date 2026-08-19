@@ -241,7 +241,7 @@
 /* The title of the row. A step up from the note under it in size and weight
    both, so which one is the model's name is never a question. */
 .localModelName {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   font-size: 13px;
   font-weight: 640;
@@ -251,54 +251,89 @@
   white-space: nowrap;
 }
 
-/* The machine the menu's fit notes are measured against, at the top of the
-   menu where "needs 32 GB" is read next to how much there is. */
-.localModelMenuHead {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin: 2px 3px 4px;
-  padding: 4px 6px 7px;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-  color: var(--faint);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.localModelMenuHead span:last-child {
-  color: var(--muted);
-  letter-spacing: 0.01em;
-  text-transform: none;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Headings that split what is here from what is a download away. Quiet: they
-   group, they do not compete with the rows. */
+/*
+ * The heading that splits what is here from what is a download away.
+ *
+ * A label, its count, and a rule running out to the edge. The rule is the part
+ * that works: in a menu long enough to scroll, a row of small caps on its own
+ * reads as one more faint line among the rows rather than as the seam between
+ * two different kinds of thing. What is on the machine is stated in the text
+ * colour; what is only on offer steps back.
+ */
 .localModelSection {
-  margin: 6px 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
   padding: 0 9px;
-  color: var(--faint);
   font-size: 9.75px;
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
 
-.localModelSection + .localModelSection,
-.localModelMenuHead + .localModelSection {
+.localModelSection:first-child {
   margin-top: 2px;
+}
+
+.localModelSectionLabel {
+  flex: 0 0 auto;
+}
+
+.localModelSectionCount {
+  flex: 0 0 auto;
+  min-width: 15px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-3) 78%, transparent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.localModelSectionRule {
+  flex: 1 1 auto;
+  height: 1px;
+  min-width: 12px;
+  background: currentColor;
+  opacity: 0.4;
+}
+
+.localModelSection.is-here {
+  color: color-mix(in srgb, var(--text) 62%, var(--accent));
+}
+
+/* A gap wider than the one between rows, so the seam is felt as well as seen. */
+.localModelSection.is-away {
+  margin-top: 14px;
+  color: var(--faint);
 }
 
 /* The controls, on one line that never wraps. */
 .localModelRowMain {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-height: 30px;
   min-width: 0;
+}
+
+/*
+ * Every control on the row, kept together at the right edge.
+ *
+ * Fixed width by design: without it the name is the only flexible thing on the
+ * line, so each control added to a row came out of the name, and a row with a
+ * quantization, a size, and an Unload button showed a model called "Q…".
+ */
+.localModelRowSide {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-left: 4px;
 }
 
 /*
@@ -383,6 +418,23 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * A plain fact about the model — that it drafts, that it is uncensored, that it
+ * was found in the folder rather than downloaded here. Said as small text
+ * beside the name, not as an outlined pill: three pills on one row is three
+ * things asking to be read first, and a fact is not an invitation.
+ */
+.localModelTrait {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* The one mark that is a suggestion rather than a fact keeps its pill. */
 .localModelBadge {
   flex: 0 0 auto;
   padding: 1px 7px;
@@ -392,12 +444,6 @@
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-}
-
-/* A statement of fact about the model, not a suggestion to pick it. */
-.localModelBadge.isPlain {
-  border-color: color-mix(in srgb, var(--line) 84%, transparent);
-  color: var(--faint);
 }
 
 .localModelProgress {
