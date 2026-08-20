@@ -32,6 +32,7 @@ import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopAp
 import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
 import {
   attachmentDetail,
+  chatAfterDeletion,
   chatAttachmentsMatch,
   chatAttachmentsSignature,
   chatCountLabel,
@@ -1293,7 +1294,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const focusModal = () => {
       const modal = modalRef.current;
       if (!modal) return;
-      const target = modal.querySelector<HTMLElement>("[data-modal-autofocus], [autofocus], button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])");
+      // A single querySelector answers in document order, not in the order the
+      // selectors are written, so the deliberate choice is asked for on its own
+      // first: a dialog that names its own default focus means it even when an
+      // earlier button would also have matched.
+      const target = modal.querySelector<HTMLElement>("[data-modal-autofocus], [autofocus]")
+        ?? modal.querySelector<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])");
       (target ?? modal).focus();
     };
     const frame = window.requestAnimationFrame(focusModal);
@@ -3414,7 +3420,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
   }
 
-  async function selectChat(chat: ChatRecord) {
+  async function selectChat(chat: ChatRecord, options: { persistCurrentDraft?: boolean } = {}) {
     const selectionSequence = chatSelectionSequenceRef.current + 1;
     chatSelectionSequenceRef.current = selectionSequence;
     if (activeChatId === chat.id) {
@@ -3428,7 +3434,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       return;
     }
     void restoreChatRepository(chat, selectionSequence);
-    if (activeChatId) void persistDraft(activeChatId, prompt, attachedFiles);
+    // The chat being left keeps what was typed into it — unless it is being
+    // left because it was just deleted, and writing a draft back to it would
+    // ask the store to hold a draft for a chat that no longer exists.
+    if (activeChatId && options.persistCurrentDraft !== false) void persistDraft(activeChatId, prompt, attachedFiles);
     suppressDraftSaveBriefly();
     const cachedEvents = chat.taskId ? compactBackendEvents(cachedEventsForTask(chat.taskId), 500) : [];
     const canOpenImmediately = !chat.taskId || cachedEvents.length > 0;
@@ -3533,7 +3542,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const deleted = new Set(deletedChatIds);
     setChats((current) => current.filter((chat) => !deleted.has(chat.id)));
     if (activeChatId && deleted.has(activeChatId)) {
-      clearDeletedActiveChat();
+      // An empty composer is what is left when nothing survived the delete, not
+      // what deleting one chat out of several should mean.
+      const successor = chatAfterDeletion(visibleChats, activeChatId, deleted);
+      if (successor) void selectChat(successor, { persistCurrentDraft: false });
+      else clearDeletedActiveChat();
     }
   }
 
@@ -4766,7 +4779,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               <button className="secondaryAction" type="button" onClick={() => setDeleteCandidate(null)}>
                 Cancel
               </button>
-              <button className="dangerAction" type="button" onClick={confirmDeleteCandidate}>
+              {/* The dialog was raised by asking to delete, so Enter answers the
+                  question that was asked. Cancel is still one Tab away and
+                  Escape still leaves without doing anything. */}
+              <button className="dangerAction" type="button" data-modal-autofocus onClick={confirmDeleteCandidate}>
                 {deleteCandidate.kind === "project" ? (
                   <FolderX size={14} />
                 ) : deleteCandidate.kind === "projectChats" ? (

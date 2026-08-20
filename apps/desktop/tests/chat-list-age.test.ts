@@ -83,3 +83,15 @@ test("the sidebar numbers count what is on screen, not what exists", () => {
   assert.equal(many.get("c8"), 9);
   assert.equal(many.has("c9"), false);
 });
+
+test("deleting the open chat lands on the row below it", () => {
+  const chats = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  assert.equal(presentation.chatAfterDeletion(chats, "b", new Set(["b"]))?.id, "c");
+  // The last row has nothing below it, so the one above takes over.
+  assert.equal(presentation.chatAfterDeletion(chats, "c", new Set(["c"]))?.id, "b");
+  // A project delete takes neighbours with it; the survivor is what is left.
+  assert.equal(presentation.chatAfterDeletion(chats, "a", new Set(["a", "b"]))?.id, "c");
+  assert.equal(presentation.chatAfterDeletion(chats, "a", new Set(["a", "b", "c"])), null);
+  // A chat inside a collapsed group is not on screen to have a neighbour.
+  assert.equal(presentation.chatAfterDeletion(chats, "hidden", new Set(["hidden"])), null);
+});
