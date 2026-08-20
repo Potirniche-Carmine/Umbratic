@@ -8,7 +8,7 @@
  * stored model id into a file path and a running sidecar.
  */
 
-import { catalogAvailability, memoryFit, neededRamGB, totalRamGB } from "./hardware";
+import { catalogAvailability, memoryBudget, memoryFit, neededRamGB } from "./hardware";
 import {
   catalogModel,
   catalogQuantBytes,
@@ -71,11 +71,11 @@ export function activeQuant(
   return model.quants.find((quant) => modelDownloaded(dataRoot, model, quant)) ?? null;
 }
 
-export function listLocalModels(dataRoot: string, kind: CatalogModelKind): LocalCatalogModel[] {
+export async function listLocalModels(dataRoot: string, kind: CatalogModelKind): Promise<LocalCatalogModel[]> {
   const downloading = downloadingModelId();
   const selections = readLocalQuantSelections();
-  const ram = totalRamGB();
-  const rows = catalogAvailability(kind, ram).map(({ model, recommended }) => ({ model, recommended, custom: false }));
+  const budget = await memoryBudget();
+  const rows = catalogAvailability(kind, budget).map(({ model, recommended }) => ({ model, recommended, custom: false }));
   if (kind === "chat") {
     rows.push(...listCustomModels().map((model) => ({ model, recommended: false, custom: true })));
     // Never suggested: nothing here was reviewed, and a suggestion is what
@@ -101,10 +101,10 @@ export function listLocalModels(dataRoot: string, kind: CatalogModelKind): Local
         bytes: catalogQuantBytes(quant),
         recommended: index === 0,
         downloaded: modelDownloaded(dataRoot, model, quant),
-        fit: memoryFit(model, quant, ram),
+        fit: memoryFit(model, quant, budget),
         neededRamGB: neededRamGB(model, quant),
       })),
-      fit: memoryFit(model, chosen, ram),
+      fit: memoryFit(model, chosen, budget),
       neededRamGB: neededRamGB(model, chosen),
       downloaded: modelDownloaded(dataRoot, model, chosen),
       downloading: downloading === model.id,

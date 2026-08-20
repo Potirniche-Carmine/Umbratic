@@ -313,7 +313,7 @@ let previewLocalMtp = true;
     // can be exercised in the preview harness, which has no Veil behind it.
     veilFeatures: ["chat.reasoning_visible", ...(composerTestParams.has("dictation") ? ["speech.transcribe"] : [])],
     localDictationReady: composerTestParams.has("dictation"),
-    system: { totalRamGB: 32, accelerator: "Vulkan", acceleratorDevice: "NVIDIA GeForce RTX 4070", quality: "optimal" as const },
+    system: { totalRamGB: 32, vramGB: 12, accelerator: "Vulkan", acceleratorDevice: "NVIDIA GeForce RTX 4070", quality: "optimal" as const },
     endpointConfig: {
       source: "local-default",
       endpointEditingAllowed: true,

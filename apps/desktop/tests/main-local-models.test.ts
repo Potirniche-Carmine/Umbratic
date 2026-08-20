@@ -79,22 +79,22 @@ test("MTP is for dense models; mixture-of-experts do not draft", () => {
   }
 });
 
-test("the recommendation follows installed memory", () => {
-  assert.equal(hardware.recommendedModelId("chat", 8), "gemma4-e2b");
-  assert.equal(hardware.recommendedModelId("chat", 11.9), "gemma4-e2b");
-  assert.equal(hardware.recommendedModelId("chat", 12), "gemma4-e4b");
-  assert.equal(hardware.recommendedModelId("chat", 15.9), "gemma4-e4b");
-  assert.equal(hardware.recommendedModelId("chat", 16), "gemma4-12b");
-  assert.equal(hardware.recommendedModelId("chat", 31.9), "gemma4-12b");
+test("the recommendation follows the memory a model would run in", () => {
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 8, vramGB: null }), "gemma4-e2b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 11.9, vramGB: null }), "gemma4-e2b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 12, vramGB: null }), "gemma4-e4b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 15.9, vramGB: null }), "gemma4-e4b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 16, vramGB: null }), "gemma4-12b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 31.9, vramGB: null }), "gemma4-12b");
   // 32 GB is enough for the 27B's ~17 GB of weights plus a long context's KV
   // cache, and the 27B is the only model here whose tool calling holds up over
   // a long agentic run — so it is what a 48 GB machine is offered.
-  assert.equal(hardware.recommendedModelId("chat", 32), "qwen38-27b");
-  assert.equal(hardware.recommendedModelId("chat", 48), "qwen38-27b");
-  assert.equal(hardware.recommendedModelId("chat", 128), "qwen38-27b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 32, vramGB: null }), "qwen38-27b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 48, vramGB: null }), "qwen38-27b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 128, vramGB: null }), "qwen38-27b");
 
-  assert.equal(hardware.recommendedModelId("dictation", 8), "qwen3-asr-0.6b");
-  assert.equal(hardware.recommendedModelId("dictation", 16), "qwen3-asr-1.7b");
+  assert.equal(hardware.recommendedModelId("dictation", { ramGB: 8, vramGB: null }), "qwen3-asr-0.6b");
+  assert.equal(hardware.recommendedModelId("dictation", { ramGB: 16, vramGB: null }), "qwen3-asr-1.7b");
 });
 
 // The suggestion is read off the catalog's order, so the catalog has to keep
@@ -102,7 +102,7 @@ test("the recommendation follows installed memory", () => {
 // comfortably is what it is offered, and the uncensored builds trail.
 test("the recommendation is the most capable safety-trained model the machine runs comfortably", () => {
   for (const ram of [4, 8, 12, 16, 24, 32, 64]) {
-    const suggested = catalog.catalogModel(hardware.recommendedModelId("chat", ram));
+    const suggested = catalog.catalogModel(hardware.recommendedModelId("chat", { ramGB: ram, vramGB: null }));
     const fitting = catalog.catalogModels("chat").filter((model) => !model.uncensored && model.minRamGB <= ram);
     const expected = fitting[fitting.length - 1] ?? catalog.catalogModels("chat")[0];
     assert.equal(suggested.id, expected.id, `at ${ram} GB`);
@@ -110,7 +110,7 @@ test("the recommendation is the most capable safety-trained model the machine ru
   // Ornith is offered at the same memory as the 27B and listed ahead of it, so
   // the 27B — the one this app has run long agentic sessions on — stays the
   // suggestion at 32 GB while Ornith sits one row away.
-  assert.equal(hardware.recommendedModelId("chat", 32), "qwen38-27b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 32, vramGB: null }), "qwen38-27b");
   assert.equal(catalog.catalogModel("ornith-1.5-35b-a3b").minRamGB, 32);
 });
 
@@ -126,15 +126,39 @@ test("memory fit is quant-aware and never hides a row", () => {
   assert.equal(hardware.neededRamGB(qwen, q8), Math.ceil(32 * (q8.files[0].bytes / q4.files[0].bytes)));
   assert.ok(hardware.neededRamGB(qwen, q3) < 32);
 
-  assert.equal(hardware.memoryFit(qwen, q4, 32), "comfortable");
-  assert.equal(hardware.memoryFit(qwen, q4, 64), "comfortable");
+  assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 32, vramGB: null }), "comfortable");
+  assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 64, vramGB: null }), "comfortable");
   // Three quarters of the comfortable figure is about where the weights
   // themselves still fit: 24 GB holds 17 GB of weights, tightly.
-  assert.equal(hardware.memoryFit(qwen, q4, 24), "tight");
-  assert.equal(hardware.memoryFit(qwen, q4, 16), "exceeds");
+  assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 24, vramGB: null }), "tight");
+  assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 16, vramGB: null }), "exceeds");
   // Picking a heavier quantization moves the verdict on the same machine.
-  assert.equal(hardware.memoryFit(qwen, q8, 32), "exceeds");
-  assert.equal(hardware.memoryFit(qwen, q3, hardware.neededRamGB(qwen, q3)), "comfortable");
+  assert.equal(hardware.memoryFit(qwen, q8, { ramGB: 32, vramGB: null }), "exceeds");
+  assert.equal(hardware.memoryFit(qwen, q3, { ramGB: hardware.neededRamGB(qwen, q3), vramGB: null }), "comfortable");
+});
+
+// The case this could not see before: a large machine behind a small card.
+// Installed memory alone called the 27B comfortable on a box that would run
+// most of it on the processor.
+test("a dedicated card is what the model is weighed against, with RAM behind it", () => {
+  const qwen = catalog.catalogModel("qwen38-27b");
+  const q4 = catalog.modelQuant(qwen, "Q4_K_M");
+  assert.equal(hardware.neededRamGB(qwen, q4), 32);
+
+  // 64 GB of RAM behind an 8 GB card: it runs, spilling onto the processor,
+  // and saying "comfortable" here would be a promise about speed the machine
+  // cannot keep.
+  assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 64, vramGB: 8 }), "tight");
+  // The same card in a machine with no memory to fall back on cannot.
+  assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 8, vramGB: 8 }), "exceeds");
+  // A card that holds the whole model is the comfortable case.
+  assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 64, vramGB: 32 }), "comfortable");
+
+  // And the suggestion follows the card, not the box around it.
+  assert.equal(
+    hardware.recommendedModelId("chat", { ramGB: 64, vramGB: 8 }),
+    hardware.recommendedModelId("chat", { ramGB: 8, vramGB: null }),
+  );
 });
 
 test("every chat model says what it is for, not just how big it is", () => {
@@ -165,7 +189,7 @@ test("uncensored models are offered but never recommended", () => {
   const uncensored = catalog.catalogModels("chat").filter((model) => model.uncensored);
   assert.ok(uncensored.length >= 2, "the catalog carries uncensored options");
   for (const ram of [4, 8, 12, 16, 24, 32, 64, 128]) {
-    const suggested = catalog.catalogModel(hardware.recommendedModelId("chat", ram));
+    const suggested = catalog.catalogModel(hardware.recommendedModelId("chat", { ramGB: ram, vramGB: null }));
     assert.notEqual(suggested.uncensored, true, `recommended at ${ram} GB must not be uncensored`);
   }
 });
@@ -177,35 +201,76 @@ test("totalRamGB reads installed memory in binary gigabytes", () => {
 // The runtime's own device list is the honest answer: a machine whose Vulkan
 // loader is missing reports nothing here for the same reason inference would
 // fall back to the processor.
-test("the accelerator is read from the runtime's device list", () => {
+test("the accelerator and its memory are read from the runtime's device list", () => {
   // Verbatim from `llama-server --list-devices` on the packaged b10419 build.
   const vulkan = hardware.parseAcceleratorDevices(
     "Available devices:\n  Vulkan0: AMD Radeon RX 9070 XT (16304 MiB, 15416 MiB free)",
   );
-  assert.equal(vulkan.accelerator, "Vulkan");
-  assert.equal(vulkan.device, "AMD Radeon RX 9070 XT");
+  assert.equal(vulkan.length, 1);
+  assert.equal(vulkan[0].backend, "Vulkan");
+  assert.equal(vulkan[0].name, "AMD Radeon RX 9070 XT");
+  assert.equal(vulkan[0].unified, false);
+  assert.equal(Math.round(vulkan[0].memoryGB ?? 0), 16);
   // The heading is not a device row.
-  assert.equal(hardware.parseAcceleratorDevices("Available devices:").accelerator, null);
+  assert.equal(hardware.parseAcceleratorDevices("Available devices:").length, 0);
 
+  // Metal's figure is a window onto installed RAM, not memory of its own, so
+  // it must never be added to it.
   const metal = hardware.parseAcceleratorDevices("  Metal0: Apple M2 Pro (21845 MiB, 21845 MiB free)");
-  assert.equal(metal.accelerator, "Metal");
-  assert.equal(metal.device, "Apple M2 Pro");
+  assert.equal(metal[0].backend, "Metal");
+  assert.equal(metal[0].name, "Apple M2 Pro");
+  assert.equal(metal[0].unified, true);
+  assert.equal(hardware.acceleratorMemoryGB(metal), null);
 
   // The CPU is always listed and is not an accelerator.
   const cpuOnly = hardware.parseAcceleratorDevices([
     "Available devices:",
     "  CPU: 13th Gen Intel Core i7-13700H (32000 MiB)",
   ].join("\n"));
-  assert.equal(cpuOnly.accelerator, null);
-  assert.equal(hardware.parseAcceleratorDevices("").accelerator, null);
+  assert.equal(cpuOnly.length, 0);
+  assert.equal(hardware.parseAcceleratorDevices("").length, 0);
+  assert.equal(hardware.acceleratorMemoryGB([]), null);
+});
+
+test("dedicated cards add up and a device that reported nothing is unknown, not zero", () => {
+  const pair = hardware.parseAcceleratorDevices([
+    "Available devices:",
+    "  Vulkan0: NVIDIA GeForce RTX 4070 (12282 MiB, 11000 MiB free)",
+    "  Vulkan1: NVIDIA GeForce RTX 4070 (12282 MiB, 12000 MiB free)",
+    "  CPU: 13th Gen Intel Core i7-13700H (32000 MiB)",
+  ].join("\n"));
+  assert.equal(pair.length, 2);
+  assert.equal(Math.round(hardware.acceleratorMemoryGB(pair) ?? 0), 24);
+
+  // A row with no figure says nothing about memory. Reading that as zero is
+  // how a capable machine gets told it can run nothing.
+  const silent = hardware.parseAcceleratorDevices("  Vulkan0: Some Accelerator");
+  assert.equal(silent[0].memoryGB, null);
+  assert.equal(hardware.acceleratorMemoryGB(silent), null);
+});
+
+test("the memory budget is the card's when it has its own, and the machine's otherwise", () => {
+  // A dedicated card: the model runs at the card's speed only while it fits
+  // there, and installed RAM is what the overflow falls back to.
+  const discrete = { ramGB: 64, vramGB: 8 };
+  assert.equal(hardware.fastMemoryGB(discrete), 8);
+  assert.equal(hardware.backingMemoryGB(discrete), 72);
+
+  // Unified or absent: RAM is the whole answer, both figures alike.
+  const unified = { ramGB: 32, vramGB: null };
+  assert.equal(hardware.fastMemoryGB(unified), 32);
+  assert.equal(hardware.backingMemoryGB(unified), 32);
 });
 
 test("system quality reflects the machine, not the chosen model", () => {
-  assert.equal(hardware.systemQuality(32, "Vulkan"), "optimal");
-  assert.equal(hardware.systemQuality(16, "Metal"), "optimal");
-  assert.equal(hardware.systemQuality(8, "Vulkan"), "good");
+  assert.equal(hardware.systemQuality({ ramGB: 32, vramGB: 24 }, "Vulkan"), "optimal");
+  assert.equal(hardware.systemQuality({ ramGB: 16, vramGB: null }, "Metal"), "optimal");
+  assert.equal(hardware.systemQuality({ ramGB: 8, vramGB: null }, "Vulkan"), "good");
+  // Plenty of RAM behind a small card is a good machine, not an optimal one:
+  // what the card cannot hold runs at the processor's speed.
+  assert.equal(hardware.systemQuality({ ramGB: 64, vramGB: 8 }, "Vulkan"), "good");
   // No accelerator is the case worth naming: it is invisible otherwise.
-  assert.equal(hardware.systemQuality(128, null), "cpu");
+  assert.equal(hardware.systemQuality({ ramGB: 128, vramGB: null }, null), "cpu");
 });
 
 test("a quantization counts as downloaded only when every file is present at its exact size", () => {

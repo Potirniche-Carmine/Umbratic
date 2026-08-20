@@ -160,7 +160,7 @@ test("removing a custom model forgets the entry", async () => {
   assert.equal(module.removeCustomModel("custom-example-tiny-gguf"), null);
 });
 
-test("the active quantization follows the choice only once it is on disk", (t) => {
+test("the active quantization follows the choice only once it is on disk", async (t) => {
   const storage = memoryStorage();
   const localModels = loadTypeScriptModule(new URL("../src/main/localModels.ts", import.meta.url), {
     mocks: {
@@ -218,7 +218,7 @@ test("the active quantization follows the choice only once it is on disk", (t) =
   assert.equal(localModels.activeQuant(dataRoot, model).quant, "Q6_K");
   assert.equal(localModels.localModelWeightsPath(dataRoot, model), q6Path);
 
-  const rows = localModels.listLocalModels(dataRoot, "chat");
+  const rows = await localModels.listLocalModels(dataRoot, "chat");
   const row = rows.find((entry: { id: string }) => entry.id === model.id);
   assert.equal(row.selectedQuant, "Q6_K");
   assert.equal(row.downloaded, true);

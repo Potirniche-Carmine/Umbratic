@@ -588,9 +588,12 @@ export type AppUpdateStatus = {
  * chosen. Reported so a user whose graphics driver leaves the app on the
  * processor sees that, rather than concluding the app is just slow.
  * `accelerator` is the backend family — "Vulkan", "Metal" — or null on the CPU.
+ * `vramGB` is the accelerator's own memory, and null when there is none to
+ * report separately: no accelerator, or one that shares system memory.
  */
 export type SystemProfile = {
   totalRamGB: number;
+  vramGB: number | null;
   accelerator: string | null;
   acceleratorDevice: string | null;
   quality: "optimal" | "good" | "cpu";

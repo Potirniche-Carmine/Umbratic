@@ -812,6 +812,12 @@ function DetectedSystem({ system }: { system: BackendStatus["system"] }) {
       <span>{system.totalRamGB} GB RAM</span>
       <span aria-hidden="true">·</span>
       <span>{system.accelerator ?? "No GPU acceleration"}</span>
+      {system.vramGB === null ? null : (
+        <>
+          <span aria-hidden="true">·</span>
+          <span>{system.vramGB} GB VRAM</span>
+        </>
+      )}
       <span className={`detectedSystemQuality is-${system.quality}`}>{quality}</span>
       {system.quality === "cpu" ? (
         <span className="detectedSystemHint">Updating your graphics driver may speed up responses.</span>

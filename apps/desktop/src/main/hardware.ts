@@ -1,9 +1,13 @@
 /**
  * What this machine can actually run.
  *
- * Installed memory is the one number that decides whether a local model is a
- * good experience or a swapping disaster, and it is knowable before anything is
- * downloaded. Everything here is a pure function of that number so it can be
+ * Memory decides whether a local model is a good experience or a swapping
+ * disaster, and it is knowable before anything is downloaded. Which memory
+ * counts depends on the machine: a dedicated card runs a model at its own
+ * speed only while the model fits in the card, so its memory is the budget and
+ * installed RAM is what the overflow falls back to. Where the accelerator
+ * shares system memory — Metal, or none at all — installed RAM is the whole
+ * answer. Everything here is a pure function of those numbers so it can be
  * tested without a machine to test on.
  */
 
@@ -33,19 +37,94 @@ export function totalRamGB(totalBytes: number = os.totalmem()): number {
  * server. It is the honest source: a machine whose Vulkan loader is missing
  * reports no device here for exactly the same reason inference would fall back
  * to the processor.
+ *
+ * Every row carries its memory, which is the number that decides whether a
+ * model runs on the accelerator or spills back onto the processor, so it is
+ * read here rather than thrown away with the rest of the parenthetical.
  */
-export function parseAcceleratorDevices(output: string): { accelerator: string | null; device: string | null } {
+export type AcceleratorDevice = {
+  /** Backend family the row was listed under — "Vulkan", "Metal". */
+  backend: string;
+  name: string | null;
+  /** The memory the row reports, or null when it reports none. */
+  memoryGB: number | null;
+  /**
+   * The device shares system memory rather than adding to it. Metal is always
+   * unified: its figure is a working-set window onto installed RAM, so adding
+   * it to RAM would count the same gigabytes twice.
+   */
+  unified: boolean;
+};
+
+/** "  Vulkan0: NVIDIA GeForce RTX 4070 (12282 MiB, 11000 MiB free)" */
+const DEVICE_ROW = /^\s*([A-Za-z][A-Za-z0-9_]*?)\d*:\s*(.+?)\s*$/;
+const DEVICE_MEMORY = /\((\d+)\s*MiB(?:,\s*\d+\s*MiB free)?\)\s*$/;
+
+export function parseAcceleratorDevices(output: string): AcceleratorDevice[] {
+  const devices: AcceleratorDevice[] = [];
   for (const line of output.split(/\r?\n/)) {
-    // "  Vulkan0: NVIDIA GeForce RTX 4070 (12282 MiB, 11000 MiB free)"
-    const match = line.match(/^\s*([A-Za-z][A-Za-z0-9_]*?)\d*:\s*(.+?)\s*$/);
+    const match = line.match(DEVICE_ROW);
     if (!match) continue;
     const [, backend, rest] = match;
     // The CPU is always listed and is not an accelerator; the heading is not a
     // device row at all.
     if (/^(cpu|available|load|device|ggml)/i.test(backend)) continue;
-    return { accelerator: backend, device: rest.replace(/\s*\(.*\)\s*$/, "").trim() || null };
+    const memory = rest.match(DEVICE_MEMORY);
+    devices.push({
+      backend,
+      name: rest.replace(/\s*\(.*\)\s*$/, "").trim() || null,
+      memoryGB: memory ? Number(memory[1]) / 1024 : null,
+      unified: backend.toLowerCase() === "metal",
+    });
   }
-  return { accelerator: null, device: null };
+  return devices;
+}
+
+/**
+ * The memory a model has to fit into to run at the accelerator's speed.
+ *
+ * Dedicated cards add up: two of them hold a model neither would hold alone.
+ * A unified device contributes nothing here because its memory is already
+ * counted as RAM, and a device that reported no figure contributes nothing
+ * because it said nothing — null means unknown, and an unknown that is read as
+ * zero becomes a machine wrongly told it cannot run anything.
+ */
+export function acceleratorMemoryGB(devices: AcceleratorDevice[]): number | null {
+  const dedicated = devices.filter((device) => !device.unified && device.memoryGB !== null);
+  if (dedicated.length === 0) return null;
+  return dedicated.reduce((total, device) => total + (device.memoryGB ?? 0), 0);
+}
+
+/**
+ * What a model is weighed against on this machine.
+ *
+ * `vramGB` is null whenever the accelerator's memory is the machine's own:
+ * no accelerator, a unified one, or one that reported no figure. In every one
+ * of those cases installed RAM is the whole answer, which is what this asked
+ * before any of it could be known.
+ *
+ * One case this does not separate: an integrated GPU under Vulkan reports a
+ * window onto system memory as if it were its own. Telling that apart needs the
+ * device type out of ggml rather than its printed list. The figure it reports
+ * tracks installed RAM, so the budget lands near the RAM answer either way.
+ */
+export type MemoryBudget = {
+  ramGB: number;
+  vramGB: number | null;
+};
+
+/** The memory a model must fit to run fully accelerated. */
+export function fastMemoryGB(budget: MemoryBudget): number {
+  return budget.vramGB ?? budget.ramGB;
+}
+
+/**
+ * The memory a model can reach at all. A dedicated card keeps the layers it
+ * holds and passes the rest to the processor, so the machine's own memory
+ * backs what the card could not take.
+ */
+export function backingMemoryGB(budget: MemoryBudget): number {
+  return budget.vramGB === null ? budget.ramGB : budget.vramGB + budget.ramGB;
 }
 
 /**
@@ -53,9 +132,9 @@ export function parseAcceleratorDevices(output: string): { accelerator: string |
  * model is chosen. Memory decides how large a model fits; an accelerator
  * decides whether it answers at a usable speed.
  */
-export function systemQuality(ram: number, accelerator: string | null): SystemProfile["quality"] {
+export function systemQuality(budget: MemoryBudget, accelerator: string | null): SystemProfile["quality"] {
   if (!accelerator) return "cpu";
-  return ram >= 16 ? "optimal" : "good";
+  return fastMemoryGB(budget) >= 16 ? "optimal" : "good";
 }
 
 // Devices do not change while the app is open, and this spawns a process, so
@@ -91,17 +170,25 @@ function listDevicesOutput(): Promise<string> {
 export function systemProfile(): Promise<SystemProfile> {
   if (!profilePromise) {
     profilePromise = (async () => {
-      const ram = totalRamGB();
-      const { accelerator, device } = parseAcceleratorDevices(await listDevicesOutput());
+      const devices = parseAcceleratorDevices(await listDevicesOutput());
+      const budget = { ramGB: totalRamGB(), vramGB: acceleratorMemoryGB(devices) };
+      const first = devices[0] ?? null;
       return {
-        totalRamGB: Math.round(ram),
-        accelerator,
-        acceleratorDevice: device,
-        quality: systemQuality(ram, accelerator),
+        totalRamGB: Math.round(budget.ramGB),
+        vramGB: budget.vramGB === null ? null : Math.round(budget.vramGB),
+        accelerator: first?.backend ?? null,
+        acceleratorDevice: first?.name ?? null,
+        quality: systemQuality(budget, first?.backend ?? null),
       };
     })();
   }
   return profilePromise;
+}
+
+/** This machine's budget, from the same cached answer the profile is built from. */
+export async function memoryBudget(): Promise<MemoryBudget> {
+  const profile = await systemProfile();
+  return { ramGB: profile.totalRamGB, vramGB: profile.vramGB };
 }
 
 /**
@@ -119,9 +206,10 @@ export function systemProfile(): Promise<SystemProfile> {
  * has. Adding a model to the catalog is then the whole job — there is no second
  * table here to keep in step with it.
  */
-export function recommendedModelId(kind: CatalogModelKind, ram: number): string {
+export function recommendedModelId(kind: CatalogModelKind, budget: MemoryBudget): string {
+  const room = fastMemoryGB(budget);
   const candidates = catalogModels(kind).filter((model) => !model.uncensored);
-  const fitting = candidates.filter((model) => model.minRamGB <= ram);
+  const fitting = candidates.filter((model) => model.minRamGB <= room);
   return (fitting[fitting.length - 1] ?? candidates[0]).id;
 }
 
@@ -150,13 +238,14 @@ export function neededRamGB(model: CatalogModel, quant: CatalogQuant): number {
   return Math.ceil(model.minRamGB * scale);
 }
 
-export function memoryFit(model: CatalogModel, quant: CatalogQuant, ram: number): MemoryFit {
+export function memoryFit(model: CatalogModel, quant: CatalogQuant, budget: MemoryBudget): MemoryFit {
   const needed = neededRamGB(model, quant);
-  if (ram >= needed) return "comfortable";
+  if (fastMemoryGB(budget) >= needed) return "comfortable";
   // The comfortable figure carries headroom for context and the rest of the
   // machine; three quarters of it is about where the weights themselves stop
-  // fitting.
-  if (ram >= needed * 0.75) return "tight";
+  // fitting. A dedicated card counts the machine's memory behind it here,
+  // because the layers it cannot hold run from there rather than not at all.
+  if (backingMemoryGB(budget) >= needed * 0.75) return "tight";
   return "exceeds";
 }
 
@@ -165,7 +254,7 @@ export type CatalogModelAvailability = {
   recommended: boolean;
 };
 
-export function catalogAvailability(kind: CatalogModelKind, ram: number): CatalogModelAvailability[] {
-  const recommended = recommendedModelId(kind, ram);
+export function catalogAvailability(kind: CatalogModelKind, budget: MemoryBudget): CatalogModelAvailability[] {
+  const recommended = recommendedModelId(kind, budget);
   return catalogModels(kind).map((model) => ({ model, recommended: model.id === recommended }));
 }

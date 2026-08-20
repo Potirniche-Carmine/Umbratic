@@ -34,7 +34,7 @@ function MemoryFitNote({ fit, neededRamGB }: { fit: LocalMemoryFit; neededRamGB:
   if (fit === "comfortable") return null;
   return (
     <span className={`localModelFit is-${fit}`}>
-      {fit === "tight" ? `Tight fit · best with ${neededRamGB} GB` : `Needs ${neededRamGB} GB RAM`}
+      {fit === "tight" ? `Tight fit · best with ${neededRamGB} GB` : `Needs ${neededRamGB} GB of memory`}
     </span>
   );
 }
