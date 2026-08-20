@@ -32,6 +32,7 @@ import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopAp
 import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
 import {
   attachmentDetail,
+  chatAfterDeletion,
   chatAttachmentsMatch,
   chatAttachmentsSignature,
   chatCountLabel,
@@ -3419,7 +3420,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
   }
 
-  async function selectChat(chat: ChatRecord) {
+  async function selectChat(chat: ChatRecord, options: { persistCurrentDraft?: boolean } = {}) {
     const selectionSequence = chatSelectionSequenceRef.current + 1;
     chatSelectionSequenceRef.current = selectionSequence;
     if (activeChatId === chat.id) {
@@ -3433,7 +3434,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       return;
     }
     void restoreChatRepository(chat, selectionSequence);
-    if (activeChatId) void persistDraft(activeChatId, prompt, attachedFiles);
+    // The chat being left keeps what was typed into it — unless it is being
+    // left because it was just deleted, and writing a draft back to it would
+    // ask the store to hold a draft for a chat that no longer exists.
+    if (activeChatId && options.persistCurrentDraft !== false) void persistDraft(activeChatId, prompt, attachedFiles);
     suppressDraftSaveBriefly();
     const cachedEvents = chat.taskId ? compactBackendEvents(cachedEventsForTask(chat.taskId), 500) : [];
     const canOpenImmediately = !chat.taskId || cachedEvents.length > 0;
@@ -3538,7 +3542,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const deleted = new Set(deletedChatIds);
     setChats((current) => current.filter((chat) => !deleted.has(chat.id)));
     if (activeChatId && deleted.has(activeChatId)) {
-      clearDeletedActiveChat();
+      // An empty composer is what is left when nothing survived the delete, not
+      // what deleting one chat out of several should mean.
+      const successor = chatAfterDeletion(visibleChats, activeChatId, deleted);
+      if (successor) void selectChat(successor, { persistCurrentDraft: false });
+      else clearDeletedActiveChat();
     }
   }
 

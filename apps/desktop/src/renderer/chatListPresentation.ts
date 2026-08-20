@@ -68,6 +68,31 @@ export function visibleChatOrder(
   return visible;
 }
 
+/**
+ * The chat to open when the one on screen is deleted.
+ *
+ * The row below it, which is where the list closes up to and where the eye
+ * already is; the row above only when the deleted chat was the last one. A
+ * project delete takes a run of neighbours at once, so this walks past the rest
+ * of the doomed rows rather than landing on one of them. Null means nothing
+ * survived nearby and the composer is all that is left.
+ */
+export function chatAfterDeletion(
+  visible: readonly ChatRecord[],
+  activeChatId: string | null,
+  deleted: ReadonlySet<string>,
+): ChatRecord | null {
+  const index = visible.findIndex((chat) => chat.id === activeChatId);
+  if (index === -1) return null;
+  for (let below = index + 1; below < visible.length; below += 1) {
+    if (!deleted.has(visible[below].id)) return visible[below];
+  }
+  for (let above = index - 1; above >= 0; above -= 1) {
+    if (!deleted.has(visible[above].id)) return visible[above];
+  }
+  return null;
+}
+
 /** The number each of the first nine visible chats answers to, by chat id. */
 export function chatJumpNumbers(visible: readonly ChatRecord[], limit = chatJumpLimit): Map<string, number> {
   const numbers = new Map<string, number>();
