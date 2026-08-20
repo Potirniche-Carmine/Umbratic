@@ -50,6 +50,37 @@ const marginPx = 8;
 type Anchor = { left: number; top: number; placement: TooltipPlacement };
 
 /**
+ * Whether focus is currently being moved by Tab.
+ *
+ * `:focus-visible` on its own is not enough to decide that a focus deserves a
+ * tooltip. A modal hands focus back to the control that opened it when it
+ * closes, and because the key that closed it was Escape the browser calls that
+ * focus visible — which left a tooltip standing over the Settings button with
+ * no pointer near it and no blur coming to take it down. Tab is the only focus
+ * that is someone arriving at a control and wanting it explained.
+ */
+let tabbing = false;
+let tabbingWatchers = 0;
+const noteTabbing = (event: KeyboardEvent) => { tabbing = event.key === "Tab"; };
+const clearTabbing = () => { tabbing = false; };
+
+/** The watch above, bound while any tooltip is mounted and not before. */
+function useTabbingWatch() {
+  useEffect(() => {
+    if (tabbingWatchers++ === 0) {
+      document.addEventListener("keydown", noteTabbing, true);
+      document.addEventListener("pointerdown", clearTabbing, true);
+    }
+    return () => {
+      if (--tabbingWatchers === 0) {
+        document.removeEventListener("keydown", noteTabbing, true);
+        document.removeEventListener("pointerdown", clearTabbing, true);
+      }
+    };
+  }, []);
+}
+
+/**
  * A tooltip on any single element.
  *
  * Pointer and keyboard both raise it, because a control reachable by Tab has to
@@ -78,6 +109,8 @@ export function Tooltip({
   const triggerRef = useRef<HTMLElement | null>(null);
   const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const describedBy = useId();
+
+  useTabbingWatch();
 
   const hide = useCallback(() => {
     if (openTimerRef.current) {
@@ -153,9 +186,10 @@ export function Tooltip({
     },
     onFocus: (event: React.FocusEvent) => {
       (original.onFocus as ((event: React.FocusEvent) => void) | undefined)?.(event);
-      // Only for a keyboard focus. Clicking a button focuses it too, and a
-      // tooltip that appears on every click is a tooltip in the way.
-      if (event.target.matches?.(":focus-visible")) place();
+      // Only for a focus somebody tabbed into. Clicking a button focuses it
+      // too, and a tooltip that appears on every click is a tooltip in the way;
+      // so does a dialog closing and giving the focus back.
+      if (tabbing && event.target.matches?.(":focus-visible")) place();
     },
     onBlur: (event: React.FocusEvent) => {
       (original.onBlur as ((event: React.FocusEvent) => void) | undefined)?.(event);
