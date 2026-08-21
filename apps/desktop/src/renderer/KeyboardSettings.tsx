@@ -145,28 +145,22 @@ export function KeyboardSettingsPanel({ api }: { api: DesktopApi }) {
       ))}
 
       <div className="shortcutFooter">
-        {/* Rows the app does not install are marked rather than quietly inert,
-            because a row that refuses to be pressed and never says why reads as
-            a broken control rather than as a key somebody else owns. */}
-        <p className="settingsMessage">
-          Rows without a button are keys the window or the field you are in already handles.
-        </p>
-        {/* Named for what it will actually undo. "Reset all" beside a page of
-            untouched rows reads as a button that throws away the whole table;
-            with the count on it, it can only be as big as the changes are — and
-            it is gone entirely when there is nothing to undo, rather than
-            sitting there greyed out as a control the user has to work out. */}
-        {changed > 0 ? (
-          <button
-            className="settingsInlineButton shortcutResetAllButton"
-            type="button"
-            onClick={resetAll}
-            title={`Put ${changed === 1 ? "the changed shortcut" : `all ${changed} changed shortcuts`} back to the shipped chord`}
-          >
-            <RotateCcw size={13} aria-hidden="true" />
-            <span>{changed === 1 ? "Reset 1 change" : `Reset ${changed} changes`}</span>
-          </button>
-        ) : null}
+        {/* Stays on the page whether or not anything has been changed, so it is
+            somewhere to find rather than something that appears once the user
+            has already gone looking. It carries the count in its tooltip, which
+            is where the reassurance about how much it undoes belongs. */}
+        <button
+          className="settingsInlineButton shortcutResetAllButton"
+          type="button"
+          onClick={resetAll}
+          disabled={changed === 0}
+          title={changed === 0
+            ? "Every shortcut is already the shipped chord"
+            : `Put ${changed === 1 ? "the changed shortcut" : `all ${changed} changed shortcuts`} back to the shipped chord`}
+        >
+          <RotateCcw size={13} aria-hidden="true" />
+          <span>Reset all to defaults</span>
+        </button>
       </div>
     </div>
   );

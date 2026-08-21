@@ -159,15 +159,12 @@
 .shortcutFooter {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* One control, sitting under the rows it resets rather than adrift at the
+     far edge: it reads as quiet text until hovered, and quiet text belongs on
+     the margin the rest of the page is set against. */
+  justify-content: flex-start;
   gap: 16px;
   margin-top: 4px;
-}
-
-.shortcutFooter .settingsMessage {
-  /* The sentence takes the wrapping. The button beside it is two words that
-     mean nothing broken across two lines, and it was the half giving way. */
-  min-width: 0;
 }
 
 .shortcutResetAllButton {
@@ -177,13 +174,14 @@
 
 /* Undoing work is a quieter thing than doing it: the button reads as text with
    an icon until the cursor is on it, and only then draws its own edge. */
-.shortcutResetAllButton:not(:hover):not(:focus-visible) {
+.shortcutResetAllButton:not(:hover):not(:focus-visible),
+.shortcutResetAllButton:disabled {
   border-color: transparent;
   background: transparent;
   color: var(--muted);
 }
 
-.shortcutResetAllButton:hover {
+.shortcutResetAllButton:hover:not(:disabled) {
   color: var(--text);
 }
 

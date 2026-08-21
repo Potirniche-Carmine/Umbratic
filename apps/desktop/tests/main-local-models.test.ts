@@ -281,6 +281,36 @@ test("Apple's backend is unified under either spelling, and BLAS is not a device
   assert.equal(hardware.parseAcceleratorDevices("  BLAS: Accelerate (0 MiB, 0 MiB free)").length, 0);
 });
 
+// Apple is the exception, not the rule: every other backend has memory of its
+// own, and that memory is what a model is weighed against there.
+test("off a Mac the card's memory is what the suggestion comes from", () => {
+  for (const line of [
+    "  Vulkan0: NVIDIA GeForce RTX 4070 (12282 MiB, 11000 MiB free)",
+    "  CUDA0: NVIDIA GeForce RTX 4070 (12282 MiB, 11000 MiB free)",
+    "  ROCm0: AMD Radeon RX 9070 XT (12282 MiB, 11000 MiB free)",
+  ]) {
+    const devices = hardware.parseAcceleratorDevices(line);
+    assert.equal(devices[0].unified, false, line);
+    // A card sold as 12 GB reports 12282 MiB, which is 11.99 GB. The profile
+    // rounds to whole gigabytes before anything is weighed against it, so the
+    // figure shown and the figure judged against are the same one — a card
+    // displayed as "12 GB VRAM" but judged as 11.99 would quietly offer the
+    // smaller model for a reason nothing on screen explains.
+    const vramGB = Math.round(hardware.acceleratorMemoryGB(devices) ?? 0);
+    assert.equal(vramGB, 12, line);
+
+    // 96 GB of RAM behind the card changes nothing about what is suggested:
+    // the suggestion is what runs on the card.
+    const budget = { ramGB: 96, vramGB };
+    assert.equal(hardware.fastMemoryGB(budget), vramGB, line);
+    assert.equal(
+      hardware.recommendedModelId("chat", budget),
+      hardware.recommendedModelId("chat", { ramGB: 12, vramGB: null }),
+      line,
+    );
+  }
+});
+
 test("the memory budget is the card's when it has its own, and the machine's otherwise", () => {
   // A dedicated card: the model runs at the card's speed only while it fits
   // there, and installed RAM is what the overflow falls back to.

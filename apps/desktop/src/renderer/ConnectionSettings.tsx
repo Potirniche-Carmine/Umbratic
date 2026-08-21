@@ -105,7 +105,11 @@ export function useConnectionSettings({
     ?? (companyEnrollmentRequired && !draft.secret.trim() ? "Enter the Enrollment code." : null);
   const editingEnabled = backend?.endpointConfig.endpointEditingAllowed ?? true;
   const formDisabled = !editingEnabled;
-  const refreshDisabled = refreshing || saving || (draft.mode === "server" && dirty);
+  // Local mode's refresh is the manual load, so with no model chosen there is
+  // nothing for it to load and pressing it would report a failure the user did
+  // not cause.
+  const noLocalModel = draft.mode === "local" && !draft.modelId;
+  const refreshDisabled = refreshing || saving || noLocalModel || (draft.mode === "server" && dirty);
   // Local mode with nothing loaded is a resting state, not a failure: the
   // backend leaves the provider message empty for it, and the panel shows a
   // quiet "Not loaded" instead of an alarmed "Unavailable".
@@ -554,6 +558,7 @@ export function useConnectionSettings({
     localCatalog,
     localMtp,
     setLocalMtpEnabled,
+    noLocalModel,
     refreshDisabled,
     displayState,
     statusLabel,
@@ -594,6 +599,7 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
     localCatalog,
     serverModels,
     serverModelStatus,
+    noLocalModel,
     refreshDisabled,
     displayState,
     statusLabel,
@@ -624,7 +630,9 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
             disabled={refreshDisabled}
             title={dirty && draft.mode === "server"
               ? "Save changes before checking"
-              : draft.mode === "local" ? "Load the model and check again" : "Check again"}
+              : noLocalModel
+                ? "Choose a model first"
+                : draft.mode === "local" ? "Load the model and check again" : "Check again"}
             aria-label={draft.mode === "local" ? "Load the model and check again" : "Check again"}
           >
             <RefreshCw className={refreshing ? "spin" : ""} size={14} />
