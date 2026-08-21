@@ -48,6 +48,6 @@
     "supply-chain:sbom": "node scripts/generate-sbom.ts",
     "quality:check": "cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets -- -D warnings && go -C infrastructure/veil vet ./... && go -C infrastructure/veil-console vet ./... && node scripts/run-go-race.ts infrastructure/veil && node scripts/run-go-race.ts infrastructure/veil-console && node scripts/check-source-size.ts",
     "verify:ci": "node scripts/verify-ci.ts",
-    "test:all": "npm run supply-chain:check && npm run quality:check && npm --workspace @umbratic/pdf run test:all && npm --workspace @umbratic/runner run test:all && npm --workspace @umbratic/desktop run test:all && npm run veil:test && npm run veil-console:test && npm --workspace @umbratic/desktop run build"
+    "test:all": "npm run supply-chain:check && npm run quality:check && npm --workspace @umbratic/pdf run test:all && npm --workspace @umbratic/code-index run test:all && cargo test --locked --package umbratic-artifacts --all-targets && npm --workspace @umbratic/runner run test:all && npm --workspace @umbratic/desktop run test:all && npm run veil:test && npm run veil-console:test && npm --workspace @umbratic/desktop run build"
   }
 }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -249,6 +250,37 @@ test("dedicated cards add up and a device that reported nothing is unknown, not 
   assert.equal(hardware.acceleratorMemoryGB(silent), null);
 });
 
+// Verbatim from `llama-server --list-devices` on an Apple M5 Max with 48 GB.
+// Two things here are not what they look like: Apple's backend is spelled MTL
+// by this build rather than Metal, and BLAS is Accelerate running on the very
+// processor this is trying to find an alternative to.
+test("Apple's backend is unified under either spelling, and BLAS is not a device", () => {
+  const mac = hardware.parseAcceleratorDevices([
+    "Available devices:",
+    "  MTL0: Apple M5 Max (38338 MiB, 38337 MiB free)",
+    "  BLAS: Accelerate (0 MiB, 0 MiB free)",
+  ].join("\n"));
+
+  // BLAS is the processor with a maths library on it, not something to offload
+  // to. Listing it as the accelerator claims an acceleration that is not there.
+  assert.equal(mac.length, 1);
+  // Reported under the name the rest of this uses, not the build's spelling.
+  assert.equal(mac[0].backend, "Metal");
+  assert.equal(mac[0].name, "Apple M5 Max");
+  assert.equal(mac[0].unified, true);
+
+  // The 37 GB it reports is a window onto the 48 GB already counted as RAM.
+  // Counting it again would show "48 GB RAM · 37 GB VRAM" for one pool of
+  // memory, and would weigh models against the smaller of the two figures.
+  assert.equal(hardware.acceleratorMemoryGB(mac), null);
+  const budget = { ramGB: 48, vramGB: hardware.acceleratorMemoryGB(mac) };
+  assert.equal(hardware.fastMemoryGB(budget), 48);
+  assert.equal(hardware.backingMemoryGB(budget), 48);
+
+  // A machine listing only BLAS has no accelerator at all.
+  assert.equal(hardware.parseAcceleratorDevices("  BLAS: Accelerate (0 MiB, 0 MiB free)").length, 0);
+});
+
 test("the memory budget is the card's when it has its own, and the machine's otherwise", () => {
   // A dedicated card: the model runs at the card's speed only while it fits
   // there, and installed RAM is what the overflow falls back to.
@@ -291,18 +323,119 @@ test("a quantization counts as downloaded only when every file is present at its
   assert.ok(directory.endsWith(path.join("models", model.id)));
 });
 
-test("a download writes through a .partial file and verifies before renaming", () => {
-  const source = fs.readFileSync(new URL("../src/main/modelDownloads.ts", import.meta.url), "utf8");
-  assert.match(source, /const partialPath = `\$\{finalPath\}\.partial`/);
-  assert.match(source, /crypto\.createHash\("sha256"\)/);
-  assert.match(source, /digest !== file\.sha256/);
-  assert.match(source, /fs\.rmSync\(partialPath, \{ force: true \}\)/);
-  assert.match(source, /fs\.renameSync\(partialPath, finalPath\)/);
-  // Parallel ranged transfer with a resume ledger, and only over HTTPS.
-  assert.match(source, /const rangeConnections = \d/);
-  assert.match(source, /Range: `bytes=\$\{start\}-\$\{end\}`/);
-  assert.match(source, /statusCode !== 206/);
-  assert.match(source, /Promise\.allSettled/);
-  assert.match(source, /redirected to an insecure address/);
-  assert.doesNotMatch(source, /require\("node:http"\)|from "node:http"/);
+test("a download verifies the checksum before renaming into place", async () => {
+  const payload = Buffer.from("gguf-fixture-bytes");
+  const sha256 = crypto.createHash("sha256").update(payload).digest("hex");
+  const file = { name: "probe.gguf", bytes: payload.length, sha256 };
+  const model = probeCatalogModel(file);
+  const downloads = loadDownloads(servingHttps(payload));
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-download-"));
+  try {
+    await downloads.downloadLocalModel(dataRoot, model, model.quants[0]);
+    const dest = downloads.modelFilePath(dataRoot, model, file);
+    assert.equal(fs.readFileSync(dest, "utf8"), payload.toString("utf8"));
+    assert.equal(fs.existsSync(`${dest}.partial`), false);
+    assert.equal(fs.existsSync(`${dest}.partial.chunks`), false);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
 });
+
+test("a checksum mismatch deletes the partial file and keeps nothing", async () => {
+  const payload = Buffer.from("gguf-fixture-bytes");
+  const file = { name: "probe.gguf", bytes: payload.length, sha256: "0".repeat(64) };
+  const model = probeCatalogModel(file);
+  const downloads = loadDownloads(servingHttps(payload));
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-download-"));
+  try {
+    await assert.rejects(
+      () => downloads.downloadLocalModel(dataRoot, model, model.quants[0]),
+      /did not match its published checksum/,
+    );
+    const dest = downloads.modelFilePath(dataRoot, model, file);
+    assert.equal(fs.existsSync(dest), false);
+    assert.equal(fs.existsSync(`${dest}.partial`), false);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("a download refuses a redirect onto HTTP", async () => {
+  const payload = Buffer.from("gguf-fixture-bytes");
+  const sha256 = crypto.createHash("sha256").update(payload).digest("hex");
+  const file = { name: "probe.gguf", bytes: payload.length, sha256 };
+  const model = probeCatalogModel(file);
+  const downloads = loadDownloads(httpsMock((_url, _options, callback) => {
+    callback(streamResponse(Buffer.alloc(0), 302, { location: "http://example.com/probe.gguf" }));
+  }));
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-download-"));
+  try {
+    await assert.rejects(
+      () => downloads.downloadLocalModel(dataRoot, model, model.quants[0]),
+      /redirected to an insecure address/,
+    );
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+function probeCatalogModel(file) {
+  return {
+    id: "probe-model",
+    kind: "chat",
+    displayName: "Probe",
+    hfRepo: "Example/Probe",
+    hfRevision: "a".repeat(40),
+    quants: [{ quant: "Q4_K_M", files: [file] }],
+    minRamGB: 4,
+    reasoning: false,
+  };
+}
+
+function streamResponse(body, statusCode, headers = {}) {
+  return {
+    statusCode,
+    headers,
+    destroy() {},
+    resume() {},
+    async *[Symbol.asyncIterator]() {
+      if (body.length > 0) yield body;
+    },
+  };
+}
+
+function httpsMock(handler) {
+  return {
+    get(url, options, callback) {
+      const request = { once() {} };
+      handler(url, options, callback);
+      return request;
+    },
+  };
+}
+
+function loadDownloads(https) {
+  return loadTypeScriptModule(new URL("../src/main/modelDownloads.ts", import.meta.url), {
+    cache: new Map(),
+    realm: "host",
+    mocks: {
+      electron: { app: { getPath: () => os.tmpdir() } },
+      "node:https": https,
+      https,
+    },
+  });
+}
+
+function servingHttps(payload) {
+  return httpsMock((_url, options, callback) => {
+    const range = options?.headers?.Range;
+    let body = payload;
+    let statusCode = 200;
+    const match = typeof range === "string" ? /^bytes=(\d+)-(\d+)$/.exec(range) : null;
+    if (match) {
+      body = payload.subarray(Number(match[1]), Number(match[2]) + 1);
+      statusCode = 206;
+    }
+    callback(streamResponse(body, statusCode));
+  });
+}

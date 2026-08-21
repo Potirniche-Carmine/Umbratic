@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -73,8 +74,15 @@ func TestShellConstructsNeverReachArgv(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			model := managedModel()
 			model.Command = command
-			if args, err := vllmArgs(model); err == nil {
+			args, err := vllmArgs(model)
+			if err == nil {
 				t.Fatalf("this must never reach argv: %#v", args)
+			}
+			if !strings.Contains(err.Error(), "not allowed") &&
+				!strings.Contains(err.Error(), "must start with") &&
+				!strings.Contains(err.Error(), "before any flag") &&
+				!strings.Contains(err.Error(), "served-model-name") {
+				t.Fatalf("refusal did not explain itself: %v", err)
 			}
 		})
 	}
@@ -120,18 +128,21 @@ func TestUnconfiguredSupervisorRefusesToStart(t *testing.T) {
 // it was told to use, which is the exact signal awaitReady polls for.
 func writeStubRuntime(t *testing.T) string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the stub runtime is a POSIX shell script")
-	}
 	dir := t.TempDir()
-	path := filepath.Join(dir, "stub-vllm")
-	// A long-lived process that never serves: enough to assert spawn, status,
-	// double-start refusal, and reaping, without a GPU anywhere in sight.
-	script := "#!/bin/sh\necho \"stub runtime: $*\"\nsleep 3600\n"
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
+	binary := filepath.Join(dir, "stub-vllm")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
 	}
-	return path
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not locate the test file")
+	}
+	cmd := exec.Command("go", "build", "-o", binary, "./testdata/stub-sleep")
+	cmd.Dir = filepath.Dir(thisFile)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build stub runtime: %v\n%s", err, out)
+	}
+	return binary
 }
 
 func freePort(t *testing.T) int {

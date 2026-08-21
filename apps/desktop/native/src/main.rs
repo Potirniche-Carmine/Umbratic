@@ -215,40 +215,37 @@ fn arguments() -> (Option<String>, HashMap<String, String>) {
     (command, options)
 }
 
-fn main() -> ExitCode {
-    let (command, options) = arguments();
+fn handle(command: Option<String>, options: HashMap<String, String>) -> Result<String, String> {
     if command.as_deref() != Some("search-files") {
-        eprintln!(
+        return Err(
             "usage: umbratic-desktop-core search-files --root=<path> --query=<text> --limit=<count> --kind=<file|folder|all>"
+                .into(),
         );
-        return ExitCode::FAILURE;
     }
-    let Some(root) = options.get("root").map(PathBuf::from) else {
-        eprintln!("--root is required");
-        return ExitCode::FAILURE;
-    };
+    let root = options
+        .get("root")
+        .map(PathBuf::from)
+        .ok_or_else(|| "--root is required".to_string())?;
     let query = options.get("query").map(String::as_str).unwrap_or("");
     let limit = options
         .get("limit")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(10)
         .clamp(1, 30);
-    let Some(kind) = SearchKind::parse(options.get("kind").map(String::as_str).unwrap_or("file"))
-    else {
-        eprintln!("--kind must be file, folder, or all");
-        return ExitCode::FAILURE;
-    };
-    match search_files(&root, query, limit, kind) {
-        Ok(results) => match serde_json::to_string(&results) {
-            Ok(json) => {
-                println!("{json}");
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("Unable to serialize search results: {error}");
-                ExitCode::FAILURE
-            }
-        },
+    let kind = SearchKind::parse(options.get("kind").map(String::as_str).unwrap_or("file"))
+        .ok_or_else(|| "--kind must be file, folder, or all".to_string())?;
+    let results = search_files(&root, query, limit, kind)?;
+    serde_json::to_string(&results)
+        .map_err(|error| format!("Unable to serialize search results: {error}"))
+}
+
+fn main() -> ExitCode {
+    let (command, options) = arguments();
+    match handle(command, options) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             eprintln!("{error}");
             ExitCode::FAILURE
@@ -258,6 +255,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs;
 
     use super::*;
@@ -338,6 +336,44 @@ mod tests {
         assert_eq!(
             search_files(&file, "text", 10, SearchKind::File).unwrap_err(),
             "Search root must be a directory."
+        );
+    }
+
+    #[test]
+    fn search_does_not_follow_symlinks_out_of_the_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("needle.txt"), "secret").unwrap();
+        let link = directory.path().join("escape");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(outside.path(), &link).unwrap();
+
+        let results = search_files(directory.path(), "needle", 10, SearchKind::File).unwrap();
+        assert!(
+            results.is_empty(),
+            "followed a symlink out of the root: {results:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_arguments_are_refused() {
+        assert!(
+            handle(None, HashMap::new())
+                .unwrap_err()
+                .starts_with("usage:")
+        );
+        assert_eq!(
+            handle(Some("search-files".into()), HashMap::new()).unwrap_err(),
+            "--root is required"
+        );
+        let mut options = HashMap::new();
+        options.insert("root".into(), "/tmp".into());
+        options.insert("kind".into(), "everything".into());
+        assert_eq!(
+            handle(Some("search-files".into()), options).unwrap_err(),
+            "--kind must be file, folder, or all"
         );
     }
 }

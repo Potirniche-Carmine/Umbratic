@@ -60,21 +60,40 @@ export type AcceleratorDevice = {
 const DEVICE_ROW = /^\s*([A-Za-z][A-Za-z0-9_]*?)\d*:\s*(.+?)\s*$/;
 const DEVICE_MEMORY = /\((\d+)\s*MiB(?:,\s*\d+\s*MiB free)?\)\s*$/;
 
+/**
+ * Rows that are not an accelerator on this machine.
+ *
+ * The processor is always listed. So is BLAS, which on a Mac is Accelerate
+ * running on that same processor — a maths library, not a device to offload
+ * to, and reporting it as the accelerator says a machine is doing something it
+ * is not. RPC is another machine's device entirely. The rest is the heading.
+ */
+const NOT_AN_ACCELERATOR = /^(cpu|blas|rpc|available|load|device|ggml)/i;
+
+/**
+ * Backends whose memory is the machine's own.
+ *
+ * Apple's is printed as "Metal" by some builds and "MTL" by others, and it is
+ * unified under either name: the figure is a working-set window onto installed
+ * RAM, so counting it as memory of its own counts the same gigabytes twice.
+ * Both spellings are reported as "Metal", which is the family this names
+ * everywhere else and the only one of the two a person would recognise.
+ */
+const UNIFIED_BACKEND = /^(metal|mtl)$/i;
+
 export function parseAcceleratorDevices(output: string): AcceleratorDevice[] {
   const devices: AcceleratorDevice[] = [];
   for (const line of output.split(/\r?\n/)) {
     const match = line.match(DEVICE_ROW);
     if (!match) continue;
     const [, backend, rest] = match;
-    // The CPU is always listed and is not an accelerator; the heading is not a
-    // device row at all.
-    if (/^(cpu|available|load|device|ggml)/i.test(backend)) continue;
+    if (NOT_AN_ACCELERATOR.test(backend)) continue;
     const memory = rest.match(DEVICE_MEMORY);
     devices.push({
-      backend,
+      backend: UNIFIED_BACKEND.test(backend) ? "Metal" : backend,
       name: rest.replace(/\s*\(.*\)\s*$/, "").trim() || null,
       memoryGB: memory ? Number(memory[1]) / 1024 : null,
-      unified: backend.toLowerCase() === "metal",
+      unified: UNIFIED_BACKEND.test(backend),
     });
   }
   return devices;

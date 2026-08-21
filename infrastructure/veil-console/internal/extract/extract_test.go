@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -89,7 +90,7 @@ func TestOfficeSegmentsAndLocators(t *testing.T) {
 	}
 
 	xlsx := buildZip(t, map[string]string{
-		"xl/workbook.xml":     `<workbook><sheets><sheet name="Quotas" sheetId="1"/></sheets></workbook>`,
+		"xl/workbook.xml":      `<workbook><sheets><sheet name="Quotas" sheetId="1"/></sheets></workbook>`,
 		"xl/sharedStrings.xml": `<sst><si><t>Region</t></si><si><t>EMEA</t></si></sst>`,
 		"xl/worksheets/sheet1.xml": `<worksheet><sheetData>
 <row r="1"><c r="A1" t="s"><v>0</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c></row></sheetData></worksheet>`,
@@ -122,15 +123,31 @@ func TestExtractedTextIsCleaned(t *testing.T) {
 
 func TestArchiveEntryCountIsBounded(t *testing.T) {
 	entries := map[string]string{"word/document.xml": "<a/>"}
-	for index := range maxArchiveEntries + 1 {
-		entries[strings.Repeat("x", 3)+string(rune('a'+index%26))+strings.Repeat("y", index%7)+".bin"] = "."
+	for index := 0; index < maxArchiveEntries+1; index++ {
+		entries[fmt.Sprintf("pad/%d.bin", index)] = "."
 	}
-	if len(entries) <= 1 {
-		t.Skip("could not build a large archive")
+	if len(entries) <= maxArchiveEntries {
+		t.Fatalf("fixture has %d unique entries, need more than %d", len(entries), maxArchiveEntries)
 	}
 	archive := buildZip(t, entries)
-	if _, err := Kind(archive, "big.docx"); err == nil && len(entries) > maxArchiveEntries {
+	_, err := Kind(archive, "big.docx")
+	if err == nil {
 		t.Fatal("an archive over the entry cap was accepted")
+	}
+	if !strings.Contains(err.Error(), "too many parts") {
+		t.Fatalf("wrong rejection: %v", err)
+	}
+}
+
+func TestArchiveEntryBytesAreBounded(t *testing.T) {
+	oversized := strings.Repeat("a", maxEntryBytes+1)
+	archive := buildZip(t, map[string]string{"word/document.xml": oversized})
+	_, err := Segments(context.Background(), Options{Kind: KindDOCX, Data: archive})
+	if err == nil {
+		t.Fatal("an oversized Office part was extracted")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("wrong rejection: %v", err)
 	}
 }
 

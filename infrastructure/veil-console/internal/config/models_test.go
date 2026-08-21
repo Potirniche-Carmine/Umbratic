@@ -56,9 +56,13 @@ func TestCommandRefusesShellConstructs(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			model := validModel()
 			model.Command = command
-			if err := model.Validate(); err == nil {
+			err := model.Validate()
+			if err == nil {
 				facts, _ := model.Parse()
 				t.Fatalf("this must never become argv: %#v", facts.Args)
+			}
+			if name != "null byte" && !strings.Contains(err.Error(), "not allowed") {
+				t.Fatalf("wanted a shell-character refusal, got %v", err)
 			}
 		})
 	}

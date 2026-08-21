@@ -110,6 +110,39 @@ func TestSessionIdleAndAbsoluteExpiry(t *testing.T) {
 	}
 }
 
+func TestRotateSessionReplacesTheOldToken(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(tempStateDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Unix(1000, 0)
+	oldToken, oldCSRF, err := store.CreateSession(ctx, "owner", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newToken, newCSRF, err := store.RotateSession(ctx, oldToken, "owner", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newToken == "" || newToken == oldToken {
+		t.Fatal("rotation must issue a different session token")
+	}
+	if newCSRF == "" || newCSRF == oldCSRF {
+		t.Fatal("rotation must issue a different CSRF token")
+	}
+	if _, err := store.Session(ctx, oldToken, now.Add(2*time.Minute)); err == nil {
+		t.Fatal("the previous session token still worked after rotation")
+	}
+	if _, err := store.Session(ctx, newToken, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("the new session token was not valid: %v", err)
+	}
+	if _, _, err := store.RotateSession(ctx, oldToken, "owner", now.Add(3*time.Minute)); err == nil {
+		t.Fatal("rotating an already-replaced token succeeded")
+	}
+}
+
 // tempStateDir resolves symlinks in the test directory because Open rejects
 // state paths that contain one, and macOS puts temporary files under /var.
 func tempStateDir(t *testing.T) string {

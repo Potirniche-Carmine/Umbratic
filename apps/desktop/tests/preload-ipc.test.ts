@@ -32,106 +32,36 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     },
   };
 
+  const { desktopIpcChannels } = loadTypeScriptModule(
+    new URL("../src/shared/desktopApi.ts", import.meta.url),
+  );
   loadTypeScriptModule(new URL("../src/preload/preload.ts", import.meta.url), { mocks: { electron } });
   assert.equal(exposedName, "umbratic");
 
-  const cases = [
-    ["listProjects", [], "umbratic:list-projects", undefined],
-    ["listChats", [], "umbratic:list-chats", undefined],
-    ["createChat", [], "umbratic:create-chat", {}],
-    ["updateChatDraft", [{ chatId: "chat-1", draftPrompt: "hi", attachedFiles: [] }], "umbratic:update-chat-draft"],
-    ["updateChatProject", [{ chatId: "chat-1", repositoryName: "Repo", repositoryPath: "/repo" }], "umbratic:update-chat-project"],
-    ["deleteChat", [{ chatId: "chat-1" }], "umbratic:delete-chat"],
-    ["deleteProjectChats", [{ projectId: "repo" }], "umbratic:delete-project-chats"],
-    ["deleteProject", [{ projectId: "repo" }], "umbratic:delete-project"],
-    ["getNotes", [], "umbratic:get-notes", undefined],
-    ["updateNotes", [{ content: "notes" }], "umbratic:update-notes"],
-    ["getTask", [{ taskId: "task-1" }], "umbratic:get-task"],
-    ["refreshTaskReview", [{ taskId: "task-1", scope: "worktree" }], "umbratic:refresh-task-review"],
-    ["refreshWorkspaceReview", [{ repositoryPath: "/repo" }], "umbratic:refresh-workspace-review"],
-    ["readDocumentReview", [{ taskId: "task-1", documentPath: ".umbratic/artifacts/docx/proposal.docx" }], "umbratic:read-document-review"],
-    ["searchFiles", [{ repositoryId: "repo", query: "app" }], "umbratic:search-files"],
-    ["pickRepository", [], "umbratic:pick-repository", undefined],
-    ["pickAttachmentFiles", [{ chatId: "chat-1" }], "umbratic:pick-attachment-files"],
-    ["savePastedAttachments", [{ chatId: "chat-1", files: [] }], "umbratic:save-pasted-attachments"],
-    ["openChatAttachment", [{ attachment: { path: "a", name: "a" } }], "umbratic:open-chat-attachment"],
-    ["getRepository", [{ repositoryId: "repo" }], "umbratic:get-repository"],
-    ["listRepositoryBranches", [{ repositoryId: "repo" }], "umbratic:list-repository-branches"],
-    ["checkoutRepositoryBranch", [{ repositoryId: "repo", branch: "main" }], "umbratic:checkout-repository-branch"],
-    ["getBackendStatus", [], "umbratic:get-backend-status", undefined],
-    ["getStartupSettings", [], "umbratic:get-startup-settings", undefined],
-    ["getCapabilityProbes", [{ force: true }], "umbratic:get-capability-probes"],
-    ["listRemoteConnections", [], "umbratic:list-remote-connections", undefined],
-    ["saveRemoteConnection", [{ name: "Build box", host: "build.example.com", port: 22, username: "carmine", authMethod: "agent" }], "umbratic:save-remote-connection"],
-    ["deleteRemoteConnection", [{ connectionId: "remote_1" }], "umbratic:delete-remote-connection"],
-    ["checkRemoteConnection", [{ connectionId: "remote_1" }], "umbratic:check-remote-connection"],
-    ["installRemoteRunner", [{ connectionId: "remote_1" }], "umbratic:install-remote-runner"],
-    ["browseRemoteDirectory", [{ connectionId: "remote_1", path: "/srv" }], "umbratic:browse-remote-directory"],
-    ["setRemoteDefaultDirectory", [{ connectionId: "remote_1", path: "/srv/app" }], "umbratic:set-remote-default-directory"],
-    ["pickRemoteIdentityFile", [], "umbratic:pick-remote-identity-file", undefined],
-    ["getHarnessProfile", [], "umbratic:get-harness-profile", undefined],
-    ["saveHarnessProfile", ["marketing"], "umbratic:save-harness-profile"],
-    ["getContextLength", [], "umbratic:get-context-length", undefined],
-    ["saveContextLength", [64000], "umbratic:save-context-length"],
-    ["getLocalMtp", [], "umbratic:get-local-mtp", undefined],
-    ["saveLocalMtp", [false], "umbratic:save-local-mtp"],
-    ["saveShowThinking", [true], "umbratic:save-show-thinking"],
-    ["getModelEndpointSettings", [{ mode: "local" }], "umbratic:get-model-endpoint-settings"],
-    ["getDictationSettings", [], "umbratic:get-dictation-settings", undefined],
-    ["saveDictationSettings", [{ model: "qwen3-asr-1.7b", language: null }], "umbratic:save-dictation-settings"],
-    ["listLocalModels", [{ kind: "chat" }], "umbratic:list-local-models"],
-    ["downloadLocalModel", [{ id: "gemma4-e4b" }], "umbratic:download-local-model"],
-    ["cancelLocalModelDownload", [{ id: "gemma4-e4b" }], "umbratic:cancel-local-model-download"],
-    ["openModelsFolder", [], "umbratic:open-models-folder", undefined],
-    ["saveModelEndpointSettings", [{ mode: "local", baseUrl: "", modelId: "gemma4-e4b", secret: "", headers: [] }], "umbratic:save-model-endpoint-settings"],
-    ["getCompanyConnectionStatus", [], "umbratic:get-company-connection-status", undefined],
-    ["enrollCompanyConnection", [{ baseUrl: "https://veil.example.com", enrollmentCode: "umbr_code" }], "umbratic:enroll-company-connection"],
-    ["connectCompanyConnection", [], "umbratic:connect-company-connection", undefined],
-    ["disconnectCompanySession", [], "umbratic:disconnect-company-session", undefined],
-    ["disconnectCompanyConnection", [], "umbratic:disconnect-company-connection", undefined],
-    ["exportTelemetry", [], "umbratic:export-telemetry", undefined],
-    ["exportLocalDiagnostics", [], "umbratic:export-local-diagnostics", undefined],
-    ["clearLocalDiagnostics", [], "umbratic:clear-local-diagnostics", undefined],
-    ["recordProductEvent", [{ type: "review.opened", taskId: "task-1" }], "umbratic:record-product-event"],
-    ["listSkills", [], "umbratic:list-skills", undefined],
-    ["saveSkillSettings", [{ skill: false }], "umbratic:save-skill-settings"],
-    ["openSkillsFolder", [], "umbratic:open-skills-folder", undefined],
-    ["openRunnerDiagnosticsFolder", [], "umbratic:open-runner-diagnostics-folder", undefined],
-    ["openSkillInEditor", [{ id: "umbratic-marketing" }], "umbratic:open-skill-in-editor"],
-    ["importSkill", [{ sourcePath: "/tmp/skill.zip" }], "umbratic:import-skill"],
-    ["createSkill", [{ name: "Skill" }], "umbratic:create-skill"],
-    ["getSkillDocument", [{ id: "skill" }], "umbratic:get-skill-document"],
-    ["saveSkillDocument", [{ id: "skill", content: "# Skill" }], "umbratic:save-skill-document"],
-    ["resetSystemSkill", [{ id: "umbratic-markdown" }], "umbratic:reset-system-skill"],
-    ["setPermissionMode", ["auto_safe"], "umbratic:set-permission-mode"],
-    ["setWebTools", [true], "umbratic:set-web-tools"],
-    ["listServerModels", [], "umbratic:list-server-models", undefined],
-    ["listAvailableIdes", [], "umbratic:list-available-ides", undefined],
-    ["startTask", [{ prompt: "go", worktreeTaskId: "task-root" }], "umbratic:start-task"],
-    ["steerTask", [{ taskId: "task-1", prompt: "Use the smaller layout" }], "umbratic:steer-task"],
-    ["approveWorktreeCreation", [{ taskId: "task-1", approved: true }], "umbratic:approve-worktree-creation"],
-    ["respondToToolPermission", [{ taskId: "task-1", id: "perm", decision: "allow" }], "umbratic:respond-tool-permission"],
-    ["openRepositoryInIde", [{ repositoryId: "repo", ideId: "vscode" }], "umbratic:open-repository-in-ide"],
-    ["openTaskInIde", [{ taskId: "task-1", ideId: "vscode" }], "umbratic:open-task-in-ide"],
-    ["revertReviewFile", [{ taskId: "task-1", path: "src/main.ts" }], "umbratic:revert-review-file"],
-    ["keepWorktree", [{ taskId: "task-1" }], "umbratic:keep-worktree"],
-    ["cancelTask", [{ taskId: "task-1" }], "umbratic:cancel-task"],
-    ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: "good", comment: "Useful." }], "umbratic:set-response-feedback"],
-    ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: null }], "umbratic:set-response-feedback"],
-    ["setWindowChromeTheme", ["dark"], "umbratic:set-window-chrome-theme"],
-    ["openExternal", [{ url: "https://example.com/" }], "umbratic:open-external"],
-    ["getAppUpdateStatus", [], "umbratic:get-app-update-status", undefined],
-    ["checkForAppUpdate", [], "umbratic:check-for-app-update", undefined],
-    ["setAutomaticAppUpdates", [{ enabled: false }], "umbratic:set-automatic-app-updates"],
-    ["installAppUpdate", [], "umbratic:install-app-update", undefined],
+  const listenerMethods = [
+    "onBackendEvent",
+    "onWorkspaceIndex",
+    "onDictationEvent",
+    "onModelDownloadEvent",
+    "onAppUpdateStatus",
   ];
+  const invokeMethods = Object.keys(exposedApi)
+    .filter((method) => !listenerMethods.includes(method))
+    .sort();
+  assert.deepEqual(invokeMethods, Object.keys(desktopIpcChannels).sort());
 
-  for (const [method, args, channel, explicitInput] of cases) {
+  const probe = { probe: true };
+  for (const method of invokeMethods) {
     invocations.length = 0;
-    await exposedApi[method](...args);
-    assert.equal(invocations[0].channel, channel, method);
-    const expectedInput = explicitInput !== undefined ? explicitInput : args[0];
-    assert.deepEqual(plain(invocations[0].input), plain(expectedInput), method);
+    const fn = exposedApi[method];
+    await (fn.length === 0 ? fn() : fn(probe));
+    assert.equal(invocations.length, 1, method);
+    assert.equal(invocations[0].channel, desktopIpcChannels[method], method);
+    if (fn.length === 0) {
+      assert.equal(invocations[0].input, undefined, method);
+    } else {
+      assert.deepEqual(plain(invocations[0].input), plain(probe), method);
+    }
   }
 
   const received = [];
@@ -165,6 +95,22 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   assert.deepEqual(plain(updateStatuses), [{ installedVersion: "0.0.3", automatic: true, checkedAt: null, state: { phase: "current" } }]);
   stopUpdates();
   assert.equal(listeners.has("umbratic:app-update-status"), false);
+
+  const dictationEvents = [];
+  const stopDictation = exposedApi.onDictationEvent((event) => dictationEvents.push(event));
+  assert.equal(listeners.has("umbratic:dictation-event"), true);
+  listeners.get("umbratic:dictation-event")({}, { state: "listening" });
+  assert.deepEqual(plain(dictationEvents), [{ state: "listening" }]);
+  stopDictation();
+  assert.equal(listeners.has("umbratic:dictation-event"), false);
+
+  const indexEvents = [];
+  const stopIndex = exposedApi.onWorkspaceIndex((event) => indexEvents.push(event));
+  assert.equal(listeners.has("umbratic:workspace-index"), true);
+  listeners.get("umbratic:workspace-index")({}, { state: "ready" });
+  assert.deepEqual(plain(indexEvents), [{ state: "ready" }]);
+  stopIndex();
+  assert.equal(listeners.has("umbratic:workspace-index"), false);
 });
 
 test("a failed call reports the message the main process wrote, not Electron's wrapper", async () => {

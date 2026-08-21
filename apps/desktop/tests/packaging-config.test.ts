@@ -38,9 +38,12 @@ test("packaged Electron flips security fuses and does not keep runAsNode", () =>
 
 test("release-mode native binaries are runnable before packaging", () => {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-  const runner = path.join(repositoryRoot, "target", "release", process.platform === "win32" ? "umbratic-runner.exe" : "umbratic-runner");
-  const desktopCore = path.join(repositoryRoot, "target", "release", process.platform === "win32" ? "umbratic-desktop-core.exe" : "umbratic-desktop-core");
-  const pdfInspector = path.join(repositoryRoot, "target", "release", process.platform === "win32" ? "umbratic-pdf.exe" : "umbratic-pdf");
+  const executable = (name) => (process.platform === "win32" ? `${name}.exe` : name);
+  const runner = path.join(repositoryRoot, "target", "release", executable("umbratic-runner"));
+  const desktopCore = path.join(repositoryRoot, "target", "release", executable("umbratic-desktop-core"));
+  const pdfInspector = path.join(repositoryRoot, "target", "release", executable("umbratic-pdf"));
+  const artifacts = path.join(repositoryRoot, "target", "release", executable("umbratic-artifacts"));
+  const codeIndex = path.join(repositoryRoot, "target", "release", executable("umbratic-code-index"));
   for (const binary of [runner, desktopCore, pdfInspector]) {
     assert.equal(fs.existsSync(binary), true, `missing release binary ${binary}`);
     const result = spawnSync(binary, [], { encoding: "utf8", timeout: 5_000 });
@@ -48,6 +51,17 @@ test("release-mode native binaries are runnable before packaging", () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /usage:|UmbraticRunner/);
   }
+  assert.equal(fs.existsSync(artifacts), true, `missing release binary ${artifacts}`);
+  const artifactsResult = spawnSync(artifacts, [], { encoding: "utf8", timeout: 5_000 });
+  assert.equal(artifactsResult.error, undefined);
+  assert.equal(artifactsResult.status, 1);
+  assert.match(artifactsResult.stderr, /one JSON job on stdin/);
+
+  assert.equal(fs.existsSync(codeIndex), true, `missing release binary ${codeIndex}`);
+  const codeIndexResult = spawnSync(codeIndex, [], { encoding: "utf8", timeout: 5_000 });
+  assert.equal(codeIndexResult.error, undefined);
+  assert.equal(codeIndexResult.status, 1);
+  assert.match(`${codeIndexResult.stdout}${codeIndexResult.stderr}`, /usage: umbratic-code-index/);
 });
 
 test("desktop packages the Veil binary used by managed local mode", () => {
@@ -107,6 +121,8 @@ test("desktop packages the native Rust runner instead of a Node launcher", () =>
   assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-desktop-core\.exe" : "umbratic-desktop-core"/);
   assert.match(config, /- from: \.package\/pdf\r?\n\s+to: pdf/);
   assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-pdf\.exe" : "umbratic-pdf"/);
+  assert.match(config, /- from: \.package\/artifacts\r?\n\s+to: artifacts/);
+  assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-artifacts\.exe" : "umbratic-artifacts"/);
   assert.match(config, /- from: \.package\/code-index\r?\n\s+to: code-index/);
   assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-code-index\.exe" : "umbratic-code-index"/);
   assert.doesNotMatch(preparePackage, /umbratic-runner\.cjs|dist["'], ["']cli\.js/);

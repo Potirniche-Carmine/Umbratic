@@ -1,7 +1,17 @@
 use super::*;
+use std::fs;
 
 async fn execute_command_for_test(command: &str, timeout_ms: u64) -> ToolResult {
-    let directory = tempfile::tempdir().unwrap();
+    execute_command_in(tempfile::tempdir().unwrap(), command, timeout_ms)
+        .await
+        .0
+}
+
+async fn execute_command_in(
+    directory: tempfile::TempDir,
+    command: &str,
+    timeout_ms: u64,
+) -> (ToolResult, tempfile::TempDir) {
     let sink = crate::session::test_sink(directory.path());
     let mut events = sink.subscribe();
     let permissions = Arc::new(crate::permission::PermissionBroker::default());
@@ -23,7 +33,7 @@ async fn execute_command_for_test(command: &str, timeout_ms: u64) -> ToolResult 
             break;
         }
     }
-    task.await.unwrap()
+    (task.await.unwrap(), directory)
 }
 
 #[tokio::test]
@@ -101,4 +111,29 @@ async fn command_output_retains_the_useful_tail() {
             .and_then(Value::as_u64)
             .is_some_and(|bytes| bytes > 0)
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn timeout_reaps_the_spawned_process_tree() {
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("worker.pid");
+    let command = format!("sleep 30 & echo $! > '{}'; wait", marker.display());
+    let (timeout, workspace) = execute_command_in(directory, &command, 500).await;
+    assert_eq!(timeout.status, "timeout");
+    assert_eq!(timeout.code.as_deref(), Some("process_timeout"));
+
+    let pid: u32 = fs::read_to_string(workspace.path().join("worker.pid"))
+        .unwrap_or_default()
+        .trim()
+        .parse()
+        .unwrap_or(0);
+    assert_ne!(pid, 0, "the command never recorded a child pid");
+    for _ in 0..40 {
+        if unsafe { libc::kill(pid as i32, 0) } != 0 {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("child {pid} outlived the timed-out command");
 }

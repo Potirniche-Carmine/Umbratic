@@ -96,10 +96,12 @@ const builtInspector = path.resolve(
   process.platform === "win32" ? "umbratic-pdf.exe" : "umbratic-pdf",
 );
 
-test(
-  "inspectPdf and pdfContextTokens run the built CLI end to end",
-  { skip: !fs.existsSync(builtInspector) && "umbratic-pdf release binary is not built" },
-  async () => {
+test("inspectPdf and pdfContextTokens run the built CLI end to end", async () => {
+    assert.equal(
+      fs.existsSync(builtInspector),
+      true,
+      `umbratic-pdf release binary is not built at ${builtInspector}`,
+    );
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-pdf-test-"));
     try {
       const pdfPath = path.join(directory, "fixture.pdf");
@@ -123,5 +125,4 @@ test(
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
-  },
-);
+});

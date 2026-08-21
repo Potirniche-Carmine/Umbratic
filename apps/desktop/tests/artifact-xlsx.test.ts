@@ -20,14 +20,13 @@ function workspace() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-xlsx-"));
 }
 
-// The sidecar is a Rust binary from the workspace build. Without it there is
-// nothing to test here, and skipping loudly beats a green run that checked
-// nothing.
-const available = sidecar.sidecarAvailable();
-const describeIf = available ? test : test.skip;
-if (!available) {
-  console.warn("umbratic-artifacts is not built; run `cargo build --release -p umbratic-artifacts`");
-}
+test("the spreadsheet sidecar is present so these tests exercise the engine", () => {
+  assert.equal(
+    sidecar.sidecarAvailable(),
+    true,
+    "umbratic-artifacts is not built; run `cargo build --locked --release --package umbratic-artifacts`",
+  );
+});
 
 const modelSpec = {
   sheets: [
@@ -56,7 +55,7 @@ const modelSpec = {
   ],
 };
 
-describeIf("the sidecar creates, inspects, and edits a workbook through the engine", async () => {
+test("the sidecar creates, inspects, and edits a workbook through the engine", async () => {
   const root = workspace();
   const out = path.join(root, ".umbratic", "artifacts", "xlsx", "model.xlsx");
 
@@ -104,7 +103,7 @@ describeIf("the sidecar creates, inspects, and edits a workbook through the engi
   assert.match(edited.summary, /1 op applied/);
 });
 
-describeIf("a formula outside the allowlist fails at the cell and writes nothing", async () => {
+test("a formula outside the allowlist fails at the cell and writes nothing", async () => {
   const root = workspace();
   const out = path.join(root, "bad.xlsx");
   const response = await engine.runArtifactJob({
@@ -120,7 +119,7 @@ describeIf("a formula outside the allowlist fails at the cell and writes nothing
   assert.equal(fs.existsSync(out), false, "a rejected build must not leave a file");
 });
 
-describeIf("recalculation reports a division by zero the edit introduced", async () => {
+test("recalculation reports a division by zero the edit introduced", async () => {
   const root = workspace();
   const out = path.join(root, "model.xlsx");
   await engine.runArtifactJob({
@@ -153,7 +152,7 @@ describeIf("recalculation reports a division by zero the edit introduced", async
   assert.match(finding.fix, /IFERROR/);
 });
 
-describeIf("an unevaluable function warns and keeps its cached value", async () => {
+test("an unevaluable function warns and keeps its cached value", async () => {
   const root = workspace();
   const out = path.join(root, "dates.xlsx");
   const created = await engine.runArtifactJob({
@@ -170,7 +169,7 @@ describeIf("an unevaluable function warns and keeps its cached value", async () 
   assert.ok(!created.qa.some((entry) => entry.severity === "error"));
 });
 
-describeIf("a foreign workbook is surgical and refuses the full-only ops", async () => {
+test("a foreign workbook is surgical and refuses the full-only ops", async () => {
   const root = workspace();
   const out = path.join(root, "foreign.xlsx");
   await engine.runArtifactJob({
@@ -219,7 +218,7 @@ describeIf("a foreign workbook is surgical and refuses the full-only ops", async
   assert.match(refused.errors[0].message, /needs a full edit surface/);
 });
 
-describeIf("an op that names no sheet in the workbook lists the ones that exist", async () => {
+test("an op that names no sheet in the workbook lists the ones that exist", async () => {
   const root = workspace();
   const out = path.join(root, "model.xlsx");
   await engine.runArtifactJob({

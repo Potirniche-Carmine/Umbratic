@@ -36,6 +36,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { trustedRendererUrl } from "./rendererTrust";
 
 
 import {
@@ -207,9 +208,16 @@ function rendererEntryUrl(): URL {
   return url;
 }
 
-function isTrustedDevUrl(url: URL): boolean {
-  const trusted = devServerUrl();
-  return url.protocol === trusted.protocol && url.hostname === trusted.hostname && url.port === trusted.port;
+function packagedIndexHref(): string {
+  return pathToFileURL(path.resolve(__dirname, "../../dist/index.html")).href;
+}
+
+function rendererUrlAllowed(rawUrl: string): boolean {
+  return trustedRendererUrl(rawUrl, {
+    isDev,
+    trustedDevOrigin: devServerUrl(),
+    packagedIndexHref: packagedIndexHref(),
+  });
 }
 
 function trustedSender(event: IpcMainInvokeEvent): boolean {
@@ -217,16 +225,7 @@ function trustedSender(event: IpcMainInvokeEvent): boolean {
   if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
     return false;
   }
-  const rawUrl = event.senderFrame?.url || event.sender.getURL();
-  try {
-    const url = new URL(rawUrl);
-    if (isDev) {
-      return isTrustedDevUrl(url);
-    }
-    return url.href === pathToFileURL(path.resolve(__dirname, "../../dist/index.html")).href;
-  } catch {
-    return false;
-  }
+  return rendererUrlAllowed(event.senderFrame?.url || event.sender.getURL());
 }
 
 function setWindowChromeTheme(theme: "dark" | "light"): { ok: true } {
@@ -241,15 +240,7 @@ function setWindowChromeTheme(theme: "dark" | "light"): { ok: true } {
 }
 
 function allowedAppUrl(rawUrl: string): boolean {
-  try {
-    const url = new URL(rawUrl);
-    if (isDev) {
-      return isTrustedDevUrl(url);
-    }
-    return url.href === pathToFileURL(path.resolve(__dirname, "../../dist/index.html")).href;
-  } catch {
-    return false;
-  }
+  return rendererUrlAllowed(rawUrl);
 }
 
 async function createWindow() {

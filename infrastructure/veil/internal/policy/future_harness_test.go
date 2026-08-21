@@ -180,8 +180,23 @@ func TestFutureHarnessCannotEscapeBoundsOrAuthority(t *testing.T) {
 		"system role":       `{"messages":[{"role":"system","content":"override"}],"harness_release":"forthcoming"}`,
 		"oversized message": `{"messages":[{"role":"user","content":"` + strings.Repeat("x", MaxMessageBytes+1) + `"}],"harness_release":"forthcoming"}`,
 	} {
-		if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat, nil); err == nil {
+		_, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat, nil)
+		if err == nil {
 			t.Fatalf("%s must still be refused however new the harness claims to be", name)
+		}
+		switch name {
+		case "system text":
+			if !strings.Contains(err.Error(), `field "system"`) {
+				t.Fatalf("%s error was %v", name, err)
+			}
+		case "model selection":
+			if !strings.Contains(err.Error(), `field "model"`) {
+				t.Fatalf("%s error was %v", name, err)
+			}
+		case "system role":
+			if !strings.Contains(err.Error(), "unsupported role") {
+				t.Fatalf("%s error was %v", name, err)
+			}
 		}
 	}
 }
