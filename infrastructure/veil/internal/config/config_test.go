@@ -158,7 +158,7 @@ func TestLoadUsesConfiguredServerMode(t *testing.T) {
 	if cfg.ContextLength != 64000 {
 		t.Fatalf("unexpected context length %d", cfg.ContextLength)
 	}
-	if cfg.MaxOutputTokens != 8192 || cfg.MaxBodyBytes != 64<<20 {
+	if cfg.MaxOutputTokens != 8192 || cfg.MaxBodyBytes != 24<<20 {
 		t.Fatalf("unexpected context enforcement defaults: %#v", cfg)
 	}
 	if cfg.Generation.Temperature != 0.4 || cfg.Generation.TopP != 0.8 {
@@ -453,6 +453,9 @@ func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.
 	t.Setenv("VEIL_COMPANY_IDENTITY_MODE", "")
 	t.Setenv("VEIL_ENTITLEMENT_PATH", "")
 	t.Setenv("VEIL_IDENTITY_STORE_PATH", "")
+	// The fixture binds 0.0.0.0 to prove dotenv precedence, which the bind guard
+	// otherwise refuses.
+	t.Setenv("VEIL_ALLOW_EXTERNAL_BIND", "1")
 
 	cfg, err := Load()
 	if err != nil {
@@ -463,5 +466,18 @@ func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.
 	}
 	if cfg.DefaultModel != "file-model" || cfg.ProviderBaseURL != "http://from-file.test" || cfg.Addr != "0.0.0.0:9000" || cfg.Mode != "server" {
 		t.Fatalf("dotenv values were not loaded: %#v", cfg)
+	}
+}
+
+func TestLoadRejectsExternalBindWithoutAcknowledgement(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_ADDR", "0.0.0.0:8080")
+	unsetEnv(t, "VEIL_ALLOW_EXTERNAL_BIND")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected a non-loopback bind to be refused")
+	}
+	t.Setenv("VEIL_ALLOW_EXTERNAL_BIND", "1")
+	if _, err := Load(); err != nil {
+		t.Fatalf("acknowledged external bind was refused: %v", err)
 	}
 }

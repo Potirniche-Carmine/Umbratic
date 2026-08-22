@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=9">
-  <link rel="stylesheet" href="/assets/style.css?v=10">
-  <link rel="stylesheet" href="/assets/settings.css?v=10">
-  <script defer src="/assets/console.js?v=10"></script>
+  <link rel="stylesheet" href="/assets/style.css?v=11">
+  <link rel="stylesheet" href="/assets/controls.css?v=1">
+  <link rel="stylesheet" href="/assets/settings.css?v=11">
+  <script defer src="/assets/console.js?v=12"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -18,42 +19,39 @@
       <h1>Settings</h1>
     </header>
 
-    {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
-    {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
+    {{template "banners" .}}
 
+    <!--
+      What is left after the model moved out.
+
+      This page used to ask for a runtime URL, a model name, a temperature, a
+      top-p, a maximum output, a reasoning effort, a thinking budget, a parallel
+      tool-call switch and a request-size slider. Almost none of that is a
+      property of this server: temperature and top-p belong to whichever model
+      is answering and are read off its catalog row, reasoning effort belongs to
+      the person asking the question and is chosen in the app, and the runtime
+      URL belongs to whichever registered model is the default. What genuinely
+      is a deployment-wide decision — how much context to publish, how many
+      requests to admit at once, and how long to wait — is what stayed.
+    -->
     <form class="settings-form" method="post" data-settings-form>
       <input type="hidden" name="csrf" value="{{.CSRF}}">
 
       <section class="panel">
         <div class="section-heading">
-          <h2>Model</h2>
+          <h2>Serving</h2>
+          {{if .Models.Registered}}<span><a href="/models">{{.Models.Registered}} registered</a></span>{{end}}
         </div>
 
-        <div class="field-grid">
-          <label class="field">
-            <span>Runtime URL</span>
-            <input type="url" name="provider_base_url" value="{{.Config.ProviderBaseURL}}" data-provider-url required>
-          </label>
-
-          <div class="field field-full">
-            <span id="model-label">{{if .Models.Registered}}Default model{{else}}Model{{end}}</span>
-            {{if .SettingsModels}}
-            <div class="choice" data-choice>
-              <input type="hidden" name="model" value="{{.Config.Model}}" data-choice-input>
-              <button class="choice-trigger" type="button" aria-labelledby="model-label model-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
-                <span id="model-value" data-choice-label>{{.Config.Model}}</span>
-                <span class="choice-chevron" aria-hidden="true"></span>
-              </button>
-              <div class="choice-menu" role="listbox" aria-labelledby="model-label" data-choice-menu hidden>
-                {{range .SettingsModels}}<button type="button" role="option" data-choice-value="{{.}}" aria-selected="{{eq . $.Config.Model}}">{{.}}</button>{{end}}
-              </div>
-            </div>
-            {{else}}
-            <input name="model" value="{{.Config.Model}}" maxlength="256" placeholder="your-model" required>
-            {{end}}
-            {{if .Models.Registered}}<small class="field-hint">The model a request that names none is answered by. It must be one of the <a href="/models">registered models</a>.</small>{{end}}
-          </div>
+        {{if .DefaultModelName}}
+        <div class="default-model">
+          <span>Default model</span>
+          <strong>{{.DefaultModelName}}</strong>
+          <a class="text-button" href="/models">Change on Models</a>
         </div>
+        {{else}}
+        <p class="inline-note">No model is registered yet. <a href="/models">Add one</a>, then make it the default from its card.</p>
+        {{end}}
 
         <div class="slider-field">
           <div class="slider-heading">
@@ -94,55 +92,6 @@
         <div class="advanced-content">
           <div class="field-grid advanced-grid">
             <label class="field">
-              <span>Temperature</span>
-              <input type="number" name="temperature" value="{{.Config.Temperature}}" min="0" max="2" step="any" required>
-            </label>
-            <label class="field">
-              <span>Top P</span>
-              <input type="number" name="top_p" value="{{.Config.TopP}}" min="0.000001" max="1" step="any" required>
-            </label>
-            <label class="field">
-              <span>Maximum output</span>
-              <div class="input-suffix">
-                <input type="number" name="max_output_tokens" value="{{.Config.MaxOutputTokens}}" min="1" max="32768" required>
-                <span>tokens</span>
-              </div>
-            </label>
-            <div class="field">
-              <span id="reasoning-label">Reasoning effort</span>
-              <div class="choice" data-choice>
-                <input type="hidden" name="reasoning_effort" value="{{.Config.ReasoningEffort}}" data-choice-input>
-                <button class="choice-trigger" type="button" aria-labelledby="reasoning-label reasoning-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
-                  <span id="reasoning-value" data-choice-label>{{.Config.ReasoningEffort}}</span>
-                  <span class="choice-chevron" aria-hidden="true"></span>
-                </button>
-                <div class="choice-menu" role="listbox" aria-labelledby="reasoning-label" data-choice-menu hidden>
-                  <button type="button" role="option" data-choice-value="none" aria-selected="{{eq .Config.ReasoningEffort "none"}}">none</button>
-                  <button type="button" role="option" data-choice-value="low" aria-selected="{{eq .Config.ReasoningEffort "low"}}">low</button>
-                  <button type="button" role="option" data-choice-value="medium" aria-selected="{{eq .Config.ReasoningEffort "medium"}}">medium</button>
-                  <button type="button" role="option" data-choice-value="high" aria-selected="{{eq .Config.ReasoningEffort "high"}}">high</button>
-                </div>
-              </div>
-            </div>
-            <label class="field">
-              <span>Thinking token budget</span>
-              <input type="number" name="thinking_token_budget" value="{{if .Config.ThinkingTokenBudget}}{{.Config.ThinkingTokenBudget}}{{end}}" min="0" max="32768" placeholder="optional">
-            </label>
-            <div class="field">
-              <span id="parallel-label">Parallel tool calls</span>
-              <div class="choice" data-choice>
-                <input type="hidden" name="parallel_tool_calls" value="{{if .Config.ParallelToolCalls}}true{{else}}false{{end}}" data-choice-input>
-                <button class="choice-trigger" type="button" aria-labelledby="parallel-label parallel-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
-                  <span id="parallel-value" data-choice-label>{{if .Config.ParallelToolCalls}}on{{else}}off{{end}}</span>
-                  <span class="choice-chevron" aria-hidden="true"></span>
-                </button>
-                <div class="choice-menu" role="listbox" aria-labelledby="parallel-label" data-choice-menu hidden>
-                  <button type="button" role="option" data-choice-value="true" aria-selected="{{.Config.ParallelToolCalls}}">on</button>
-                  <button type="button" role="option" data-choice-value="false" aria-selected="{{not .Config.ParallelToolCalls}}">off</button>
-                </div>
-              </div>
-            </div>
-            <label class="field">
               <span>Max concurrent requests</span>
               <input type="number" name="max_concurrent_requests" value="{{.Config.MaxConcurrentRequests}}" min="1" required>
             </label>
@@ -162,33 +111,6 @@
               <span>Request timeout</span>
               <input name="request_timeout" value="{{.Config.RequestTimeout}}" required>
             </label>
-          </div>
-
-          <div class="slider-field">
-            <div class="slider-heading">
-              <label for="body-size-slider">Request size</label>
-            </div>
-            <input type="hidden" name="max_body_bytes" value="{{.Config.MaxBodyBytes}}" data-body-bytes>
-            <div class="range-control">
-              <input
-                class="range"
-                id="body-size-slider"
-                type="range"
-                min="0"
-                max="4"
-                step="1"
-                value="{{.BodySizeIndex}}"
-                data-body-slider
-              >
-              <output class="range-value" for="body-size-slider" data-body-label>{{.BodySizeLabel}}</output>
-            </div>
-            <div class="range-options" aria-label="Request size choices">
-              <button type="button" data-body-option data-index="0">16 MiB</button>
-              <button type="button" data-body-option data-index="1">32 MiB</button>
-              <button type="button" data-body-option data-index="2">64 MiB</button>
-              <button type="button" data-body-option data-index="3">128 MiB</button>
-              <button type="button" data-body-option data-index="4">256 MiB</button>
-            </div>
           </div>
         </div>
       </details>

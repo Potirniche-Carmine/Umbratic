@@ -54,6 +54,9 @@ type managedProcess struct {
 	command string
 	status  ModelStatus
 	cancel  context.CancelFunc
+	// model is what this process was launched from, so an unexpected exit can
+	// be restarted from the same definition without consulting the store.
+	model config.ManagedModel
 	// exited is closed once Wait returns. Stop waits on it rather than polling
 	// cmd.ProcessState: only the reaping goroutine may touch that field, and
 	// reading it from here both raced and never observed the exit, so every
@@ -77,6 +80,10 @@ type ModelSupervisor struct {
 	// into two processes on one port.
 	perModel  map[string]*sync.Mutex
 	processes map[string]*managedProcess
+	// crashes holds recent unexpected exits per model id, surviving the process
+	// that produced them so the circuit breaker sees the loop rather than one
+	// exit at a time.
+	crashes map[string][]time.Time
 }
 
 func NewModelSupervisor(binary string) *ModelSupervisor {
@@ -84,6 +91,7 @@ func NewModelSupervisor(binary string) *ModelSupervisor {
 		binary:    binary,
 		perModel:  map[string]*sync.Mutex{},
 		processes: map[string]*managedProcess{},
+		crashes:   map[string][]time.Time{},
 	}
 }
 
@@ -176,6 +184,7 @@ func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 		cmd:     cmd,
 		logs:    logs,
 		command: strings.TrimSpace(model.Command),
+		model:   model,
 		status:  ModelStatus{State: ModelStarting, PID: cmd.Process.Pid, Message: "Loading weights"},
 		cancel:  cancel,
 		exited:  make(chan struct{}),
@@ -195,14 +204,15 @@ func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 func (m *ModelSupervisor) reap(id string, cmd *exec.Cmd) {
 	err := cmd.Wait()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	process := m.processes[id]
 	if process == nil || process.cmd != cmd {
+		m.mu.Unlock()
 		return
 	}
 	close(process.exited)
 	process.cancel()
 	if process.status.State == ModelStopped {
+		m.mu.Unlock()
 		return
 	}
 	message := "Exited unexpectedly"
@@ -212,6 +222,62 @@ func (m *ModelSupervisor) reap(id string, cmd *exec.Cmd) {
 		state = ModelStopped
 	}
 	process.status = ModelStatus{State: state, Message: message}
+	model := process.model
+	recoverable := state == ModelFailed
+	m.mu.Unlock()
+	if recoverable {
+		go m.recoverModel(model)
+	}
+}
+
+// recoverModel restarts a runtime that exited on its own. A model that dies on
+// every start — bad weights path, not enough GPU memory — trips the same crash
+// window the Veil supervisor uses and is then left down for an administrator,
+// because restarting it forever would only keep the GPU busy failing.
+func (m *ModelSupervisor) recoverModel(model config.ManagedModel) {
+	m.mu.Lock()
+	now := time.Now()
+	live := m.crashes[model.ID][:0]
+	for _, at := range m.crashes[model.ID] {
+		if now.Sub(at) < restartWindow {
+			live = append(live, at)
+		}
+	}
+	m.crashes[model.ID] = append(live, now)
+	attempts := len(m.crashes[model.ID])
+	m.mu.Unlock()
+
+	if attempts > maxRestartsInWindow {
+		m.noteModel(model.ID, "Exited repeatedly. Automatic restart is paused — check the log, then start it from this page.")
+		return
+	}
+	delay := restartBackoffBase * time.Duration(1<<(attempts-1))
+	if delay > restartBackoffMax {
+		delay = restartBackoffMax
+	}
+	m.noteModel(model.ID, fmt.Sprintf("Exited unexpectedly. Restarting in %s.", delay.Round(time.Second)))
+	time.Sleep(delay)
+
+	m.mu.Lock()
+	process := m.processes[model.ID]
+	stopped := process == nil || process.status.State == ModelStopped
+	m.mu.Unlock()
+	// An administrator stopped or restarted it while the delay ran; their
+	// intent wins over the recovery that was already scheduled.
+	if !stopped {
+		return
+	}
+	if err := m.Start(model); err != nil && !errors.Is(err, ErrBusy) {
+		m.noteModel(model.ID, "Exited unexpectedly and did not restart.")
+	}
+}
+
+func (m *ModelSupervisor) noteModel(id, message string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if process := m.processes[id]; process != nil && process.status.State == ModelFailed {
+		process.status.Message = message
+	}
 }
 
 // awaitReady flips starting → healthy when the runtime lists its own id.

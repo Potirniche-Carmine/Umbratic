@@ -1,92 +1,3 @@
-.choice {
-  position: relative;
-}
-
-.choice-trigger {
-  width: 100%;
-  min-height: 46px;
-  justify-content: space-between;
-  padding: 0 0.82rem;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--control-radius);
-  color: var(--text);
-  background: var(--control);
-  font-size: 0.82rem;
-  text-align: left;
-}
-
-.choice-trigger:hover,
-.choice-trigger[aria-expanded="true"] {
-  border-color: rgba(230, 235, 242, 0.28);
-  background: var(--control-hover);
-}
-
-.choice-trigger[aria-expanded="true"] {
-  box-shadow: var(--focus-ring);
-}
-
-.choice-chevron {
-  width: 0.48rem;
-  height: 0.48rem;
-  margin-top: -0.22rem;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  transform: rotate(45deg);
-  transition: transform 160ms var(--ease-out);
-}
-
-.choice-trigger[aria-expanded="true"] .choice-chevron {
-  margin-top: 0.22rem;
-  transform: rotate(225deg);
-}
-
-.choice-menu {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 7px);
-  left: 0;
-  display: grid;
-  width: 100%;
-  max-height: 260px;
-  gap: 3px;
-  padding: 5px;
-  overflow-y: auto;
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  background: rgba(25, 30, 37, 0.98);
-  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.45);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
-  backdrop-filter: blur(20px) saturate(150%);
-}
-
-.choice-menu[hidden] {
-  display: none;
-}
-
-.choice-menu button {
-  width: 100%;
-  min-height: 38px;
-  justify-content: flex-start;
-  padding: 0 0.72rem;
-  border: 0;
-  border-radius: 8px;
-  color: var(--muted);
-  background: transparent;
-  font-size: 0.8rem;
-  text-align: left;
-}
-
-.choice-menu button:hover,
-.choice-menu button:focus-visible {
-  color: var(--text);
-  background: var(--control-hover);
-}
-
-.choice-menu button[aria-selected="true"] {
-  color: var(--text);
-  background: rgba(10, 132, 255, 0.14);
-}
-
 .range-options {
   display: flex;
   justify-content: space-between;
@@ -141,10 +52,33 @@
 
 /* A one-line constraint under a field, for the cases where the constraint is
    what makes the field make sense. */
-.field-hint {
-  display: block;
-  margin-top: 0.4rem;
+
+/*
+  The default model, as a fact rather than a field. Choosing it happens on the
+  Models page, where the models are.
+*/
+.default-model {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--control);
+}
+
+.default-model > span {
   color: var(--faint);
-  font-size: 0.76rem;
-  line-height: 1.45;
+  font-size: 0.73rem;
+  font-weight: 620;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.default-model > strong {
+  flex: 1 1 auto;
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 640;
 }

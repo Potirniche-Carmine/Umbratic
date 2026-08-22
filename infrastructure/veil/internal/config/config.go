@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -62,10 +63,15 @@ type Config struct {
 	TelemetryStorePath     string
 	TelemetryRetentionDays int
 	TelemetryMaxBodyBytes  int64
-	ModelTimeout           time.Duration
-	RequestTimeout         time.Duration
-	StreamIdleTimeout      time.Duration
-	MaxBodyBytes           int64
+	// ModelRequestsPerMinute and TelemetryBundlesPerHour bound request rate per
+	// identity, which admission control does not: concurrency limits how much
+	// work runs at once, not how often one client may ask. Zero disables.
+	ModelRequestsPerMinute  int
+	TelemetryBundlesPerHour int
+	ModelTimeout            time.Duration
+	RequestTimeout          time.Duration
+	StreamIdleTimeout       time.Duration
+	MaxBodyBytes            int64
 	// SpeechBaseURL and SpeechModel address the transcription runtime that backs
 	// dictation. Both empty is the normal case: a deployment without them has no
 	// /api/transcribe route and withholds the feature name, rather than
@@ -76,7 +82,7 @@ type Config struct {
 	// company's own network needs none; the desktop's llama-server sidecar is
 	// started with a per-run key and will refuse a call without it.
 	SpeechAPIKey string
-	RAG           RAG
+	RAG          RAG
 	// Networks whose X-Forwarded-For header may be believed. Empty by default,
 	// so an unconfigured deployment keys rate limits on the immediate peer
 	// rather than on a header any client can forge.
@@ -131,11 +137,19 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	maxBodyBytes, err := envInt64("VEIL_MAX_BODY_BYTES", 64<<20)
+	maxBodyBytes, err := envInt64("VEIL_MAX_BODY_BYTES", 24<<20)
 	if err != nil {
 		return Config{}, err
 	}
 	telemetryMaxBodyBytes, err := envInt64("VEIL_TELEMETRY_MAX_BODY_BYTES", 16<<20)
+	if err != nil {
+		return Config{}, err
+	}
+	modelRequestsPerMinute, err := envInt("VEIL_MODEL_REQUESTS_PER_MINUTE", 120)
+	if err != nil {
+		return Config{}, err
+	}
+	telemetryBundlesPerHour, err := envInt("VEIL_TELEMETRY_BUNDLES_PER_HOUR", 120)
 	if err != nil {
 		return Config{}, err
 	}
@@ -192,38 +206,43 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		Addr:                   envString("VEIL_ADDR", "127.0.0.1:8080"),
-		TrustedProxyCIDRs:      trustedProxyCIDRs,
-		AuthToken:              strings.TrimSpace(os.Getenv("VEIL_AUTH_TOKEN")),
-		ControlToken:           strings.TrimSpace(os.Getenv("VEIL_CONTROL_TOKEN")),
-		CompanyIdentityMode:    companyIdentityMode,
-		EntitlementPath:        strings.TrimSpace(os.Getenv("VEIL_ENTITLEMENT_PATH")),
-		IdentityStorePath:      strings.TrimSpace(os.Getenv("VEIL_IDENTITY_STORE_PATH")),
-		Mode:                   mode,
-		ProviderBaseURL:        strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
-		ProviderAPIKey:         strings.TrimSpace(os.Getenv("VEIL_PROVIDER_API_KEY")),
-		DefaultModel:           strings.TrimSpace(os.Getenv("VEIL_MODEL")),
-		ContextLength:          contextLength,
-		MaxOutputTokens:        generation.MaxOutputTokens,
-		ModelParallelToolCalls: generation.ParallelToolCalls,
-		Generation:             generation,
-		ModelVision:            modelVision,
-		ModelReasoning:         modelReasoning,
-		TemplateRegistryPath:   strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
-		TelemetryEnabled:       telemetryEnabled,
-		TelemetryStorePath:     strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
-		TelemetryRetentionDays: telemetryRetentionDays,
-		TelemetryMaxBodyBytes:  telemetryMaxBodyBytes,
-		SpeechBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("VEIL_SPEECH_BASE_URL")), "/"),
-		SpeechModel:            strings.TrimSpace(os.Getenv("VEIL_SPEECH_MODEL")),
-		SpeechAPIKey:           strings.TrimSpace(os.Getenv("VEIL_SPEECH_API_KEY")),
-		ModelTimeout:           modelTimeout,
-		RequestTimeout:         requestTimeout,
-		StreamIdleTimeout:      streamIdleTimeout,
-		MaxBodyBytes:           maxBodyBytes,
-		RAG:                    ragConfig,
+		Addr:                    envString("VEIL_ADDR", "127.0.0.1:8080"),
+		TrustedProxyCIDRs:       trustedProxyCIDRs,
+		AuthToken:               strings.TrimSpace(os.Getenv("VEIL_AUTH_TOKEN")),
+		ControlToken:            strings.TrimSpace(os.Getenv("VEIL_CONTROL_TOKEN")),
+		CompanyIdentityMode:     companyIdentityMode,
+		EntitlementPath:         strings.TrimSpace(os.Getenv("VEIL_ENTITLEMENT_PATH")),
+		IdentityStorePath:       strings.TrimSpace(os.Getenv("VEIL_IDENTITY_STORE_PATH")),
+		Mode:                    mode,
+		ProviderBaseURL:         strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
+		ProviderAPIKey:          strings.TrimSpace(os.Getenv("VEIL_PROVIDER_API_KEY")),
+		DefaultModel:            strings.TrimSpace(os.Getenv("VEIL_MODEL")),
+		ContextLength:           contextLength,
+		MaxOutputTokens:         generation.MaxOutputTokens,
+		ModelParallelToolCalls:  generation.ParallelToolCalls,
+		Generation:              generation,
+		ModelVision:             modelVision,
+		ModelReasoning:          modelReasoning,
+		TemplateRegistryPath:    strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
+		TelemetryEnabled:        telemetryEnabled,
+		TelemetryStorePath:      strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
+		TelemetryRetentionDays:  telemetryRetentionDays,
+		TelemetryMaxBodyBytes:   telemetryMaxBodyBytes,
+		ModelRequestsPerMinute:  modelRequestsPerMinute,
+		TelemetryBundlesPerHour: telemetryBundlesPerHour,
+		SpeechBaseURL:           strings.TrimRight(strings.TrimSpace(os.Getenv("VEIL_SPEECH_BASE_URL")), "/"),
+		SpeechModel:             strings.TrimSpace(os.Getenv("VEIL_SPEECH_MODEL")),
+		SpeechAPIKey:            strings.TrimSpace(os.Getenv("VEIL_SPEECH_API_KEY")),
+		ModelTimeout:            modelTimeout,
+		RequestTimeout:          requestTimeout,
+		StreamIdleTimeout:       streamIdleTimeout,
+		MaxBodyBytes:            maxBodyBytes,
+		RAG:                     ragConfig,
 	}
 
+	if err := validateBindAddress(cfg.Addr); err != nil {
+		return Config{}, err
+	}
 	if cfg.AuthToken == "" {
 		return Config{}, errors.New("VEIL_AUTH_TOKEN is required")
 	}
@@ -267,6 +286,12 @@ func Load() (Config, error) {
 	}
 	if cfg.TelemetryMaxBodyBytes <= 0 {
 		return Config{}, errors.New("VEIL_TELEMETRY_MAX_BODY_BYTES must be positive")
+	}
+	if cfg.ModelRequestsPerMinute < 0 {
+		return Config{}, errors.New("VEIL_MODEL_REQUESTS_PER_MINUTE must not be negative")
+	}
+	if cfg.TelemetryBundlesPerHour < 0 {
+		return Config{}, errors.New("VEIL_TELEMETRY_BUNDLES_PER_HOUR must not be negative")
 	}
 	if err := cfg.Generation.Validate(); err != nil {
 		return Config{}, err
@@ -485,6 +510,31 @@ func loadServerGenerationProfile(maxOutputTokens int) (model.GenerationProfile, 
 		MaxConcurrentRequestsUser: maxConcurrentUser,
 		QueueTimeout:              queueTimeout,
 	}, nil
+}
+
+// validateBindAddress refuses a public bind unless the operator has said a TLS
+// proxy is in front. Veil speaks plain HTTP by design — the shipped deployment
+// terminates TLS in Caddy and proxies to loopback — so a non-loopback VEIL_ADDR
+// set by mistake would serve every prompt and session token in cleartext. The
+// failure has to be loud at startup rather than silent on the wire.
+func validateBindAddress(addr string) error {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		return errors.New("VEIL_ADDR must be host:port")
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil || ip.Unmap().IsLoopback() {
+		return nil
+	}
+	if allowed, err := envBool("VEIL_ALLOW_EXTERNAL_BIND", false); err != nil || allowed {
+		return err
+	}
+	return errors.New("VEIL_ADDR binds outside loopback; Veil serves plain HTTP and expects a TLS proxy in front. " +
+		"Set VEIL_ALLOW_EXTERNAL_BIND=1 only when something else terminates TLS")
 }
 
 func envString(name, fallback string) string {

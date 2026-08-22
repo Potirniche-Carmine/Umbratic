@@ -2,14 +2,64 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 
 	"umbratic-veil/internal/policy"
 	"umbratic-veil/internal/telemetry"
 )
 
 func (s *Server) handleRuntimeMetrics(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
+	payload := s.runtimeMetrics(r.Context())
+	if strings.Contains(r.URL.Query().Get("format"), "prometheus") {
+		writePrometheus(w, payload)
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+// writePrometheus renders the same counters as OpenMetrics text. Veil keeps no
+// dependencies, and the exposition format is simple enough that a client
+// library would buy nothing: every value here is already a plain number.
+// Non-numeric values — runtime_state is the only one — become a labelled gauge,
+// because a scraper cannot alert on a string.
+func writePrometheus(w http.ResponseWriter, payload map[string]any) {
+	names := make([]string, 0, len(payload))
+	for name := range payload {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var body strings.Builder
+	for _, name := range names {
+		metric := "veil_" + name
+		switch value := payload[name].(type) {
+		case string:
+			fmt.Fprintf(&body, "%s{state=%q} 1\n", metric, value)
+		case bool:
+			state := 0
+			if value {
+				state = 1
+			}
+			fmt.Fprintf(&body, "%s %d\n", metric, state)
+		case int:
+			fmt.Fprintf(&body, "%s %d\n", metric, value)
+		case int64:
+			fmt.Fprintf(&body, "%s %d\n", metric, value)
+		case uint64:
+			fmt.Fprintf(&body, "%s %d\n", metric, value)
+		case float64:
+			fmt.Fprintf(&body, "%s %g\n", metric, value)
+		}
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(body.String()))
+}
+
+func (s *Server) runtimeMetrics(parent context.Context) map[string]any {
+	ctx, cancel := context.WithTimeout(parent, s.cfg.RequestTimeout)
 	defer cancel()
 	runtime, err := s.model.RuntimeMetrics(ctx)
 	ops := s.admission.snapshot()
@@ -52,5 +102,5 @@ func (s *Server) handleRuntimeMetrics(w http.ResponseWriter, r *http.Request) {
 	default:
 		payload["runtime_state"] = "unavailable"
 	}
-	writeJSON(w, http.StatusOK, payload)
+	return payload
 }

@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=7">
-  <link rel="stylesheet" href="/assets/style.css?v=7">
-  <script defer src="/assets/console.js?v=7"></script>
+  <link rel="stylesheet" href="/assets/style.css?v=12">
+  <link rel="stylesheet" href="/assets/controls.css?v=2">
+  <script defer src="/assets/console.js?v=13"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -15,8 +16,7 @@
     <header class="page-header">
       <h1>Veil</h1>
     </header>
-    {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
-    {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
+    {{template "banners" .}}
     <section class="panel status-panel">
       <div class="status-heading">
         <span class="status-dot {{if .Healthy}}healthy{{else if .Running}}starting{{end}}" aria-hidden="true"></span>
@@ -77,11 +77,19 @@
       </dl>
     </section>
     {{end}}
-    {{if .Configured}}
-    <section class="panel management-grid management-grid-single">
-      <form class="management-action" method="post" action="/veil/stop">
+    <!--
+      Only offered while there is something to stop. It used to be rendered
+      whenever Veil was configured, so a stopped service showed a Stop button
+      under a heading that said "Stopped".
+    -->
+    {{if .Running}}
+    <section class="panel stop-panel">
+      <form class="stop-form" method="post" action="/veil/stop">
         <input type="hidden" name="csrf" value="{{.CSRF}}">
-        <div><h2>Stop Veil</h2></div>
+        <div>
+          <h2>Stop Veil</h2>
+          <p>Requests stop being served until it is started again.</p>
+        </div>
         <label class="field"><span>Owner password</span><input type="password" name="password" autocomplete="current-password" required></label>
         <button class="button danger" type="submit">Stop Veil</button>
       </form>

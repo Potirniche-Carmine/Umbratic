@@ -73,7 +73,6 @@
 }
 
 .model-identity code {
-  padding-left: 0.05rem;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 12px;
@@ -92,7 +91,6 @@
  * most one dictation model, and the odd one out has to be findable by looking.
  */
 .model-role {
-  margin-top: 0.35rem;
   justify-self: start;
 }
 
@@ -359,17 +357,6 @@
   font-size: 0.85rem;
 }
 
-/* A label the screen reader reads and the eye does not need. */
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
 
 .connectionModelUnavailable {
   color: var(--muted);
@@ -390,4 +377,145 @@
   .model-state {
     width: auto;
   }
+}
+
+/*
+  The add form's read-only served id. It is an output, not an input: the
+  catalog decides it, and it cannot be renamed after registration, so offering
+  a text box to type into would be offering a decision that is not on the table.
+*/
+.field-readout {
+  display: block;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  color: var(--text);
+  background: var(--control);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.8rem;
+}
+
+/* The uncensored marker on a catalog row, beside the model's name. */
+.option-tag {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.36rem;
+  border-radius: 999px;
+  color: var(--amber, #f5c451);
+  background: rgba(245, 196, 81, 0.14);
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+
+/*
+  "Make default" on a card, and the badge it becomes. Both occupy the same slot
+  beside the served id, so promoting a model does not move the row.
+*/
+/* The served id and the default control share one line under the name. */
+.model-subline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.model-default {
+  padding: 0.16rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.68rem;
+  font-weight: 640;
+  white-space: nowrap;
+}
+
+.model-default:hover {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.model-default.is-default {
+  border-color: transparent;
+  color: var(--blue);
+  background: rgba(70, 132, 255, 0.14);
+}
+
+/* A note at the foot of a panel, about that panel. */
+.panel-footnote {
+  margin: 0.9rem 0 0;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.panel-footnote code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 0.72rem;
+}
+
+/* The command read back as a sentence, above the argv that produced it. */
+.model-summary {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* The folded command. Closed, it is one quiet row; open, it is the argv. */
+.model-command.disclosure {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.model-command label {
+  display: block;
+  margin-top: 0.5rem;
+}
+
+.model-notice,
+.model-footer {
+  grid-column: 1 / -1;
+}
+
+/* The output link on the left, the actions against the right edge. */
+.model-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 0.15rem;
+}
+
+.model-footer .model-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+/*
+  Model on its own row — the names are long — then precision and served id
+  sharing the next one. Left to the generic auto-fit grid those two sat in the
+  first two of three columns with a third of the panel empty beside them.
+*/
+.add-model-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.add-model-grid .field-wide {
+  grid-column: 1 / -1;
 }

@@ -81,6 +81,7 @@ export type RunnerEvent =
       delayMs: number;
     })
   | (RunnerEventBase & { type: "provider.reconnected"; attempt: number })
+  | (RunnerEventBase & { type: "provider.session_rejected" })
   | (RunnerEventBase & {
       type: "context.retrieved";
       toolCallId: string;
@@ -206,6 +207,7 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "context.compaction",
   "provider.reconnecting",
   "provider.reconnected",
+  "provider.session_rejected",
   "context.retrieved",
   "permission.requested",
   "artifact.requested",
@@ -394,6 +396,9 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
       );
     case "provider.reconnected":
       return hasNonNegativeNumber(value, "attempt") && Number(value.attempt) >= 1;
+    case "provider.session_rejected":
+      // The task id and timestamp every event carries are the whole payload.
+      return true;
     case "context.retrieved":
       return (
         hasString(value, "toolCallId")

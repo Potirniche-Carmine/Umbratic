@@ -578,14 +578,6 @@ button:disabled,
     transform 180ms var(--ease-out);
 }
 
-.banner {
-  position: fixed;
-  top: 82px;
-  left: 50%;
-  z-index: 40;
-  width: min(calc(100% - 2rem), 900px);
-  transform: translateX(-50%);
-}
 
 .notice {
   border-color: rgba(69, 210, 138, 0.2);
@@ -596,7 +588,7 @@ button:disabled,
 @starting-style {
   .banner {
     opacity: 0;
-    transform: translate(-50%, -6px) scale(0.99);
+    transform: translateY(-6px) scale(0.99);
   }
 
   .error:not(.banner):not(.auth-error),

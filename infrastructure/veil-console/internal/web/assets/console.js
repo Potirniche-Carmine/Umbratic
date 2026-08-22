@@ -129,7 +129,7 @@
     };
     const select = (option) => {
       input.value = option.dataset.choiceValue;
-      label.textContent = option.textContent.trim();
+      label.textContent = (option.querySelector(".option-title") || option).textContent.trim();
       options.forEach((item) => item.setAttribute("aria-selected", String(item === option)));
       input.dispatchEvent(new Event("change", { bubbles: true }));
       close();
@@ -157,6 +157,230 @@
     document.addEventListener("pointerdown", (event) => {
       if (!choice.contains(event.target)) close();
     });
+  }
+
+  /*
+    Errors clear themselves after five seconds. Nothing else reaches the banner
+    stack any more, so this is only ever an error being retired — a click
+    retires it sooner.
+  */
+  for (const banner of document.querySelectorAll("[data-dismiss-after]")) {
+    const dismiss = () => {
+      banner.classList.add("is-dismissed");
+      banner.addEventListener("transitionend", () => banner.remove(), { once: true });
+    };
+    const timer = window.setTimeout(dismiss, Number(banner.dataset.dismissAfter) || 5000);
+    banner.addEventListener("click", () => {
+      window.clearTimeout(timer);
+      dismiss();
+    });
+  }
+
+  /*
+    The segmented control. It writes into a hidden input rather than being one,
+    because "on" and "off" as two buttons is the readable version of a checkbox
+    and a form still needs a value to post.
+  */
+  for (const group of document.querySelectorAll("[data-segmented]")) {
+    const input = group.querySelector("[data-segmented-input]");
+    const options = [...group.querySelectorAll("[data-segmented-value]")];
+    if (!input || options.length === 0) continue;
+    for (const option of options) {
+      option.addEventListener("click", () => {
+        input.value = option.dataset.segmentedValue;
+        for (const item of options) {
+          item.setAttribute("aria-pressed", String(item === option));
+        }
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    }
+  }
+
+  // Changing a document's route applies it, rather than arming a Move button
+  // that sat beside every row doing nothing until it was noticed.
+  for (const select of document.querySelectorAll("[data-autosubmit]")) {
+    select.addEventListener("change", () => select.form?.requestSubmit());
+  }
+
+  /*
+    What a chosen file looks like before it is uploaded. The native control
+    reported "no file selected" and then a bare name; this reports the name, the
+    size and the type, and only then enables Upload — so the button is never
+    live with nothing behind it.
+  */
+  const formatBytes = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ["KB", "MB", "GB"];
+    let value = bytes / 1024;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+  };
+
+  for (const zone of document.querySelectorAll("[data-dropzone]")) {
+    const input = zone.querySelector("[data-dropzone-input]");
+    const empty = zone.querySelector("[data-dropzone-empty]");
+    const chosen = zone.querySelector("[data-dropzone-file]");
+    const name = zone.querySelector("[data-dropzone-name]");
+    const size = zone.querySelector("[data-dropzone-size]");
+    const kind = zone.querySelector("[data-dropzone-kind]");
+    const clear = zone.querySelector("[data-dropzone-clear]");
+    const submit = zone.closest("form")?.querySelector("[data-dropzone-submit]");
+    if (!input || !empty || !chosen) continue;
+
+    const render = () => {
+      const file = input.files?.[0];
+      empty.hidden = Boolean(file);
+      chosen.hidden = !file;
+      if (submit) submit.disabled = !file;
+      if (!file) return;
+      if (name) name.textContent = file.name;
+      if (size) size.textContent = formatBytes(file.size);
+      if (kind) kind.textContent = file.name.split(".").pop()?.slice(0, 4) || "file";
+    };
+
+    input.addEventListener("change", render);
+    clear?.addEventListener("click", (event) => {
+      // The button is inside the label, so a click would otherwise reopen the
+      // file picker it just cleared.
+      event.preventDefault();
+      event.stopPropagation();
+      input.value = "";
+      render();
+    });
+    for (const eventName of ["dragenter", "dragover"]) {
+      zone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        zone.classList.add("is-dragging");
+      });
+    }
+    for (const eventName of ["dragleave", "drop"]) {
+      zone.addEventListener(eventName, () => zone.classList.remove("is-dragging"));
+    }
+    zone.addEventListener("drop", (event) => {
+      const file = event.dataTransfer?.files?.[0];
+      if (!file) return;
+      event.preventDefault();
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      input.files = transfer.files;
+      render();
+    });
+    render();
+  }
+
+  /*
+    The add-model form, driven by the catalog rendered into the page.
+
+    Choosing a model fills the precision menu, the served id and the command.
+    None of it is trusted: the server rebuilds the command from the same
+    reviewed row before anything is executed. This is here so the box shows what
+    is about to be registered rather than making someone imagine it.
+  */
+  const addModel = document.querySelector("[data-add-model]");
+  const catalogSource = document.querySelector("[data-model-catalog]");
+  if (addModel && catalogSource) {
+    const catalog = JSON.parse(catalogSource.textContent);
+    const port = Number(addModel.querySelector('[name="port"]')?.value) || 8001;
+    const keyInput = addModel.querySelector("[data-catalog-choice] [data-choice-input]");
+    const keyLabel = addModel.querySelector("[data-catalog-choice] [data-choice-label]");
+    const variantField = addModel.querySelector("[data-variant-field]");
+    const variantChoice = addModel.querySelector("[data-variant-choice]");
+    const variantInput = variantChoice?.querySelector("[data-choice-input]");
+    const variantLabel = variantChoice?.querySelector("[data-choice-label]");
+    const variantMenu = variantChoice?.querySelector("[data-choice-menu]");
+    const variantTrigger = variantChoice?.querySelector("[data-choice-trigger]");
+    const servedField = addModel.querySelector("[data-served-field]");
+    const servedReadout = addModel.querySelector("[data-served-readout]");
+    const customFields = addModel.querySelector("[data-custom-fields]");
+    const commandBox = addModel.querySelector("[data-command-box]");
+    const commandDisclosure = addModel.querySelector("[data-command-disclosure]");
+
+    const entryFor = (key) => catalog.find((model) => model.Key === key) || null;
+
+    const buildCommand = (entry, variant) => [
+      `serve ${variant.Repo}`,
+      "--host 127.0.0.1",
+      `--port ${port}`,
+      `--served-model-name ${entry.ServedID}`,
+      `--max-model-len ${entry.MaxModelLen}`,
+      `--gpu-memory-utilization ${entry.GPUMemoryUtilization}`,
+      "--kv-cache-dtype fp8",
+    ].join("\n");
+
+    const renderVariants = (entry, selected) => {
+      if (!variantMenu || !variantInput || !variantLabel) return entry.Variants[0];
+      const chosen = entry.Variants.find((item) => item.Key === selected) || entry.Variants[0];
+      variantMenu.replaceChildren();
+      for (const variant of entry.Variants) {
+        const option = document.createElement("button");
+        option.type = "button";
+        option.setAttribute("role", "option");
+        option.dataset.choiceValue = variant.Key;
+        option.setAttribute("aria-selected", String(variant.Key === chosen.Key));
+        const title = document.createElement("span");
+        title.className = "option-title";
+        title.textContent = variant.Label;
+        const detail = document.createElement("span");
+        detail.className = "option-detail";
+        detail.textContent = `About ${variant.VRAMGiB} GB of VRAM · ${variant.Repo}`;
+        option.append(title, detail);
+        option.addEventListener("click", () => {
+          variantInput.value = variant.Key;
+          variantMenu.hidden = true;
+          variantTrigger?.setAttribute("aria-expanded", "false");
+          apply();
+        });
+        variantMenu.append(option);
+      }
+      variantInput.value = chosen.Key;
+      variantLabel.textContent = chosen.Label;
+      return chosen;
+    };
+
+    const apply = () => {
+      const entry = entryFor(keyInput?.value);
+      const custom = !entry;
+      if (customFields) customFields.hidden = !custom;
+      if (variantField) variantField.hidden = custom;
+      if (servedField) servedField.hidden = custom;
+      // A hidden required field blocks submission with a validation message
+      // nobody can see, so Custom's fields are only required while shown.
+      for (const field of addModel.querySelectorAll("[data-custom-required]")) {
+        field.toggleAttribute("required", custom);
+      }
+      if (commandDisclosure) commandDisclosure.open = custom;
+      if (custom) {
+        if (keyLabel) keyLabel.textContent = "Custom";
+        return;
+      }
+      if (keyLabel) keyLabel.textContent = entry.DisplayName;
+      const variant = renderVariants(entry, variantInput?.value);
+      if (servedReadout) servedReadout.textContent = entry.ServedID;
+      if (commandBox) commandBox.value = buildCommand(entry, variant);
+    };
+
+    // The generic [data-choice] wiring skips this menu: it is empty when the
+    // page loads, because which precisions exist depends on which model is
+    // chosen. Without this the trigger would be a button that does nothing.
+    if (variantTrigger && variantMenu) {
+      variantTrigger.addEventListener("click", () => {
+        const opening = variantMenu.hidden;
+        variantMenu.hidden = !opening;
+        variantTrigger.setAttribute("aria-expanded", String(opening));
+      });
+      document.addEventListener("pointerdown", (event) => {
+        if (variantChoice.contains(event.target)) return;
+        variantMenu.hidden = true;
+        variantTrigger.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    keyInput?.addEventListener("change", apply);
+    apply();
   }
 
   const form = document.querySelector("[data-settings-form]");

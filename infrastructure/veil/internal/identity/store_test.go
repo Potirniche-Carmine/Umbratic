@@ -310,3 +310,54 @@ func TestLowerReplacementEntitlementBlocksProductAccess(t *testing.T) {
 		t.Fatal("the over-limit state was not available for administration")
 	}
 }
+
+// Authenticate runs on every product request, so it must not take the write
+// lock or sweep the session map. This asserts the behaviour that guarantee
+// rests on: an expired session is recognised without being deleted, and the
+// timed sweep is what reclaims it.
+func TestAuthenticateDoesNotSweepAndPruneReclaims(t *testing.T) {
+	now := time.Date(2026, 7, 27, 18, 0, 0, 0, time.UTC)
+	store, err := openWithClock(filepath.Join(t.TempDir(), "identity.json"), testLicense(), func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.CreateUser("Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, privateKey := enrollDevice(t, store, user.UID, "Work laptop")
+	challenge, err := store.NewChallenge(device.DeviceUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(challenge.Challenge)))
+	session, err := store.NewSession(challenge.ChallengeUID, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(SessionTTL + time.Second)
+	// Hold the sweep off so this observes Authenticate alone rather than the
+	// prune that would otherwise be due by now.
+	store.mu.Lock()
+	store.lastPrune = now
+	store.mu.Unlock()
+	if _, err := store.Authenticate(session.Token); identityCode(t, err) != "session_expired" {
+		t.Fatal("an expired session authenticated")
+	}
+	store.mu.RLock()
+	remaining := len(store.sessions)
+	store.mu.RUnlock()
+	if remaining != 1 {
+		t.Fatalf("Authenticate swept the session map: %d entries left", remaining)
+	}
+
+	now = now.Add(pruneInterval)
+	store.maybePrune(now)
+	store.mu.RLock()
+	remaining = len(store.sessions)
+	store.mu.RUnlock()
+	if remaining != 0 {
+		t.Fatalf("the timed sweep did not reclaim the expired session: %d left", remaining)
+	}
+}

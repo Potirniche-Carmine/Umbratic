@@ -48,13 +48,17 @@ type Server struct {
 	identity     *identity.Store
 	identityErr  error
 	identityRate *identityRateLimiter
-	admission    *admissionController
-	lifecycle    *lifecycle
-	stream       *streamMetrics
-	templateErr  error
-	templateData templates.Registry
-	retriever    *rag.Retriever
-	availability availabilityCache
+	// modelQuota and telemetryQuota bound how often one identity may ask for
+	// work, which is a different question from how much work runs at once.
+	modelQuota     *quotaLimiter
+	telemetryQuota *quotaLimiter
+	admission      *admissionController
+	lifecycle      *lifecycle
+	stream         *streamMetrics
+	templateErr    error
+	templateData   templates.Registry
+	retriever      *rag.Retriever
+	availability   availabilityCache
 	// speech is nil unless a transcription runtime is configured, which is what
 	// keeps /api/transcribe absent rather than broken on a deployment without
 	// one.
@@ -74,9 +78,11 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 	profile := cfg.Generation
 	server := &Server{
 		cfg: cfg, model: modelClient, templateData: registry, templateErr: err,
-		identityRate: &identityRateLimiter{entries: map[string]rateEntry{}},
-		lifecycle:    &lifecycle{},
-		stream:       newStreamMetrics(),
+		identityRate:   &identityRateLimiter{entries: map[string]rateEntry{}},
+		modelQuota:     newQuotaLimiter(cfg.ModelRequestsPerMinute, time.Minute),
+		telemetryQuota: newQuotaLimiter(cfg.TelemetryBundlesPerHour, time.Hour),
+		lifecycle:      &lifecycle{},
+		stream:         newStreamMetrics(),
 		admission: newAdmissionController(
 			profile.MaxConcurrentRequests,
 			profile.MaxConcurrentRequestsUser,
@@ -99,6 +105,20 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Liveness is answered before authentication and says one thing: this
+	// process is accepting connections. A load balancer or uptime check needs
+	// no credential to ask that, and it is deliberately not /api/health, which
+	// reaches the runtime and reports what Veil can actually serve.
+	if r.URL.Path == "/livez" {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+		return
+	}
 	if !strings.HasPrefix(r.URL.Path, "/api/") {
 		writeJSONError(w, http.StatusNotFound, "not found")
 		return
@@ -192,6 +212,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/engineering/chat", "/api/marketing/chat", "/api/sales/chat",
 		"/api/internal/context/compact", "/api/internal/orient", "/api/transcribe":
 		if !s.guardLifecycle(w) {
+			return
+		}
+		if !s.allowQuota(w, r, s.modelQuota) {
+			return
+		}
+	case "/api/telemetry":
+		if !s.allowQuota(w, r, s.telemetryQuota) {
 			return
 		}
 	}
@@ -332,6 +359,8 @@ func (s *Server) handleCompanyIdentityRoute(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+const maxRateEntries = 4096
+
 type rateEntry struct {
 	window time.Time
 	count  int
@@ -342,34 +371,46 @@ type identityRateLimiter struct {
 	entries map[string]rateEntry
 }
 
-func (s *Server) allowIdentityRequest(w http.ResponseWriter, r *http.Request, action string, limit int) bool {
-	key := s.identityRateKey(r, action)
-	now := time.Now()
-	s.identityRate.mu.Lock()
-	entry := s.identityRate.entries[key]
+// admit records one request against key and reports whether it fits under
+// limit. The table is bounded: when it is full the oldest window is evicted to
+// make room, so a flood of distinct keys costs the flooder its own entries
+// rather than locking every other client out of enrollment.
+func (l *identityRateLimiter) admit(key string, limit int, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry := l.entries[key]
 	if !entry.window.IsZero() && now.Sub(entry.window) >= time.Minute {
 		entry = rateEntry{}
 	}
-	if len(s.identityRate.entries) >= 4096 {
-		for candidate, value := range s.identityRate.entries {
+	if _, exists := l.entries[key]; !exists {
+		for candidate, value := range l.entries {
 			if now.Sub(value.window) >= time.Minute {
-				delete(s.identityRate.entries, candidate)
+				delete(l.entries, candidate)
 			}
 		}
-	}
-	allowed := entry.count < limit
-	if _, exists := s.identityRate.entries[key]; !exists && len(s.identityRate.entries) >= 4096 {
-		allowed = false
-	}
-	if allowed {
-		if entry.window.IsZero() {
-			entry.window = now
+		for len(l.entries) >= maxRateEntries {
+			oldestKey, oldest := "", time.Time{}
+			for candidate, value := range l.entries {
+				if oldest.IsZero() || value.window.Before(oldest) {
+					oldestKey, oldest = candidate, value.window
+				}
+			}
+			delete(l.entries, oldestKey)
 		}
-		entry.count++
-		s.identityRate.entries[key] = entry
 	}
-	s.identityRate.mu.Unlock()
-	if allowed {
+	if entry.count >= limit {
+		return false
+	}
+	if entry.window.IsZero() {
+		entry.window = now
+	}
+	entry.count++
+	l.entries[key] = entry
+	return true
+}
+
+func (s *Server) allowIdentityRequest(w http.ResponseWriter, r *http.Request, action string, limit int) bool {
+	if s.identityRate.admit(s.identityRateKey(r, action), limit, time.Now()) {
 		return true
 	}
 	w.Header().Set("Retry-After", "60")

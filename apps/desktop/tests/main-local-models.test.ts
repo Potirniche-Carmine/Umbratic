@@ -75,7 +75,7 @@ test("MTP is for dense models; mixture-of-experts do not draft", () => {
       assert.equal(catalog.quantMtpFile(quant), null, `${id} should not download a drafting head`);
     }
   }
-  for (const id of ["gemma4-12b", "qwen38-27b", "qwen38-27b-abliterated"]) {
+  for (const id of ["gemma4-12b", "qwen38-27b", "qwen38-27b-obliterated"]) {
     assert.equal(catalog.catalogModel(id).mtp, true, `${id} is dense and should draft`);
   }
 });
@@ -119,13 +119,16 @@ test("memory fit is quant-aware and never hides a row", () => {
   const qwen = catalog.catalogModel("qwen38-27b");
   const q4 = catalog.modelQuant(qwen, "Q4_K_M");
   const q8 = catalog.modelQuant(qwen, "Q8_0");
-  const q3 = catalog.modelQuant(qwen, "Q3_K_M");
+  // Nothing below four bits is offered any more, so the rung that wants less
+  // room than the default is the obliterated build's importance-weighted one.
+  const obliterated = catalog.catalogModel("qwen38-27b-obliterated");
+  const smaller = catalog.modelQuant(obliterated, "IQ4_XS");
   // The default quantization wants exactly what the catalog says.
   assert.equal(hardware.neededRamGB(qwen, q4), 32);
   // The others scale with their bytes: a Q8_0 that is 1.7x the size wants
-  // 1.7x the room, and the Q3_K_M wants less.
+  // 1.7x the room, and a rung below the default wants less.
   assert.equal(hardware.neededRamGB(qwen, q8), Math.ceil(32 * (q8.files[0].bytes / q4.files[0].bytes)));
-  assert.ok(hardware.neededRamGB(qwen, q3) < 32);
+  assert.ok(hardware.neededRamGB(obliterated, smaller) < obliterated.minRamGB);
 
   assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 32, vramGB: null }), "comfortable");
   assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 64, vramGB: null }), "comfortable");
@@ -135,7 +138,10 @@ test("memory fit is quant-aware and never hides a row", () => {
   assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 16, vramGB: null }), "exceeds");
   // Picking a heavier quantization moves the verdict on the same machine.
   assert.equal(hardware.memoryFit(qwen, q8, { ramGB: 32, vramGB: null }), "exceeds");
-  assert.equal(hardware.memoryFit(qwen, q3, { ramGB: hardware.neededRamGB(qwen, q3), vramGB: null }), "comfortable");
+  assert.equal(
+    hardware.memoryFit(obliterated, smaller, { ramGB: hardware.neededRamGB(obliterated, smaller), vramGB: null }),
+    "comfortable",
+  );
 });
 
 // The case this could not see before: a large machine behind a small card.

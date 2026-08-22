@@ -60,7 +60,7 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
         ? [quantRow("Q8_0", 1, true)]
         : [
             quantRow("Q4_K_M", 1, true),
-            quantRow("Q3_K_M", 0.8, false),
+            quantRow("IQ4_XS", 0.92, false),
             quantRow("Q5_K_M", 1.16, false),
             quantRow("Q6_K", 1.38, false),
             quantRow("Q8_0", 1.78, false),
@@ -120,7 +120,7 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
       },
     }),
     row("gemma4-e4b-uncensored", "Gemma 4 E4B Uncensored", 5_335_285_728, 12, { uncensored: true, role: securityChatRole }),
-    row("qwen38-27b-abliterated", "Qwen3.8 27B Abliterated", 16_810_716_384, 32, {
+    row("qwen38-27b-obliterated", "Qwen3.8 27B Obliterated", 16_810_714_400, 32, {
       uncensored: true,
       mtp: true,
       role: {

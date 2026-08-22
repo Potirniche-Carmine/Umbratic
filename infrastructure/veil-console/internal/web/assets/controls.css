@@ -1,0 +1,342 @@
+/*
+  The controls more than one page needs: the menu, the switch, the shared
+  page-state note, and the screen-reader-only label.
+
+  They were spread across settings.css and models.css, which is why the same
+  markup rendered as a styled menu on Settings and a bare button on Documents.
+  A page that uses one of these links this file.
+*/
+/*
+  A two-button segmented control: the one setting a panel is about, stated as
+  the two states it can be in rather than as a checkbox to interpret.
+*/
+.segmented {
+  display: inline-flex;
+  /* A .field is a grid, so an inline-flex child would still stretch across it. */
+  justify-self: start;
+  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--control);
+}
+
+.segmented button {
+  min-width: 4.25rem;
+  min-height: 30px;
+  padding: 0 0.85rem;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.79rem;
+  font-weight: 620;
+  transition:
+    color 140ms var(--ease-out),
+    background 140ms var(--ease-out);
+}
+
+.segmented button:hover {
+  color: var(--text);
+}
+
+.segmented button[aria-pressed="true"] {
+  color: #fff;
+  background: var(--blue);
+}
+
+/* Off is a state, not a warning, so it reads as selected rather than as red. */
+.segmented button[data-segmented-value="off"][aria-pressed="true"] {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+/*
+  A menu row that carries a name and the sentence behind it. Size is rarely
+  what settles a model choice, so the detail line is what the row is for.
+*/
+
+/*
+  Page state that is not a toast: it explains what this page can and cannot do
+  and must not fade out five seconds after being read.
+*/
+.inline-note {
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  color: var(--muted);
+  background: var(--control);
+  font-size: 0.8rem;
+}
+
+/* A label the screen reader reads and the eye does not need. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+  The menu control, shared by Settings, Documents and Models. It used to live
+  in settings.css, which is why the same markup rendered as a styled menu on
+  one page and a bare button on the next.
+*/
+.choice {
+  position: relative;
+}
+
+.choice-trigger {
+  width: 100%;
+  min-height: 46px;
+  justify-content: space-between;
+  padding: 0 0.82rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--control-radius);
+  color: var(--text);
+  background: var(--control);
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.choice-trigger:hover,
+.choice-trigger[aria-expanded="true"] {
+  border-color: rgba(230, 235, 242, 0.28);
+  background: var(--control-hover);
+}
+
+.choice-trigger[aria-expanded="true"] {
+  box-shadow: var(--focus-ring);
+}
+
+.choice-chevron {
+  width: 0.48rem;
+  height: 0.48rem;
+  margin-top: -0.22rem;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 160ms var(--ease-out);
+}
+
+.choice-trigger[aria-expanded="true"] .choice-chevron {
+  margin-top: 0.22rem;
+  transform: rotate(225deg);
+}
+
+.choice-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 7px);
+  left: 0;
+  display: grid;
+  width: 100%;
+  /*
+    Tall enough for the whole serving catalog. At 260px the last row was cut in
+    half, which reads as a clipped menu rather than a scrollable one.
+  */
+  max-height: min(24rem, 60vh);
+  gap: 3px;
+  padding: 5px;
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: rgba(25, 30, 37, 0.98);
+  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.45);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+}
+
+.choice-menu[hidden] {
+  display: none;
+}
+
+.choice-menu button {
+  width: 100%;
+  min-height: 38px;
+  justify-content: flex-start;
+  padding: 0 0.72rem;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.8rem;
+  text-align: left;
+}
+
+.choice-menu button:hover,
+.choice-menu button:focus-visible {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.choice-menu button[aria-selected="true"] {
+  color: var(--text);
+  background: rgba(10, 132, 255, 0.14);
+}
+
+.field-hint {
+  display: block;
+  margin-top: 0.4rem;
+  color: var(--faint);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+/*
+  A menu row that carries a name and the sentence behind it. Size is rarely
+  what settles a model choice, so the detail line is what the row is for. This
+  has to come after the base .choice-menu rules: the row is a flex button by
+  default, which lays its two lines out side by side.
+*/
+.choice-menu button:has(.option-row) {
+  display: grid;
+  min-height: 0;
+  padding: 0.55rem 0.72rem;
+  gap: 0.2rem;
+}
+
+/* Name on the left, what it costs on the right, on one baseline. */
+.choice-menu .option-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.choice-menu .option-title {
+  color: var(--text);
+  font-weight: 620;
+}
+
+.choice-menu .option-size {
+  color: var(--faint);
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.choice-menu .option-detail {
+  color: var(--faint);
+  font-size: 0.73rem;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+/*
+  One fixed container, and the banners inside it flow down it. Each banner used
+  to position itself, at the same top and the same left as every other one, so
+  a page with two of them drew them over each other.
+*/
+.banner-stack {
+  position: fixed;
+  top: 82px;
+  left: 50%;
+  z-index: 40;
+  display: grid;
+  gap: 0.55rem;
+  width: min(calc(100% - 2rem), 900px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.banner-stack:empty {
+  display: none;
+}
+
+.banner {
+  pointer-events: auto;
+}
+
+/* Dismissal, whether the 5s timer or a click, fades rather than cuts. */
+.banner.is-dismissed {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.99);
+  pointer-events: none;
+}
+
+/*
+  A disclosure inside a panel rather than one that is the panel.
+
+  The panel-level summary is a 64px row with the panel's own horizontal padding,
+  which is right when the summary is the whole header of a card and wrong when
+  it is one line among the fields — it opened a hole under the model command and
+  indented the one in the add form past the fields above it.
+*/
+.disclosure.compact > summary {
+  min-height: 34px;
+  padding: 0;
+  font-size: 0.78rem;
+}
+
+.disclosure.compact > summary strong {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 620;
+}
+
+.disclosure.compact[open] > summary strong {
+  color: var(--text);
+}
+
+.disclosure.compact > summary:hover {
+  background: transparent;
+}
+
+.disclosure.compact > summary:hover strong {
+  color: var(--text);
+}
+
+/* The line under a page title that says what the page is for. */
+.page-subtitle {
+  max-width: 46rem;
+  margin: 0.5rem 0 0;
+  color: var(--faint);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/*
+  Sign out is the one control in the bar that ends the session, so it says so.
+  A shade rather than a solid: it sits beside navigation, and a filled red
+  button in a nav bar reads as the primary action on every page.
+*/
+.nav-signout {
+  color: #ff9da6;
+}
+
+.nav-signout:hover {
+  color: #ffd1d5;
+  background: rgba(255, 102, 115, 0.14);
+}
+
+/* Stop Veil: the heading and its consequence, the password, then the button. */
+.stop-form {
+  display: grid;
+  align-items: end;
+  gap: 0.9rem 1.2rem;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 18rem) auto;
+}
+
+.stop-form h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.stop-form p {
+  margin: 0.3rem 0 0;
+  color: var(--faint);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 720px) {
+  .stop-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

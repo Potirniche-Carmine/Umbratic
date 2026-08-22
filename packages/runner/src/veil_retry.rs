@@ -130,6 +130,39 @@ pub(crate) fn retryable_veil_failure(status: u16, payload: Option<&Value>) -> bo
     retryable_status(upstream.unwrap_or(status))
 }
 
+/// Whether the session token itself was refused.
+///
+/// Veil keeps sessions in memory, so a Veil that restarts mid-turn rejects a
+/// token that was valid a second earlier. That is not the client's mistake and
+/// not a permanent one: the desktop can sign a fresh challenge with the device
+/// key it still holds. Treating it as final would end every run in flight every
+/// time the server restarts.
+pub(crate) fn session_rejected(status: u16, payload: Option<&Value>) -> bool {
+    if status != 401 {
+        return false;
+    }
+    matches!(
+        payload
+            .and_then(|value| value.get("code"))
+            .and_then(Value::as_str),
+        Some("session_invalid" | "session_expired")
+    )
+}
+
+/// Asks the desktop for a fresh session before the retry goes out.
+///
+/// The runner cannot mint one: the device key never leaves the desktop. It
+/// holds the token behind a lock the desktop writes through, so announcing the
+/// rejection and then waiting out the backoff is the whole handshake — the next
+/// attempt reads whatever token is there by then.
+pub(crate) fn emit_session_rejected(session: &Session, sink: &EventSink) {
+    sink.emit(json!({
+        "type": "provider.session_rejected",
+        "taskId": session.task_id,
+        "at": now_iso()
+    }));
+}
+
 /// Whether this turn has produced anything the caller could already have acted
 /// on. Streamed text is on the user's screen and a tool call is on its way to
 /// an executor; re-sending the request after either would duplicate work rather

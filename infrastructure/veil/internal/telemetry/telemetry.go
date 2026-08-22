@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -434,6 +436,22 @@ func requiredString(value map[string]any, key string, limit int) error {
 	return nil
 }
 
+// pruneInterval damps the retention sweep. Pruning walks the whole directory,
+// so doing it on every accepted bundle made the cost of storing one bundle grow
+// with the number already stored; a sweep this often is well inside the
+// resolution retention is expressed in.
+const pruneInterval = 10 * time.Minute
+
+// maxStoredBundles caps the directory independently of age. Retention alone
+// bounds how old files get, not how many arrive, and an authenticated device
+// that uploads in a loop would otherwise be free to exhaust inodes.
+const maxStoredBundles = 20000
+
+var (
+	pruneMu   sync.Mutex
+	lastPrune time.Time
+)
+
 func StoreBundle(directory string, raw []byte, now time.Time, retentionDays int) (string, error) {
 	if directory == "" {
 		return "", nil
@@ -441,7 +459,7 @@ func StoreBundle(directory string, raw []byte, now time.Time, retentionDays int)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return "", err
 	}
-	if err := prune(directory, now, retentionDays); err != nil {
+	if err := maybePrune(directory, now, retentionDays); err != nil {
 		return "", err
 	}
 	name := fmt.Sprintf("telemetry-%s-%s.json", now.UTC().Format("20060102T150405.000000000Z"), randomSuffix())
@@ -457,15 +475,30 @@ func StoreBundle(directory string, raw []byte, now time.Time, retentionDays int)
 	return filePath, nil
 }
 
-func prune(directory string, now time.Time, retentionDays int) error {
-	if retentionDays <= 0 {
+func maybePrune(directory string, now time.Time, retentionDays int) error {
+	pruneMu.Lock()
+	defer pruneMu.Unlock()
+	if now.Sub(lastPrune) < pruneInterval {
 		return nil
 	}
+	lastPrune = now
+	return prune(directory, now, retentionDays)
+}
+
+// prune removes bundles past retention, then removes the oldest of whatever
+// remains until the directory is back under maxStoredBundles. One directory
+// read serves both, because the expensive part is the walk, not the deletes.
+func prune(directory string, now time.Time, retentionDays int) error {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return err
 	}
 	cutoff := now.Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	type stored struct {
+		name    string
+		modTime time.Time
+	}
+	kept := make([]stored, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "telemetry-") || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -474,9 +507,18 @@ func prune(directory string, now time.Time, retentionDays int) error {
 		if err != nil {
 			continue
 		}
-		if info.ModTime().Before(cutoff) {
+		if retentionDays > 0 && info.ModTime().Before(cutoff) {
 			_ = os.Remove(filepath.Join(directory, entry.Name()))
+			continue
 		}
+		kept = append(kept, stored{name: entry.Name(), modTime: info.ModTime()})
+	}
+	if len(kept) <= maxStoredBundles {
+		return nil
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].modTime.Before(kept[j].modTime) })
+	for _, entry := range kept[:len(kept)-maxStoredBundles] {
+		_ = os.Remove(filepath.Join(directory, entry.name))
 	}
 	return nil
 }

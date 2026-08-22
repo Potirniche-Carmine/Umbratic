@@ -8,6 +8,7 @@ output_dir="$repo_root/artifacts/releases"
 seats=""
 devices_per_user=2
 signing_key_file="${UMBRATIC_ENTITLEMENT_SIGNING_KEY_FILE:-}"
+feed_key_file="${UMBRATIC_FEED_MASTER_KEY_FILE:-}"
 org_uid=""
 positional=0
 
@@ -18,6 +19,7 @@ while [[ $# -gt 0 ]]; do
     --seats) seats="${2:-}"; shift 2 ;;
     --devices-per-user) devices_per_user="${2:-}"; shift 2 ;;
     --signing-key-file) signing_key_file="${2:-}"; shift 2 ;;
+    --feed-key-file) feed_key_file="${2:-}"; shift 2 ;;
     --org-uid) org_uid="${2:-}"; shift 2 ;;
     --*)
       echo "Unknown option: $1" >&2
@@ -54,6 +56,10 @@ if [[ -z "$signing_key_file" || ! -f "$signing_key_file" ]]; then
   echo "--signing-key-file must name the protected Ed25519 signing key file." >&2
   exit 2
 fi
+if [[ -z "$feed_key_file" || ! -f "$feed_key_file" ]]; then
+  echo "--feed-key-file must name the protected update-feed master key file." >&2
+  exit 2
+fi
 if [[ -n "$org_uid" && ( ! "$org_uid" =~ ^org_[A-Za-z0-9_-]{8,76}$ ) ]]; then
   echo "--org-uid must be a valid existing organization UID." >&2
   exit 2
@@ -65,11 +71,14 @@ bundle_name="umbratic-veil-console-$version-linux-amd64"
 bundle_dir="$work_dir/$bundle_name"
 mkdir -p "$bundle_dir" "$output_dir"
 
-entitlement_public_key="$(
+# Two lines: the entitlement public key, then this organization's update-feed
+# key. Both are baked into the binaries below and neither is written to disk.
+entitlement_output="$(
   cd "$repo_root/infrastructure/veil-console"
   entitlement_args=(
     --output "$bundle_dir/entitlement.json"
     --private-key-file "$signing_key_file"
+    --feed-key-file "$feed_key_file"
     --seats "$seats"
     --devices-per-user "$devices_per_user"
   )
@@ -78,9 +87,11 @@ entitlement_public_key="$(
   fi
   go run ./cmd/entitlement "${entitlement_args[@]}"
 )"
+entitlement_public_key="$(printf '%s\n' "$entitlement_output" | sed -n 1p)"
+feed_key="$(printf '%s\n' "$entitlement_output" | sed -n 2p)"
 
 (cd "$repo_root/infrastructure/veil" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-  -ldflags "-X umbratic-veil/internal/entitlement.TrustedPublicKey=$entitlement_public_key" \
+  -ldflags "-X umbratic-veil/internal/entitlement.TrustedPublicKey=$entitlement_public_key -X umbratic-veil/internal/updatefeed.CustomerKey=$feed_key" \
   -o "$bundle_dir/veil" ./cmd/veil)
 (cd "$repo_root/infrastructure/veil-console" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
   -ldflags "-X umbratic-veil-console/internal/entitlement.TrustedPublicKey=$entitlement_public_key" \
