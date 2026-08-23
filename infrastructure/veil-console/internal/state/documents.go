@@ -13,16 +13,29 @@ import (
 // is not here: it lives in the Qdrant payload so retrieval never touches this
 // database.
 type Document struct {
-	ID         string
-	Name       string
-	Kind       string
-	Route      string
+	ID   string
+	Name string
+	Kind string
+	// Routes is the set of teams this document is available to. Stored as one
+	// canonically ordered comma-separated column.
+	Routes     []string
 	Status     string
 	Error      string
 	ChunkCount int
 	ByteSize   int64
 	SHA256     string
 	UploadedAt time.Time
+}
+
+// HasRoute reports whether this document is available to a team, for the
+// checkbox that says so.
+func (d Document) HasRoute(route string) bool {
+	for _, candidate := range d.Routes {
+		if candidate == route {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -41,7 +54,7 @@ const (
 func (s *Store) InsertDocument(ctx context.Context, doc Document) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO documents(
 id,name,kind,route,status,error,chunk_count,byte_size,sha256,uploaded_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		doc.ID, doc.Name, doc.Kind, doc.Route, DocumentPending, "", 0, doc.ByteSize, doc.SHA256, doc.UploadedAt.Unix())
+		doc.ID, doc.Name, doc.Kind, config.FormatRoutes(doc.Routes), DocumentPending, "", 0, doc.ByteSize, doc.SHA256, doc.UploadedAt.Unix())
 	return err
 }
 
@@ -56,10 +69,12 @@ FROM documents ORDER BY uploaded_at DESC, name ASC`)
 	for rows.Next() {
 		var doc Document
 		var uploaded int64
-		if err := rows.Scan(&doc.ID, &doc.Name, &doc.Kind, &doc.Route, &doc.Status, &doc.Error,
+		var route string
+		if err := rows.Scan(&doc.ID, &doc.Name, &doc.Kind, &route, &doc.Status, &doc.Error,
 			&doc.ChunkCount, &doc.ByteSize, &doc.SHA256, &uploaded); err != nil {
 			return nil, err
 		}
+		doc.Routes = config.ParseRoutes(route)
 		doc.UploadedAt = time.Unix(uploaded, 0)
 		documents = append(documents, doc)
 	}
@@ -69,8 +84,9 @@ FROM documents ORDER BY uploaded_at DESC, name ASC`)
 func (s *Store) Document(ctx context.Context, id string) (Document, bool, error) {
 	var doc Document
 	var uploaded int64
+	var route string
 	err := s.db.QueryRowContext(ctx, `SELECT id,name,kind,route,status,error,chunk_count,byte_size,sha256,uploaded_at
-FROM documents WHERE id=?`, id).Scan(&doc.ID, &doc.Name, &doc.Kind, &doc.Route, &doc.Status, &doc.Error,
+FROM documents WHERE id=?`, id).Scan(&doc.ID, &doc.Name, &doc.Kind, &route, &doc.Status, &doc.Error,
 		&doc.ChunkCount, &doc.ByteSize, &doc.SHA256, &uploaded)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Document{}, false, nil
@@ -78,6 +94,7 @@ FROM documents WHERE id=?`, id).Scan(&doc.ID, &doc.Name, &doc.Kind, &doc.Route, 
 	if err != nil {
 		return Document{}, false, err
 	}
+	doc.Routes = config.ParseRoutes(route)
 	doc.UploadedAt = time.Unix(uploaded, 0)
 	return doc, true, nil
 }
@@ -92,9 +109,10 @@ func (s *Store) PendingDocument(ctx context.Context) (Document, bool, error) {
 	defer tx.Rollback()
 	var doc Document
 	var uploaded int64
+	var route string
 	err = tx.QueryRowContext(ctx, `SELECT id,name,kind,route,status,error,chunk_count,byte_size,sha256,uploaded_at
 FROM documents WHERE status=? ORDER BY uploaded_at ASC LIMIT 1`, DocumentPending).Scan(
-		&doc.ID, &doc.Name, &doc.Kind, &doc.Route, &doc.Status, &doc.Error,
+		&doc.ID, &doc.Name, &doc.Kind, &route, &doc.Status, &doc.Error,
 		&doc.ChunkCount, &doc.ByteSize, &doc.SHA256, &uploaded)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Document{}, false, nil
@@ -105,6 +123,7 @@ FROM documents WHERE status=? ORDER BY uploaded_at ASC LIMIT 1`, DocumentPending
 	if _, err := tx.ExecContext(ctx, "UPDATE documents SET status=?, error='' WHERE id=?", DocumentProcessing, doc.ID); err != nil {
 		return Document{}, false, err
 	}
+	doc.Routes = config.ParseRoutes(route)
 	doc.Status, doc.UploadedAt = DocumentProcessing, time.Unix(uploaded, 0)
 	return doc, true, tx.Commit()
 }
@@ -126,15 +145,14 @@ func (s *Store) MarkDocumentFailed(ctx context.Context, id, reason string) error
 
 // QueueDocument returns a document to the ingestion queue, which is what both
 // re-index and retag need: the chunks are rebuilt rather than edited in place.
-func (s *Store) QueueDocument(ctx context.Context, id, route string) error {
+func (s *Store) QueueDocument(ctx context.Context, id string, routes []string) error {
+	route := config.FormatRoutes(routes)
 	if route == "" {
 		_, err := s.db.ExecContext(ctx, "UPDATE documents SET status=?, error='', chunk_count=0 WHERE id=?",
 			DocumentPending, id)
 		return err
 	}
-	if !config.ValidRoute(route) {
-		return errors.New("route is invalid")
-	}
+
 	_, err := s.db.ExecContext(ctx, "UPDATE documents SET status=?, error='', chunk_count=0, route=? WHERE id=?",
 		DocumentPending, route, id)
 	return err

@@ -108,14 +108,20 @@ func boundedQuery(query string) string {
 }
 
 // routeFilter is the whole tenancy story of this feature: retrieval sees the
-// request's own route plus the shared "all" tag, and nothing else. The
+// request's own route and nothing else. The
 // embedding-model clause is what keeps a corpus embedded by another model from
 // being compared against this model's vectors — a mismatch retrieves nothing
 // rather than retrieving nonsense.
 func routeFilter(route, embeddingModel string) map[string]any {
 	return map[string]any{
 		"must": []any{
-			map[string]any{"key": "route", "match": map[string]any{"any": []string{route, "all"}}},
+			// `route` is a keyword array in the payload — the set of teams a
+			// document was made available to — and `any` matches when the
+			// request's route is one of them. The shared "all" tag is gone
+			// with the catch-all route it stood for: a document meant for
+			// everyone now carries every team, so it is found the same way as
+			// one meant for a single team.
+			map[string]any{"key": "route", "match": map[string]any{"any": []string{route}}},
 			map[string]any{"key": "embedding_model", "match": map[string]any{"value": embeddingModel}},
 		},
 	}

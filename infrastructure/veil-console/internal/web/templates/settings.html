@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=9">
-  <link rel="stylesheet" href="/assets/style.css?v=11">
-  <link rel="stylesheet" href="/assets/controls.css?v=1">
-  <link rel="stylesheet" href="/assets/settings.css?v=11">
-  <script defer src="/assets/console.js?v=12"></script>
+  <link rel="stylesheet" href="/assets/style.css?v=13">
+  <link rel="stylesheet" href="/assets/controls.css?v=3">
+  <link rel="stylesheet" href="/assets/settings.css?v=12">
+  <script defer src="/assets/console.js?v=14"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -17,22 +17,18 @@
   <div class="page">
     <header class="page-header">
       <h1>Settings</h1>
+      <p class="page-subtitle">How much work this deployment admits at once, and how long it waits.</p>
     </header>
 
     {{template "banners" .}}
 
     <!--
-      What is left after the model moved out.
-
-      This page used to ask for a runtime URL, a model name, a temperature, a
-      top-p, a maximum output, a reasoning effort, a thinking budget, a parallel
-      tool-call switch and a request-size slider. Almost none of that is a
-      property of this server: temperature and top-p belong to whichever model
-      is answering and are read off its catalog row, reasoning effort belongs to
-      the person asking the question and is chosen in the app, and the runtime
-      URL belongs to whichever registered model is the default. What genuinely
-      is a deployment-wide decision — how much context to publish, how many
-      requests to admit at once, and how long to wait — is what stayed.
+      What is left once everything belonging to a model has moved to the model.
+      Sampling comes off the catalog row the running weights came from; context
+      is read out of each model's own --max-model-len; reasoning effort is the
+      end user's per-request choice. What stayed is the two questions a
+      deployment actually answers — how much at once, and how long to wait —
+      with the finer knobs behind Advanced.
     -->
     <form class="settings-form" method="post" data-settings-form>
       <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -47,40 +43,24 @@
         <div class="default-model">
           <span>Default model</span>
           <strong>{{.DefaultModelName}}</strong>
+          {{if .ContextLabel}}<em>{{.ContextLabel}} context</em>{{end}}
           <a class="text-button" href="/models">Change on Models</a>
         </div>
         {{else}}
         <p class="inline-note">No model is registered yet. <a href="/models">Add one</a>, then make it the default from its card.</p>
         {{end}}
 
-        <div class="slider-field">
-          <div class="slider-heading">
-            <label for="context-slider">Context window</label>
-          </div>
-          <input type="hidden" name="context_length" value="{{.Config.ContextLength}}" data-context-value>
-          <div class="range-control">
-            <input
-              class="range"
-              id="context-slider"
-              type="range"
-              min="0"
-              max="7"
-              step="1"
-              value="{{.ContextIndex}}"
-              data-context-slider
-            >
-            <output class="range-value" for="context-slider" data-context-label>{{.ContextLabel}}</output>
-          </div>
-          <div class="range-options" aria-label="Context window choices">
-            <button type="button" data-context-option data-index="0">8K</button>
-            <button type="button" data-context-option data-index="1">16K</button>
-            <button type="button" data-context-option data-index="2">32K</button>
-            <button type="button" data-context-option data-index="3">64K</button>
-            <button type="button" data-context-option data-index="4">128K</button>
-            <button type="button" data-context-option data-index="5">256K</button>
-            <button type="button" data-context-option data-index="6">512K</button>
-            <button type="button" data-context-option data-index="7">1M</button>
-          </div>
+        <div class="field-grid">
+          <label class="field">
+            <span>Requests at once</span>
+            <input type="number" name="max_concurrent_requests" value="{{.Config.MaxConcurrentRequests}}" min="1" required>
+            <small>Across the whole deployment. Anything past it queues.</small>
+          </label>
+          <label class="field">
+            <span>Request timeout</span>
+            <input name="request_timeout" value="{{.Config.RequestTimeout}}" required>
+            <small>How long one answer may take before it is given up on.</small>
+          </label>
         </div>
       </section>
 
@@ -92,12 +72,15 @@
         <div class="advanced-content">
           <div class="field-grid advanced-grid">
             <label class="field">
-              <span>Max concurrent requests</span>
-              <input type="number" name="max_concurrent_requests" value="{{.Config.MaxConcurrentRequests}}" min="1" required>
+              <span>Requests at once, per user</span>
+              <input type="number" name="max_concurrent_requests_per_user" value="{{.Config.MaxConcurrentRequestsPerUser}}" min="1" required>
             </label>
             <label class="field">
-              <span>Max concurrent per user</span>
-              <input type="number" name="max_concurrent_requests_per_user" value="{{.Config.MaxConcurrentRequestsPerUser}}" min="1" required>
+              <span>Maximum output</span>
+              <div class="input-suffix">
+                <input type="number" name="max_output_tokens" value="{{.Config.MaxOutputTokens}}" min="1" max="32768" required>
+                <span>tokens</span>
+              </div>
             </label>
             <label class="field">
               <span>Queue timeout</span>
@@ -108,8 +91,11 @@
               <input name="model_timeout" value="{{.Config.ModelTimeout}}" required>
             </label>
             <label class="field">
-              <span>Request timeout</span>
-              <input name="request_timeout" value="{{.Config.RequestTimeout}}" required>
+              <span>Maximum request size</span>
+              <div class="input-suffix">
+                <input type="number" name="max_body_bytes" value="{{.Config.MaxBodyBytes}}" min="1024" max="268435456" required>
+                <span>bytes</span>
+              </div>
             </label>
           </div>
         </div>

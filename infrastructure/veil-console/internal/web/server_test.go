@@ -371,19 +371,16 @@ func TestRestartCooldown(t *testing.T) {
 	}
 }
 
-func TestContextPresentationUsesCommonPresets(t *testing.T) {
-	for _, test := range []struct {
-		value int
-		index int
-		label string
-	}{
-		{value: 0, index: 3, label: "64K tokens"},
-		{value: 131_072, index: 4, label: "128K tokens"},
-		{value: 1_048_576, index: 7, label: "1M tokens"},
+// Context is a per-model label now, not a slider index. What matters is that
+// what the Settings page prints for the default model reads as tokens.
+func TestContextLabelReadsAsTokens(t *testing.T) {
+	for value, want := range map[int]string{
+		65_536:    "64K",
+		262_144:   "256K",
+		1_048_576: "1M",
 	} {
-		index, label := contextPresentation(test.value)
-		if index != test.index || label != test.label {
-			t.Errorf("context %d presented as %d %q", test.value, index, label)
+		if got := config.ContextLabel(value); got != want {
+			t.Errorf("context %d presented as %q, want %q", value, got, want)
 		}
 	}
 }

@@ -196,10 +196,10 @@
     }
   }
 
-  // Changing a document's route applies it, rather than arming a Move button
-  // that sat beside every row doing nothing until it was noticed.
-  for (const select of document.querySelectorAll("[data-autosubmit]")) {
-    select.addEventListener("change", () => select.form?.requestSubmit());
+  // Ticking a team applies it, rather than arming a Move button that sat
+  // beside every row doing nothing until it was noticed.
+  for (const control of document.querySelectorAll("[data-autosubmit]")) {
+    control.addEventListener("change", () => control.form?.requestSubmit());
   }
 
   /*
@@ -287,65 +287,106 @@
     const port = Number(addModel.querySelector('[name="port"]')?.value) || 8001;
     const keyInput = addModel.querySelector("[data-catalog-choice] [data-choice-input]");
     const keyLabel = addModel.querySelector("[data-catalog-choice] [data-choice-label]");
-    const variantField = addModel.querySelector("[data-variant-field]");
-    const variantChoice = addModel.querySelector("[data-variant-choice]");
-    const variantInput = variantChoice?.querySelector("[data-choice-input]");
-    const variantLabel = variantChoice?.querySelector("[data-choice-label]");
-    const variantMenu = variantChoice?.querySelector("[data-choice-menu]");
-    const variantTrigger = variantChoice?.querySelector("[data-choice-trigger]");
     const servedField = addModel.querySelector("[data-served-field]");
     const servedReadout = addModel.querySelector("[data-served-readout]");
     const customFields = addModel.querySelector("[data-custom-fields]");
     const commandBox = addModel.querySelector("[data-command-box]");
     const commandDisclosure = addModel.querySelector("[data-command-disclosure]");
 
+    // The precision and context menus are built from the chosen model, so they
+    // are empty in the markup and the generic [data-choice] wiring skips them.
+    // Each one owns its trigger, its rows and its outside-click here.
+    const menu = (selector, render) => {
+      const root = addModel.querySelector(selector);
+      if (!root) return null;
+      const input = root.querySelector("[data-choice-input]");
+      const label = root.querySelector("[data-choice-label]");
+      const list = root.querySelector("[data-choice-menu]");
+      const trigger = root.querySelector("[data-choice-trigger]");
+      const close = () => {
+        list.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+      };
+      trigger.addEventListener("click", () => {
+        const opening = list.hidden;
+        list.hidden = !opening;
+        trigger.setAttribute("aria-expanded", String(opening));
+      });
+      document.addEventListener("pointerdown", (event) => {
+        if (!root.contains(event.target)) close();
+      });
+      return { root, input, label, list, trigger, close, render };
+    };
+
+    const variant = menu("[data-variant-choice]");
+    const context = menu("[data-context-choice]");
+    const variantField = addModel.querySelector("[data-variant-field]");
+    const contextField = addModel.querySelector("[data-context-field]");
+
+    // A menu with one option is not a choice. It is hidden rather than
+    // rendered as a control that cannot change anything.
+    const fill = (control, options, selected, onPick, field) => {
+      if (!control) return null;
+      if (field) field.hidden = options.length < 2;
+      const chosen = options.find((item) => String(item.value) === String(selected)) || options[0];
+      control.list.replaceChildren();
+      for (const option of options) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.setAttribute("role", "option");
+        row.dataset.choiceValue = String(option.value);
+        row.setAttribute("aria-selected", String(option.value === chosen.value));
+        const head = document.createElement("span");
+        head.className = "option-row";
+        const title = document.createElement("span");
+        title.className = "option-title";
+        title.textContent = option.label;
+        head.append(title);
+        if (option.aside) {
+          const aside = document.createElement("span");
+          aside.className = "option-size";
+          aside.textContent = option.aside;
+          head.append(aside);
+        }
+        row.append(head);
+        if (option.detail) {
+          const detail = document.createElement("span");
+          detail.className = "option-detail";
+          detail.textContent = option.detail;
+          row.append(detail);
+        }
+        row.addEventListener("click", () => {
+          control.input.value = String(option.value);
+          control.close();
+          onPick();
+        });
+        control.list.append(row);
+      }
+      control.input.value = String(chosen.value);
+      control.label.textContent = chosen.label;
+      return chosen;
+    };
+
     const entryFor = (key) => catalog.find((model) => model.Key === key) || null;
 
-    const buildCommand = (entry, variant) => [
-      `serve ${variant.Repo}`,
+    const buildCommand = (entry, repo, tokens) => [
+      `serve ${repo}`,
       "--host 127.0.0.1",
       `--port ${port}`,
       `--served-model-name ${entry.ServedID}`,
-      `--max-model-len ${entry.MaxModelLen}`,
+      `--max-model-len ${tokens}`,
       `--gpu-memory-utilization ${entry.GPUMemoryUtilization}`,
       "--kv-cache-dtype fp8",
     ].join("\n");
-
-    const renderVariants = (entry, selected) => {
-      if (!variantMenu || !variantInput || !variantLabel) return entry.Variants[0];
-      const chosen = entry.Variants.find((item) => item.Key === selected) || entry.Variants[0];
-      variantMenu.replaceChildren();
-      for (const variant of entry.Variants) {
-        const option = document.createElement("button");
-        option.type = "button";
-        option.setAttribute("role", "option");
-        option.dataset.choiceValue = variant.Key;
-        option.setAttribute("aria-selected", String(variant.Key === chosen.Key));
-        const title = document.createElement("span");
-        title.className = "option-title";
-        title.textContent = variant.Label;
-        const detail = document.createElement("span");
-        detail.className = "option-detail";
-        detail.textContent = `About ${variant.VRAMGiB} GB of VRAM · ${variant.Repo}`;
-        option.append(title, detail);
-        option.addEventListener("click", () => {
-          variantInput.value = variant.Key;
-          variantMenu.hidden = true;
-          variantTrigger?.setAttribute("aria-expanded", "false");
-          apply();
-        });
-        variantMenu.append(option);
-      }
-      variantInput.value = chosen.Key;
-      variantLabel.textContent = chosen.Label;
-      return chosen;
-    };
 
     const apply = () => {
       const entry = entryFor(keyInput?.value);
       const custom = !entry;
       if (customFields) customFields.hidden = !custom;
-      if (variantField) variantField.hidden = custom;
+      if (custom) {
+        if (variantField) variantField.hidden = true;
+        if (contextField) contextField.hidden = true;
+      }
       if (servedField) servedField.hidden = custom;
       // A hidden required field blocks submission with a validation message
       // nobody can see, so Custom's fields are only required while shown.
@@ -358,86 +399,35 @@
         return;
       }
       if (keyLabel) keyLabel.textContent = entry.DisplayName;
-      const variant = renderVariants(entry, variantInput?.value);
-      if (servedReadout) servedReadout.textContent = entry.ServedID;
-      if (commandBox) commandBox.value = buildCommand(entry, variant);
-    };
 
-    // The generic [data-choice] wiring skips this menu: it is empty when the
-    // page loads, because which precisions exist depends on which model is
-    // chosen. Without this the trigger would be a button that does nothing.
-    if (variantTrigger && variantMenu) {
-      variantTrigger.addEventListener("click", () => {
-        const opening = variantMenu.hidden;
-        variantMenu.hidden = !opening;
-        variantTrigger.setAttribute("aria-expanded", String(opening));
-      });
-      document.addEventListener("pointerdown", (event) => {
-        if (variantChoice.contains(event.target)) return;
-        variantMenu.hidden = true;
-        variantTrigger.setAttribute("aria-expanded", "false");
-      });
-    }
+      const chosenVariant = fill(
+        variant,
+        entry.Variants.map((item) => ({
+          value: item.Key,
+          label: item.Label,
+          aside: `${item.VRAMGiB} GB`,
+          detail: item.Repo,
+        })),
+        variant?.input.value,
+        apply,
+        variantField,
+      );
+      const chosenContext = fill(
+        context,
+        entry.Contexts.map((item) => ({ value: item.Tokens, label: `${item.Label} tokens` })),
+        context?.input.value,
+        apply,
+        contextField,
+      );
+      if (servedReadout) servedReadout.textContent = entry.ServedID;
+      if (commandBox && chosenVariant && chosenContext) {
+        const repo = entry.Variants.find((item) => item.Key === chosenVariant.value).Repo;
+        commandBox.value = buildCommand(entry, repo, chosenContext.value);
+      }
+    };
 
     keyInput?.addEventListener("change", apply);
     apply();
   }
 
-  const form = document.querySelector("[data-settings-form]");
-  if (!form) return;
-
-  const contextSlider = form.querySelector("[data-context-slider]");
-  const contextValue = form.querySelector("[data-context-value]");
-  const contextLabel = form.querySelector("[data-context-label]");
-  const contextOptions = [...form.querySelectorAll("[data-context-option]")];
-  const contexts = [
-    { value: 8192, label: "8K tokens" },
-    { value: 16384, label: "16K tokens" },
-    { value: 32768, label: "32K tokens" },
-    { value: 65536, label: "64K tokens" },
-    { value: 131072, label: "128K tokens" },
-    { value: 262144, label: "256K tokens" },
-    { value: 524288, label: "512K tokens" },
-    { value: 1048576, label: "1M tokens" },
-  ];
-  const updateContext = () => {
-    if (!contextSlider || !contextValue || !contextLabel) return;
-    const index = Math.max(0, Math.min(contexts.length - 1, Number(contextSlider.value)));
-    contextValue.value = String(contexts[index].value);
-    contextLabel.textContent = contexts[index].label;
-    contextSlider.closest(".range-control")?.style.setProperty("--range-progress", `${(index / (contexts.length - 1)) * 100}%`);
-    contextOptions.forEach((item) => item.toggleAttribute("aria-current", Number(item.dataset.index) === index));
-  };
-  contextSlider?.addEventListener("input", updateContext);
-  contextOptions.forEach((item) => item.addEventListener("click", () => {
-    contextSlider.value = item.dataset.index;
-    updateContext();
-  }));
-  updateContext();
-
-  const bodySlider = form.querySelector("[data-body-slider]");
-  const bodyBytes = form.querySelector("[data-body-bytes]");
-  const bodyLabel = form.querySelector("[data-body-label]");
-  const bodyOptions = [...form.querySelectorAll("[data-body-option]")];
-  const sizes = [
-    { bytes: 16 * 1024 * 1024, label: "16 MiB" },
-    { bytes: 32 * 1024 * 1024, label: "32 MiB" },
-    { bytes: 64 * 1024 * 1024, label: "64 MiB" },
-    { bytes: 128 * 1024 * 1024, label: "128 MiB" },
-    { bytes: 256 * 1024 * 1024, label: "256 MiB" },
-  ];
-  const updateBodySize = () => {
-    if (!bodySlider || !bodyBytes || !bodyLabel) return;
-    const index = Math.max(0, Math.min(sizes.length - 1, Number(bodySlider.value)));
-    bodyBytes.value = String(sizes[index].bytes);
-    bodyLabel.textContent = sizes[index].label;
-    bodySlider.closest(".range-control")?.style.setProperty("--range-progress", `${(index / (sizes.length - 1)) * 100}%`);
-    bodyOptions.forEach((item) => item.toggleAttribute("aria-current", Number(item.dataset.index) === index));
-  };
-  bodySlider?.addEventListener("input", updateBodySize);
-  bodyOptions.forEach((item) => item.addEventListener("click", () => {
-    bodySlider.value = item.dataset.index;
-    updateBodySize();
-  }));
-  updateBodySize();
 })();

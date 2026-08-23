@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
-  <link rel="stylesheet" href="/assets/style.css?v=12">
-  <link rel="stylesheet" href="/assets/controls.css?v=2">
-  <link rel="stylesheet" href="/assets/documents.css?v=3">
-  <script defer src="/assets/console.js?v=13"></script>
+  <link rel="stylesheet" href="/assets/style.css?v=13">
+  <link rel="stylesheet" href="/assets/controls.css?v=3">
+  <link rel="stylesheet" href="/assets/documents.css?v=4">
+  <script defer src="/assets/console.js?v=14"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -53,22 +53,25 @@
           </span>
         </label>
 
+        <!--
+          Teams are checkboxes because a document can belong to more than one.
+          The menu this replaced offered them one at a time plus an "Everyone"
+          that meant the other three — so a document could be for engineering,
+          or for everyone, but never for engineering and sales.
+        -->
         <div class="upload-actions">
-          <div class="field">
-            <span id="route-label">Available to</span>
-            <div class="choice" data-choice>
-              <input type="hidden" name="route" value="{{.DefaultRoute}}" data-choice-input>
-              <button class="choice-trigger" type="button" aria-labelledby="route-label route-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
-                <span id="route-value" data-choice-label>{{.DefaultRouteLabel}}</span>
-                <span class="choice-chevron" aria-hidden="true"></span>
-              </button>
-              <div class="choice-menu" role="listbox" aria-labelledby="route-label" data-choice-menu hidden>
-                {{range .RouteChoices}}
-                <button type="button" role="option" data-choice-value="{{.Route}}" aria-selected="{{eq .Route $.DefaultRoute}}">{{.Label}}</button>
-                {{end}}
-              </div>
+          <fieldset class="route-set">
+            <legend>Available to</legend>
+            <div class="checkbox-row">
+              {{range .RouteChoices}}
+              <label class="checkbox">
+                <input type="checkbox" name="route" value="{{.Route}}" checked>
+                <span class="checkbox-box" aria-hidden="true"></span>
+                <span>{{.Label}}</span>
+              </label>
+              {{end}}
             </div>
-          </div>
+          </fieldset>
           <button class="button primary" type="submit" data-dropzone-submit disabled>Upload</button>
         </div>
       </form>
@@ -104,10 +107,16 @@
             <td>
               <form class="route-form" method="post" action="/documents/{{.ID}}/retag">
                 <input type="hidden" name="csrf" value="{{$.CSRF}}">
-                <select name="route" aria-label="Available to, for {{.Name}}" data-autosubmit>
-                  {{$current := .Route}}
-                  {{range $.RouteChoices}}<option value="{{.Route}}" {{if eq .Route $current}}selected{{end}}>{{.Label}}</option>{{end}}
-                </select>
+                {{$document := .}}
+                <div class="checkbox-row">
+                  {{range $.RouteChoices}}
+                  <label class="checkbox compact" title="{{.Label}}">
+                    <input type="checkbox" name="route" value="{{.Route}}" {{if $document.HasRoute .Route}}checked{{end}} data-autosubmit aria-label="{{.Label}}, for {{$document.Name}}">
+                    <span class="checkbox-box" aria-hidden="true"></span>
+                    <span>{{.Short}}</span>
+                  </label>
+                  {{end}}
+                </div>
               </form>
             </td>
             <td><span class="status status-{{.Status}}">{{.Status}}</span></td>

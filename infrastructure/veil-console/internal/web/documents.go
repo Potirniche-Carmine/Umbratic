@@ -33,19 +33,29 @@ type documentsView struct {
 type routeChoice struct {
 	Route string
 	Label string
+	// Short is the label inside a table row, where three checkboxes have to fit
+	// in a column beside five others.
+	Short string
+}
+
+var routeShortLabels = map[string]string{
+	"engineering": "Eng",
+	"sales":       "Sales",
+	"marketing":   "Mktg",
 }
 
 var routeLabels = map[string]string{
 	"engineering": "Engineering",
 	"sales":       "Sales",
 	"marketing":   "Marketing",
-	"all":         "Everyone",
 }
 
 func routeChoices() []routeChoice {
 	choices := make([]routeChoice, 0, len(config.Routes))
 	for _, route := range config.Routes {
-		choices = append(choices, routeChoice{Route: route, Label: routeLabels[route]})
+		choices = append(choices, routeChoice{
+			Route: route, Label: routeLabels[route], Short: routeShortLabels[route],
+		})
 	}
 	return choices
 }
@@ -74,16 +84,14 @@ func (s *Server) documentsData(r *http.Request, errorMessage, noticeMessage stri
 	}
 	return pageData{
 		Title: "Documents", CSRF: csrfCookie(r), RAG: settings, Corpus: view,
-		RouteChoices:      routeChoices(),
-		DefaultRoute:      config.RouteAll,
-		DefaultRouteLabel: routeLabels[config.RouteAll],
-		EmbeddingChoices:  config.EmbeddingChoices,
-		Error:             errorMessage, Notice: noticeMessage,
+		RouteChoices:     routeChoices(),
+		EmbeddingChoices: config.EmbeddingChoices,
+		Error:            errorMessage, Notice: noticeMessage,
 	}
 }
 
 func (s *Server) documentsUpload(w http.ResponseWriter, r *http.Request) {
-	route := strings.TrimSpace(r.FormValue("route"))
+	routes := config.NormalizeRoutes(r.Form["route"])
 	file, header, err := r.FormFile("document")
 	if err != nil {
 		s.renderStatus(w, "documents.html", http.StatusBadRequest, s.documentsData(r, "Choose a file to upload.", ""))
@@ -104,7 +112,7 @@ func (s *Server) documentsUpload(w http.ResponseWriter, r *http.Request) {
 			s.documentsData(r, "That file is larger than 25 MiB.", ""))
 		return
 	}
-	if _, err := s.corpus.Save(r.Context(), header.Filename, route, data, time.Now()); err != nil {
+	if _, err := s.corpus.Save(r.Context(), header.Filename, routes, data, time.Now()); err != nil {
 		s.store.Audit(r.Context(), "documents.upload", "failure", time.Now())
 		s.renderStatus(w, "documents.html", http.StatusBadRequest, s.documentsData(r, err.Error(), ""))
 		return
@@ -128,8 +136,13 @@ func (s *Server) documentDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) documentRetag(w http.ResponseWriter, r *http.Request) {
-	route := strings.TrimSpace(r.FormValue("route"))
-	if err := s.corpus.Requeue(r.Context(), r.PathValue("document_id"), route); err != nil {
+	routes := config.NormalizeRoutes(r.Form["route"])
+	if len(routes) == 0 {
+		s.renderStatus(w, "documents.html", http.StatusBadRequest,
+			s.documentsData(r, "A document has to be available to at least one team.", ""))
+		return
+	}
+	if err := s.corpus.Requeue(r.Context(), r.PathValue("document_id"), routes); err != nil {
 		s.store.Audit(r.Context(), "documents.retag", "failure", time.Now())
 		s.renderStatus(w, "documents.html", http.StatusBadRequest, s.documentsData(r, err.Error(), ""))
 		return
@@ -139,7 +152,7 @@ func (s *Server) documentRetag(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) documentReindex(w http.ResponseWriter, r *http.Request) {
-	if err := s.corpus.Requeue(r.Context(), r.PathValue("document_id"), ""); err != nil {
+	if err := s.corpus.Requeue(r.Context(), r.PathValue("document_id"), nil); err != nil {
 		s.store.Audit(r.Context(), "documents.reindex", "failure", time.Now())
 		s.renderStatus(w, "documents.html", http.StatusBadRequest, s.documentsData(r, err.Error(), ""))
 		return

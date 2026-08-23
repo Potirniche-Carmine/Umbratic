@@ -19,12 +19,15 @@ func TestSettingsKeepsDeploymentFieldsAndDropsModelFields(t *testing.T) {
 		Title:            "Settings",
 		Config:           config.Veil{Model: "ornith-1.5-35b-a3b"},
 		DefaultModelName: "Ornith 1.5 35B A3B",
+		ContextLabel:     "256K",
 	})
 	body := response.Body.String()
 	for _, expected := range []string{
 		"Ornith 1.5 35B A3B",
-		`data-index="0">8K`, `data-index="3">64K`, `data-index="7">1M`,
+		// The default model's context is printed, not offered.
+		"256K context",
 		`name="max_concurrent_requests"`, `name="queue_timeout"`, `name="request_timeout"`,
+		`name="max_output_tokens"`, `name="max_body_bytes"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("Settings is missing %q: %s", expected, body)
@@ -32,10 +35,11 @@ func TestSettingsKeepsDeploymentFieldsAndDropsModelFields(t *testing.T) {
 	}
 	for _, gone := range []string{
 		`name="temperature"`, `name="top_p"`, `name="reasoning_effort"`,
-		`name="parallel_tool_calls"`, `name="max_output_tokens"`,
-		`name="thinking_token_budget"`, `name="max_body_bytes"`,
+		`name="parallel_tool_calls"`, `name="thinking_token_budget"`,
 		`name="provider_base_url"`, `name="model"`,
-		"range-ends", "<select",
+		// Context moved to the model, so the slider that set one number for
+		// every model at once must not come back.
+		`name="context_length"`, "context-slider", "range-ends", "<select",
 	} {
 		if strings.Contains(body, gone) {
 			t.Fatalf("Settings still carries the retired control %q: %s", gone, body)

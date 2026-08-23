@@ -351,51 +351,10 @@
   white-space: nowrap;
 }
 
-/* The route is changed by choosing, not by choosing and then confirming. */
-.route-form select {
-  /* The global select is a 46px field. In a table row it is a label that can
-     be changed, so it sizes to its text. */
-  width: auto;
-  min-width: 8.5rem;
-  height: 32px;
-  min-height: 0;
-  padding: 0 1.6rem 0 0.6rem;
-  box-shadow: none;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--muted);
-  background: var(--control);
-  font-size: 0.76rem;
-  font-weight: 600;
-  -webkit-appearance: none;
-  appearance: none;
-}
 
-.route-form select:hover,
-.route-form select:focus {
-  border-color: var(--line-strong);
-  color: var(--text);
-}
 
-/*
-  The same caret every other menu on the console uses. A select cannot carry a
-  pseudo-element, and a data: URI is not an option — the CSP allows images from
-  'self' only — so the wrapper draws it.
-*/
-.route-form {
-  position: relative;
-  display: inline-block;
-}
-
-.route-form::after {
-  position: absolute;
-  top: 50%;
-  right: 0.7rem;
-  width: 0.4rem;
-  height: 0.4rem;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  content: "";
-  pointer-events: none;
-  transform: translateY(-70%) rotate(45deg);
+/* The team checkboxes sit against the left of their column. */
+.route-form .checkbox-row {
+  gap: 0.3rem;
+  flex-wrap: nowrap;
 }

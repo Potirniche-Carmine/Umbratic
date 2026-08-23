@@ -83,9 +83,10 @@ func (c *Corpus) Notify() {
 
 // Save stores an upload and queues it. The type comes from the bytes, never
 // from the name the browser sent.
-func (c *Corpus) Save(ctx context.Context, name, route string, data []byte, now time.Time) (state.Document, error) {
-	if !config.ValidRoute(route) {
-		return state.Document{}, errors.New("route is invalid")
+func (c *Corpus) Save(ctx context.Context, name string, routes []string, data []byte, now time.Time) (state.Document, error) {
+	routes = config.NormalizeRoutes(routes)
+	if len(routes) == 0 {
+		return state.Document{}, errors.New("choose at least one team this document is available to")
 	}
 	name = documentName(name)
 	if name == "" {
@@ -111,7 +112,7 @@ func (c *Corpus) Save(ctx context.Context, name, route string, data []byte, now 
 		return state.Document{}, err
 	}
 	document := state.Document{
-		ID: id, Name: name, Kind: kind, Route: route, Status: state.DocumentPending,
+		ID: id, Name: name, Kind: kind, Routes: routes, Status: state.DocumentPending,
 		ByteSize: int64(len(data)), SHA256: hex.EncodeToString(digest[:]), UploadedAt: now,
 	}
 	if err := os.WriteFile(c.originalPath(id), data, 0o600); err != nil {
@@ -141,8 +142,8 @@ func (c *Corpus) Delete(ctx context.Context, id string) error {
 
 // Requeue rebuilds a document's chunks, optionally under a new route. Retagging
 // is a re-index because the route lives in every chunk's payload.
-func (c *Corpus) Requeue(ctx context.Context, id, route string) error {
-	if err := c.store.QueueDocument(ctx, id, route); err != nil {
+func (c *Corpus) Requeue(ctx context.Context, id string, routes []string) error {
+	if err := c.store.QueueDocument(ctx, id, config.NormalizeRoutes(routes)); err != nil {
 		return err
 	}
 	c.Notify()
@@ -256,7 +257,7 @@ func (c *Corpus) index(ctx context.Context, document state.Document) error {
 	points := make([]Point, len(chunks))
 	for index, chunk := range chunks {
 		points[index] = Point{
-			Route: document.Route, DocID: document.ID, DocName: document.Name,
+			Routes: document.Routes, DocID: document.ID, DocName: document.Name,
 			Section: chunk.Section, ChunkIndex: chunk.Index, Text: chunk.Text,
 			EmbeddingModel: settings.EmbeddingModel, Vector: vectors[index],
 		}

@@ -35,10 +35,17 @@ type modelsView struct {
 	// back with what the administrator typed.
 	Form      modelForm
 	FormError string
+	// Kind is the tab being shown. Chat and dictation are different enough that
+	// one list of both would need a column explaining which is which.
+	Kind config.ServingKind
+	// DictationTaken is true when a dictation runtime is already registered.
+	// Veil takes one speech endpoint, so the add form says so rather than
+	// letting the submission fail.
+	DictationTaken bool
 	// Catalog is the reviewed list the add form offers, and CatalogJSON is the
-	// same data for the script that keeps the served id and the command in step
-	// with the menu. One source, rendered twice, rather than a list in Go and a
-	// copy of it in JavaScript.
+	// same data for the script that keeps the served id, the context and the
+	// command in step with the menu. One source, rendered twice, rather than a
+	// list in Go and a copy of it in JavaScript.
 	Catalog     []config.ServingModel
 	CatalogJSON template.JS
 	// SuggestedPort is what a new model is offered, and what the browser
@@ -52,8 +59,9 @@ type modelRow struct {
 	State     supervisor.ModelState
 	StateText string
 	PID       int
+	// Logs is the tail of the runtime's output, carried only for a model that
+	// failed.
 	Logs      string
-	Expanded  bool
 	IsDefault bool
 	Running   bool
 	// Stale is true when the saved command is not the one the live process was
@@ -80,6 +88,8 @@ type modelForm struct {
 	CatalogKey string
 	// Variant is the precision chosen for that row.
 	Variant string
+	// Context is the context length chosen for it, in tokens.
+	Context int
 }
 
 // CustomCatalogKey is the "not on the list" option. It is what the add form was
@@ -109,36 +119,54 @@ func (s *Server) modelsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "models.html", s.modelsData(r, "", "", nil))
 }
 
+// IsChat and IsDictation drive the tab bar.
+func (v modelsView) IsChat() bool      { return v.Kind != config.KindDictation }
+func (v modelsView) IsDictation() bool { return v.Kind == config.KindDictation }
+
 func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string, form *modelForm) pageData {
 	models, err := s.store.ManagedModels(r.Context())
 	if err != nil && errorMessage == "" {
 		errorMessage = "The model list could not be loaded."
 	}
-	expanded := r.URL.Query().Get("logs")
+	kind := requestKind(r)
 	defaultModel := ""
 	if cfg, ok, cfgErr := s.store.Configuration(r.Context(), "current"); cfgErr == nil && ok {
 		defaultModel = cfg.Model
 	}
 
 	port := state.NextFreeManagedPort(models, s.startup.Port, s.veilPort())
-	catalogJSON, _ := json.Marshal(config.ServingCatalog)
+	catalog := config.CatalogFor(kind)
+	catalogJSON, _ := json.Marshal(catalog)
+	dictationTaken := false
+	for _, model := range models {
+		if model.IsSpeech() {
+			dictationTaken = true
+		}
+	}
+	first := catalog[0]
 	view := modelsView{
-		Configured:    s.models.Configured(),
-		Registered:    len(models),
-		Catalog:       config.ServingCatalog,
-		CatalogJSON:   template.JS(catalogJSON),
-		SuggestedPort: port,
-		CustomKey:     CustomCatalogKey,
+		Configured:     s.models.Configured(),
+		Registered:     len(models),
+		Kind:           kind,
+		DictationTaken: dictationTaken,
+		Catalog:        catalog,
+		CatalogJSON:    template.JS(catalogJSON),
+		SuggestedPort:  port,
+		CustomKey:      CustomCatalogKey,
 		Form: modelForm{
-			CatalogKey: config.ServingCatalog[0].Key,
-			Variant:    config.ServingCatalog[0].Variants[0].Key,
-			Command:    config.DefaultCommand("", "", port),
+			CatalogKey: first.Key,
+			Variant:    first.Variants[0].Key,
+			Context:    first.DefaultContext,
+			Command:    config.CatalogCommand(first, first.Variants[0], port, first.DefaultContext),
 		},
 	}
 	if form != nil {
 		view.Form = *form
 	}
 	for _, model := range models {
+		if (config.KindDictation == kind) != model.IsSpeech() {
+			continue
+		}
 		status := s.models.Status(model.ID)
 		running := status.State == supervisor.ModelHealthy || status.State == supervisor.ModelStarting
 		stale := running && s.models.RunningCommand(model.ID) != strings.TrimSpace(model.Command)
@@ -147,14 +175,16 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 			State:        status.State,
 			StateText:    modelStateText(status),
 			PID:          status.PID,
-			Expanded:     expanded == model.ID,
 			IsDefault:    model.ID == defaultModel,
 			Running:      running,
 			Stale:        stale,
 			Notice:       modelNotice(model, running, stale),
 		}
 		row.Summary = modelSummary(model)
-		if row.Expanded {
+		// Output is shown when it is the answer to a question the card raises.
+		// A model that is serving has nothing to explain; one that failed has
+		// exactly one thing, and it used to be behind a link.
+		if status.State == supervisor.ModelFailed {
 			row.Logs = s.models.Logs(model.ID)
 		}
 		view.Rows = append(view.Rows, row)
@@ -269,11 +299,17 @@ func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm)
 	// always assembled from the reviewed row on this side.
 	if entry, ok := config.CatalogEntry(form.CatalogKey); ok {
 		variant := entry.Variant(form.Variant)
+		context, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("context")))
+		context = entry.ClampContext(context)
 		form.Variant = variant.Key
+		form.Context = context
 		form.ID = entry.ServedID
 		form.DisplayName = entry.DisplayName
-		form.Command = config.CatalogCommand(entry, variant, catalogPort(r))
-		form.Role = config.RoleChat
+		form.Command = config.CatalogCommand(entry, variant, catalogPort(r), context)
+		// The tab the form was submitted from decides the role. A dictation
+		// model registered as chat would be published in the model picker and
+		// fail every message sent to it.
+		form.Role = entry.Kind.Role()
 	}
 	if id != "" {
 		form.ID = id
@@ -356,6 +392,11 @@ func (s *Server) modelsDefault(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg.Model = chosen.ID
 	cfg.ProviderBaseURL = fmt.Sprintf("http://127.0.0.1:%d/v1", facts.Port)
+	// The context follows the model. It is read out of this model's own
+	// --max-model-len rather than set on Settings, because a KV cache is sized
+	// by the weights it belongs to and one number applied to every model at
+	// once was either wasteful or wrong.
+	cfg.ContextLength = facts.MaxModelLen
 	cfg = config.WithModelDefaults(cfg, facts.ModelPath)
 	if err := cfg.Validate(); err != nil {
 		s.modelActionResult(w, r, err, "model.default")
@@ -473,6 +514,24 @@ func (s *Server) renderModelFormError(w http.ResponseWriter, r *http.Request, fo
 	s.renderStatus(w, "models.html", http.StatusBadRequest, data)
 }
 
+// requestKind is the tab this request belongs to. A GET carries it in the query
+// and a POST carries it in the form, so an action taken on the dictation tab
+// comes back to the dictation tab rather than dropping the reader onto chat.
+func requestKind(r *http.Request) config.ServingKind {
+	if value := strings.TrimSpace(r.URL.Query().Get("kind")); value != "" {
+		return config.NormalizeKind(value)
+	}
+	return config.NormalizeKind(r.FormValue("kind"))
+}
+
+// modelsPath is the page for one tab.
+func modelsPath(kind config.ServingKind) string {
+	if kind == config.KindDictation {
+		return "/models?kind=dictation"
+	}
+	return "/models"
+}
+
 func (s *Server) modelActionResult(w http.ResponseWriter, r *http.Request, err error, event string) {
 	if err != nil {
 		s.store.Audit(r.Context(), event, "failure", time.Now())
@@ -480,5 +539,5 @@ func (s *Server) modelActionResult(w http.ResponseWriter, r *http.Request, err e
 		return
 	}
 	s.store.Audit(r.Context(), event, "success", time.Now())
-	http.Redirect(w, r, "/models", http.StatusSeeOther)
+	http.Redirect(w, r, modelsPath(requestKind(r)), http.StatusSeeOther)
 }

@@ -25,7 +25,7 @@
 .model-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.65rem 1.2rem;
+  gap: 0.5rem 1.2rem;
   padding: clamp(1rem, 3vw, 1.35rem);
   align-items: center;
 }
@@ -248,11 +248,11 @@
  */
 .model-notice {
   grid-column: 1 / -1;
-  min-height: 1.2rem;
+  min-height: 1rem;
   margin: 0;
   color: var(--amber);
   font-size: 0.8rem;
-  line-height: 1.2rem;
+  line-height: 1rem;
 }
 
 .model-notice.is-empty {
@@ -518,4 +518,11 @@
 
 .add-model-grid .field-wide {
   grid-column: 1 / -1;
+}
+
+/* The footnote under the add form, when there is no rule to draw above it. */
+.panel-footnote.no-rule {
+  padding-top: 0;
+  border-top: 0;
+  margin-top: 0;
 }

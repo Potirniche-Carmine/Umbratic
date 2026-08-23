@@ -50,19 +50,18 @@ type Server struct {
 const restartCooldown = 5 * time.Second
 
 type pageData struct {
-	Title             string
-	CSRF              string
-	Error             string
-	Notice            string
-	Username          string
-	Setup             bool
-	Configured        bool
-	Status            string
-	Config            config.Veil
-	Token             string
-	BodySizeIndex     int
-	BodySizeLabel     string
-	ContextIndex      int
+	Title      string
+	CSRF       string
+	Error      string
+	Notice     string
+	Username   string
+	Setup      bool
+	Configured bool
+	Status     string
+	Config     config.Veil
+	Token      string
+	// ContextLabel is the default model's context, printed beside its name. It
+	// is not editable here: context belongs to the model.
 	ContextLabel      string
 	PasswordError     bool
 	Running           bool
@@ -80,8 +79,6 @@ type pageData struct {
 	RetryAfterSeconds int
 	RAG               config.RAG
 	RouteChoices      []routeChoice
-	DefaultRoute      string
-	DefaultRouteLabel string
 	EmbeddingChoices  []config.EmbeddingChoice
 	Corpus            documentsView
 }
@@ -447,6 +444,7 @@ func (s *Server) settingsData(r *http.Request, cfg config.Veil, errorMessage, no
 		Title: "Settings", CSRF: csrfCookie(r), Config: cfg,
 		Error: errorMessage, Notice: noticeMessage,
 		DefaultModelName: s.defaultModelName(r, cfg),
+		ContextLabel:     config.ContextLabel(cfg.ContextLength),
 		// Only the count is needed here: it decides whether this field is a
 		// free-form model name or a choice among the managed runtimes.
 		Models: modelsView{Registered: len(managed)},
@@ -692,12 +690,19 @@ func (s *Server) parseSettings(r *http.Request) (config.Veil, error) {
 	if err != nil || !ok {
 		cfg = config.DefaultVeil()
 	}
-	if value := strings.TrimSpace(r.FormValue("context_length")); value != "" {
+	if value := strings.TrimSpace(r.FormValue("max_output_tokens")); value != "" {
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
-			return cfg, errors.New("context length is invalid")
+			return cfg, errors.New("maximum output tokens is invalid")
 		}
-		cfg.ContextLength = parsed
+		cfg.MaxOutputTokens = parsed
+	}
+	if value := strings.TrimSpace(r.FormValue("max_body_bytes")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return cfg, errors.New("maximum request size is invalid")
+		}
+		cfg.MaxBodyBytes = parsed
 	}
 	if value := strings.TrimSpace(r.FormValue("max_concurrent_requests")); value != "" {
 		parsed, err := strconv.Atoi(value)
@@ -835,65 +840,11 @@ func (s *Server) render(w http.ResponseWriter, name string, data pageData) {
 }
 
 func (s *Server) renderStatus(w http.ResponseWriter, name string, status int, data pageData) {
-	data.BodySizeIndex, data.BodySizeLabel = bodySizePresentation(data.Config.MaxBodyBytes)
-	data.ContextIndex, data.ContextLabel = contextPresentation(data.Config.ContextLength)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := s.templates.ExecuteTemplate(w, name, data); err != nil {
 		log.Printf("render template: %v", err)
 	}
-}
-
-func contextPresentation(value int) (int, string) {
-	presets := []int{8_192, 16_384, 32_768, 65_536, 131_072, 262_144, 524_288, 1_048_576}
-	if value <= 0 {
-		value = presets[3]
-	}
-	nearest := 0
-	for index := range presets {
-		if absInt(presets[index]-value) < absInt(presets[nearest]-value) {
-			nearest = index
-		}
-	}
-	if value >= 1_048_576 && value%1_048_576 == 0 {
-		return nearest, fmt.Sprintf("%dM tokens", value/1_048_576)
-	}
-	if value%1024 == 0 {
-		return nearest, fmt.Sprintf("%dK tokens", value/1024)
-	}
-	return nearest, fmt.Sprintf("%d tokens", value)
-}
-
-func bodySizePresentation(value int64) (int, string) {
-	const mebibyte = int64(1 << 20)
-	presets := []int64{16 * mebibyte, 32 * mebibyte, 64 * mebibyte, 128 * mebibyte, 256 * mebibyte}
-	if value <= 0 {
-		value = presets[2]
-	}
-	nearest := 0
-	for index := range presets {
-		if abs64(presets[index]-value) < abs64(presets[nearest]-value) {
-			nearest = index
-		}
-	}
-	if value%mebibyte == 0 {
-		return nearest, fmt.Sprintf("%d MiB", value/mebibyte)
-	}
-	return nearest, fmt.Sprintf("%d bytes", value)
-}
-
-func abs64(value int64) int64 {
-	if value < 0 {
-		return -value
-	}
-	return value
-}
-
-func absInt(value int) int {
-	if value < 0 {
-		return -value
-	}
-	return value
 }
 
 // The lockout is a flat delay, so an attempt only needs to say when the next

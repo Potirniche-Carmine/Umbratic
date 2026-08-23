@@ -79,7 +79,7 @@ func TestChatInjectsRetrievedContextUnderOneBanner(t *testing.T) {
 	if code := chatRequestTo(server, "/api/sales/chat", "how long do refunds take?").Code; code != http.StatusOK {
 		t.Fatalf("chat failed: %d", code)
 	}
-	if *route != "sales,all" {
+	if *route != "sales" {
 		t.Fatalf("retrieval asked for the wrong routes: %q", *route)
 	}
 	final := lastUserContent(t, client.req.Messages)
@@ -98,10 +98,13 @@ func TestChatInjectsRetrievedContextUnderOneBanner(t *testing.T) {
 }
 
 func TestEngineeringAndSalesRetrieveTheirOwnRoutes(t *testing.T) {
+	// Each route asks for itself and nothing else. A document meant for more
+	// than one team carries each of them in its payload, so the widening
+	// happens in the corpus rather than in the query.
 	for path, want := range map[string]string{
-		"/api/engineering/chat": "engineering,all",
-		"/api/marketing/chat":   "marketing,all",
-		"/api/sales/chat":       "sales,all",
+		"/api/engineering/chat": "engineering",
+		"/api/marketing/chat":   "marketing",
+		"/api/sales/chat":       "sales",
 	} {
 		vector, route := vectorStub(t, "text")
 		server := NewServer(ragTestConfig(vector.URL), &fakeModelClient{})

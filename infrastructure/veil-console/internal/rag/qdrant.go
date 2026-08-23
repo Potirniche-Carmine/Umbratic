@@ -36,7 +36,10 @@ type Store struct {
 // Point is one indexed chunk. The text lives here rather than in console.db so
 // retrieval never needs to open the Console database.
 type Point struct {
-	Route          string
+	// Routes is a keyword array in the payload. Qdrant's `match: any` reads an
+	// array field as "any of these", which is what makes a document available
+	// to several teams without a catch-all route standing in for the rest.
+	Routes         []string
 	DocID          string
 	DocName        string
 	Section        string
@@ -140,7 +143,7 @@ func (s *Store) Upsert(ctx context.Context, points []Point) error {
 				"id":     id,
 				"vector": point.Vector,
 				"payload": map[string]any{
-					"route": point.Route, "doc_id": point.DocID, "doc_name": point.DocName,
+					"route": point.Routes, "doc_id": point.DocID, "doc_name": point.DocName,
 					"section": point.Section, "chunk_index": point.ChunkIndex,
 					"text": point.Text, "embedding_model": point.EmbeddingModel,
 				},

@@ -24,17 +24,18 @@ func TestRenderPreviewPages(t *testing.T) {
 	server, closeServer := testServer(t)
 	defer closeServer()
 
-	catalogJSON, _ := json.Marshal(config.ServingCatalog)
+	chat := config.CatalogFor(config.KindChat)
+	dictation := config.CatalogFor(config.KindDictation)
+	catalogJSON, _ := json.Marshal(chat)
+	dictationJSON, _ := json.Marshal(dictation)
 	uploaded := time.Date(2026, 8, 20, 14, 5, 0, 0, time.UTC)
 	settings := config.DefaultRAG()
 
 	docsBase := func(all []state.Document, total int) pageData {
 		return pageData{
 			Title: "Documents", CSRF: "preview", Username: "owner", RAG: settings,
-			EmbeddingChoices:  config.EmbeddingChoices,
-			RouteChoices:      routeChoices(),
-			DefaultRoute:      config.RouteAll,
-			DefaultRouteLabel: routeLabels[config.RouteAll],
+			EmbeddingChoices: config.EmbeddingChoices,
+			RouteChoices:     routeChoices(),
 			Corpus: documentsView{
 				All: all, Documents: total, Chunks: 412,
 				MaxDocs: state.MaxDocuments, MaxChunks: state.MaxChunks, Dimension: 1024,
@@ -42,10 +43,10 @@ func TestRenderPreviewPages(t *testing.T) {
 		}
 	}
 	filled := docsBase([]state.Document{
-		{ID: "a", Name: "Incident Runbook.pdf", Kind: "pdf", Status: "indexed", ChunkCount: 184, Route: "engineering", UploadedAt: uploaded},
-		{ID: "b", Name: "Platform Architecture.docx", Kind: "docx", Status: "processing", ChunkCount: 0, Route: "engineering", UploadedAt: uploaded},
-		{ID: "c", Name: "Employee Handbook.md", Kind: "md", Status: "indexed", ChunkCount: 228, Route: "all", UploadedAt: uploaded},
-		{ID: "d", Name: "Q3 Pricing.xlsx", Kind: "xlsx", Status: "failed", ChunkCount: 0, Route: "sales", UploadedAt: uploaded},
+		{ID: "a", Name: "Incident Runbook.pdf", Kind: "pdf", Status: "indexed", ChunkCount: 184, Routes: []string{"engineering"}, UploadedAt: uploaded},
+		{ID: "b", Name: "Platform Architecture.docx", Kind: "docx", Status: "processing", ChunkCount: 0, Routes: []string{"engineering"}, UploadedAt: uploaded},
+		{ID: "c", Name: "Employee Handbook.md", Kind: "md", Status: "indexed", ChunkCount: 228, Routes: []string{"engineering", "sales", "marketing"}, UploadedAt: uploaded},
+		{ID: "d", Name: "Q3 Pricing.xlsx", Kind: "xlsx", Status: "failed", ChunkCount: 0, Routes: []string{"sales", "marketing"}, UploadedAt: uploaded},
 	}, 4)
 	empty := docsBase(nil, 0)
 
@@ -53,18 +54,19 @@ func TestRenderPreviewPages(t *testing.T) {
 		Title: "Models", CSRF: "preview", Username: "owner",
 		Models: modelsView{
 			Configured: false, Registered: 2, Running: 1,
-			Catalog: config.ServingCatalog, CatalogJSON: template.JS(catalogJSON),
+			Kind: config.KindChat, Catalog: chat, CatalogJSON: template.JS(catalogJSON),
 			SuggestedPort: 8001, CustomKey: CustomCatalogKey,
 			Form: modelForm{
-				CatalogKey: config.ServingCatalog[0].Key,
-				Variant:    config.ServingCatalog[0].Variants[0].Key,
-				Command:    config.CatalogCommand(config.ServingCatalog[0], config.ServingCatalog[0].Variants[0], 8001),
+				CatalogKey: chat[0].Key,
+				Variant:    chat[0].Variants[0].Key,
+				Context:    chat[0].DefaultContext,
+				Command:    config.CatalogCommand(chat[0], chat[0].Variants[0], 8001, 65536),
 			},
 			Rows: []modelRow{
 				{
 					ManagedModel: config.ManagedModel{
 						ID: "qwen3.8-27b", DisplayName: "Qwen3.8 27B", Role: config.RoleChat,
-						Command: config.CatalogCommand(config.ServingCatalog[1], config.ServingCatalog[1].Variants[0], 8001),
+						Command: config.CatalogCommand(chat[1], chat[1].Variants[0], 8001, 65536),
 					},
 					State: supervisor.ModelHealthy, StateText: "Serving", Running: true, IsDefault: true,
 					Summary: "Qwen/Qwen3.8-27B-FP8 · 8-bit (FP8) · 256K context · port 8001",
@@ -72,7 +74,7 @@ func TestRenderPreviewPages(t *testing.T) {
 				{
 					ManagedModel: config.ManagedModel{
 						ID: "ornith-1.5-35b-a3b", DisplayName: "Ornith 1.5 35B A3B", Role: config.RoleChat,
-						Command: config.CatalogCommand(config.ServingCatalog[0], config.ServingCatalog[0].Variants[0], 8002),
+						Command: config.CatalogCommand(chat[0], chat[0].Variants[0], 8002, 262144),
 					},
 					State: supervisor.ModelStopped, StateText: "Stopped",
 					Summary: "ornith-ai/Ornith-1.5-35B-A3B-NVFP4 · 4-bit (NVFP4) · 256K context · port 8002",
@@ -80,6 +82,18 @@ func TestRenderPreviewPages(t *testing.T) {
 			},
 		},
 	}
+	modelsDictation := models
+	modelsDictation.Models.Kind = config.KindDictation
+	modelsDictation.Models.Catalog = dictation
+	modelsDictation.Models.CatalogJSON = template.JS(dictationJSON)
+	modelsDictation.Models.Rows = nil
+	modelsDictation.Models.Form = modelForm{
+		CatalogKey: dictation[0].Key,
+		Variant:    dictation[0].Variants[0].Key,
+		Context:    dictation[0].DefaultContext,
+		Command:    config.CatalogCommand(dictation[0], dictation[0].Variants[0], 8003, dictation[0].DefaultContext),
+	}
+
 	modelsEmpty := models
 	modelsEmpty.Models.Rows = nil
 	modelsEmpty.Models.Registered = 0
@@ -88,8 +102,8 @@ func TestRenderPreviewPages(t *testing.T) {
 		Title: "Settings", CSRF: "preview", Username: "owner",
 		Config:           config.DefaultVeil(),
 		DefaultModelName: "Qwen3.8 27B",
-		ContextIndex:     3, ContextLabel: "64K tokens",
-		Models: modelsView{Registered: 2},
+		ContextLabel:     "256K",
+		Models:           modelsView{Registered: 2},
 	}
 	settingsPage.Config.Model = "qwen3.8-27b"
 	settingsPage.Config.ContextLength = 65536
@@ -118,6 +132,7 @@ func TestRenderPreviewPages(t *testing.T) {
 		{"documents-error.html", "documents.html", errored},
 		{"models.html", "models.html", models},
 		{"models-empty.html", "models.html", modelsEmpty},
+		{"models-dictation.html", "models.html", modelsDictation},
 		{"settings.html", "settings.html", settingsPage},
 		{"dashboard.html", "dashboard.html", dashboard},
 		{"dashboard-running.html", "dashboard.html", dashboardRunning},

@@ -45,10 +45,23 @@ const (
 	VariantFull  = "full"
 )
 
+// ServingKind splits the catalog into the two things a runtime can be. It is
+// not a field on the add form: the Models page has a tab per kind, and the tab
+// decides it. Asking someone to pick a model and then separately declare what
+// sort of model it is was a question whose answer was already known.
+type ServingKind string
+
+const (
+	KindChat      ServingKind = "chat"
+	KindDictation ServingKind = "dictation"
+)
+
 // ServingModel is one row of the catalog.
 type ServingModel struct {
 	// Key identifies the row in the add form.
 	Key string
+	// Kind decides which tab this row appears under.
+	Kind ServingKind
 	// DisplayName is the human name, and what the model's card is titled with.
 	DisplayName string
 	// ServedID is what clients send as `model`. Lowercased and punctuation-safe
@@ -60,8 +73,15 @@ type ServingModel struct {
 	// Uncensored marks a build with the safety training removed. Offered
 	// deliberately, never suggested.
 	Uncensored bool
-	// MaxModelLen is the context this model is registered with by default.
+	// MaxModelLen is the largest context this model can be served at, and the
+	// ceiling on the context menu. The context a model actually runs at is a
+	// per-model choice made when it is registered — it sizes the KV cache,
+	// which is the difference between a model that fits on the card and one
+	// that does not, so it belongs with the model rather than in one
+	// deployment-wide setting applied to every model at once.
 	MaxModelLen int
+	// DefaultContext is the rung the context menu opens on.
+	DefaultContext int
 	// Temperature and TopP are the model card's own recommended sampling, not
 	// Console's taste. They are recorded here for the same reason the desktop
 	// records them: reading them off the card once is what keeps every
@@ -75,17 +95,23 @@ type ServingModel struct {
 	GPUMemoryUtilization string
 	// Variants are the precisions offered, the suggested one first.
 	Variants []ServingVariant
+	// Contexts is ContextChoices(), filled in by CatalogFor so the page can
+	// render the ladder and the browser can read the same list out of the
+	// serialized catalog. Derived, never authored.
+	Contexts []ContextChoice
 }
 
 // ServingCatalog is ordered from the lightest model to the most capable, and
 // uncensored builds sit after the model they derive from.
 var ServingCatalog = []ServingModel{
 	{
-		Key:         "ornith-1.5-35b-a3b",
-		DisplayName: "Ornith 1.5 35B A3B",
-		ServedID:    "ornith-1.5-35b-a3b",
-		Detail:      "Trained for terminal coding agents and tool calling. Mixture-of-experts, so it answers fast for its size.",
-		MaxModelLen: 262144,
+		Key:            "ornith-1.5-35b-a3b",
+		Kind:           KindChat,
+		DisplayName:    "Ornith 1.5 35B A3B",
+		ServedID:       "ornith-1.5-35b-a3b",
+		Detail:         "Trained for terminal coding agents and tool calling. Mixture-of-experts, so it answers fast for its size.",
+		MaxModelLen:    262144,
+		DefaultContext: 65536,
 		// The card's numbers for general use; it reproduces its benchmarks at
 		// temperature 1.0, which is not what a shared server wants.
 		Temperature:          0.6,
@@ -99,10 +125,12 @@ var ServingCatalog = []ServingModel{
 	},
 	{
 		Key:                  "qwen3.8-27b",
+		Kind:                 KindChat,
 		DisplayName:          "Qwen3.8 27B",
 		ServedID:             "qwen3.8-27b",
 		Detail:               "Reliable tool calling over long multi-step runs. The one to pick for agentic work.",
 		MaxModelLen:          262144,
+		DefaultContext:       65536,
 		Temperature:          1.0,
 		TopP:                 0.95,
 		GPUMemoryUtilization: "0.85",
@@ -112,12 +140,14 @@ var ServingCatalog = []ServingModel{
 		},
 	},
 	{
-		Key:         "qwen3.8-27b-obliterated",
-		DisplayName: "Qwen3.8 27B Obliterated",
-		ServedID:    "qwen3.8-27b-obliterated",
-		Detail:      "Security and offensive research, with tool calling solid enough for agentic runs.",
-		Uncensored:  true,
-		MaxModelLen: 262144,
+		Key:            "qwen3.8-27b-obliterated",
+		Kind:           KindChat,
+		DisplayName:    "Qwen3.8 27B Obliterated",
+		ServedID:       "qwen3.8-27b-obliterated",
+		Detail:         "Security and offensive research, with tool calling solid enough for agentic runs.",
+		Uncensored:     true,
+		MaxModelLen:    262144,
+		DefaultContext: 65536,
 		// The card serves it with one set of numbers and draws no distinction
 		// between its thinking and non-thinking modes.
 		Temperature:          1.0,
@@ -132,13 +162,15 @@ var ServingCatalog = []ServingModel{
 		},
 	},
 	{
-		Key:         "deepseek-v4-flash",
-		DisplayName: "DeepSeek V4 Flash",
-		ServedID:    "deepseek-v4-flash",
-		Detail:      "Long-context reasoning and code. Sparse, so it stays cheap to decode at a size that would not otherwise be.",
-		MaxModelLen: 262144,
-		Temperature: 0.6,
-		TopP:        0.95,
+		Key:            "deepseek-v4-flash",
+		Kind:           KindChat,
+		DisplayName:    "DeepSeek V4 Flash",
+		ServedID:       "deepseek-v4-flash",
+		Detail:         "Long-context reasoning and code. Sparse, so it stays cheap to decode at a size that would not otherwise be.",
+		MaxModelLen:    262144,
+		DefaultContext: 65536,
+		Temperature:    0.6,
+		TopP:           0.95,
 		// A model this large is the only thing on its cards.
 		GPUMemoryUtilization: "0.90",
 		Variants: []ServingVariant{
@@ -149,10 +181,12 @@ var ServingCatalog = []ServingModel{
 	},
 	{
 		Key:                  "ornith-1.5-397b",
+		Kind:                 KindChat,
 		DisplayName:          "Ornith 1.5 397B",
 		ServedID:             "ornith-1.5-397b",
 		Detail:               "The most capable model here, and a multi-GPU deployment. Frontier-grade agentic work.",
 		MaxModelLen:          262144,
+		DefaultContext:       65536,
 		Temperature:          0.6,
 		TopP:                 0.95,
 		GPUMemoryUtilization: "0.90",
@@ -162,6 +196,134 @@ var ServingCatalog = []ServingModel{
 			{Key: VariantFull, Label: "Full (BF16)", Repo: "ornith-ai/Ornith-1.5-397B", VRAMGiB: 800},
 		},
 	},
+
+	// Dictation. These answer /v1/audio/transcriptions rather than chat, which
+	// is why they are a separate tab rather than another row above: a
+	// transcription runtime in the chat picker is a model that fails every
+	// message sent to it. One precision each — transcription accuracy falls off
+	// sharply below full weights, and these are small enough that the saving is
+	// not worth hearing in every dictated sentence.
+	{
+		Key:                  "qwen3-asr-0.6b",
+		Kind:                 KindDictation,
+		DisplayName:          "Qwen3 ASR 0.6B",
+		ServedID:             "qwen3-asr-0.6b",
+		Detail:               "Fast and small enough to sit beside the chat model on one card.",
+		MaxModelLen:          32768,
+		DefaultContext:       32768,
+		GPUMemoryUtilization: "0.10",
+		Variants: []ServingVariant{
+			{Key: VariantFull, Label: "Full (BF16)", Repo: "Qwen/Qwen3-ASR-0.6B", VRAMGiB: 2},
+		},
+	},
+	{
+		Key:                  "qwen3-asr-1.7b",
+		Kind:                 KindDictation,
+		DisplayName:          "Qwen3 ASR 1.7B",
+		ServedID:             "qwen3-asr-1.7b",
+		Detail:               "More accurate on accents and noise. The one to pick if the card has room.",
+		MaxModelLen:          32768,
+		DefaultContext:       32768,
+		GPUMemoryUtilization: "0.15",
+		Variants: []ServingVariant{
+			{Key: VariantFull, Label: "Full (BF16)", Repo: "Qwen/Qwen3-ASR-1.7B", VRAMGiB: 5},
+		},
+	},
+	{
+		Key:                  "whisper-large-v3-turbo",
+		Kind:                 KindDictation,
+		DisplayName:          "Whisper Large v3 Turbo",
+		ServedID:             "whisper-large-v3-turbo",
+		Detail:               "Broadest language coverage. Worth it when dictation is not mostly English.",
+		MaxModelLen:          32768,
+		DefaultContext:       32768,
+		GPUMemoryUtilization: "0.15",
+		Variants: []ServingVariant{
+			{Key: VariantFull, Label: "Full (BF16)", Repo: "openai/whisper-large-v3-turbo", VRAMGiB: 2},
+		},
+	},
+}
+
+// ContextChoice is one rung of the context menu on the add form.
+type ContextChoice struct {
+	Tokens int
+	Label  string
+}
+
+var contextLadder = []ContextChoice{
+	{8192, "8K"}, {16384, "16K"}, {32768, "32K"}, {65536, "64K"},
+	{131072, "128K"}, {262144, "256K"}, {524288, "512K"}, {1048576, "1M"},
+}
+
+// ContextChoices are the rungs this model can actually be served at. A ladder
+// that offers a context the weights do not have is a menu that lies.
+func (m ServingModel) ContextChoices() []ContextChoice {
+	// Dictation has one rung. Transcription does not have a context window
+	// anybody is trading against memory — the flag is there because vLLM wants
+	// one — so offering a ladder would be offering a decision that is not real.
+	if m.Kind == KindDictation {
+		return []ContextChoice{{Tokens: m.DefaultContext, Label: ContextLabel(m.DefaultContext)}}
+	}
+	choices := make([]ContextChoice, 0, len(contextLadder))
+	for _, choice := range contextLadder {
+		if choice.Tokens <= m.MaxModelLen {
+			choices = append(choices, choice)
+		}
+	}
+	return choices
+}
+
+// ContextLabel is how a token count reads in the interface.
+func ContextLabel(tokens int) string {
+	for _, choice := range contextLadder {
+		if choice.Tokens == tokens {
+			return choice.Label
+		}
+	}
+	return strconv.Itoa(tokens)
+}
+
+// ClampContext holds a requested context to a rung this model offers.
+func (m ServingModel) ClampContext(tokens int) int {
+	choices := m.ContextChoices()
+	for _, choice := range choices {
+		if choice.Tokens == tokens {
+			return tokens
+		}
+	}
+	if m.DefaultContext > 0 && m.DefaultContext <= m.MaxModelLen {
+		return m.DefaultContext
+	}
+	return choices[len(choices)-1].Tokens
+}
+
+// CatalogFor is the catalog for one tab.
+func CatalogFor(kind ServingKind) []ServingModel {
+	rows := make([]ServingModel, 0, len(ServingCatalog))
+	for _, model := range ServingCatalog {
+		if model.Kind != kind {
+			continue
+		}
+		model.Contexts = model.ContextChoices()
+		rows = append(rows, model)
+	}
+	return rows
+}
+
+// NormalizeKind maps a query value onto a tab, defaulting to chat.
+func NormalizeKind(value string) ServingKind {
+	if ServingKind(strings.TrimSpace(value)) == KindDictation {
+		return KindDictation
+	}
+	return KindChat
+}
+
+// Role is the managed-model role this kind registers as.
+func (k ServingKind) Role() string {
+	if k == KindDictation {
+		return RoleSpeech
+	}
+	return RoleChat
 }
 
 // CatalogEntry returns the row with this key.
@@ -205,13 +367,13 @@ func CatalogByRepo(repo string) (ServingModel, bool) {
 // precision. It is the same shape as anything typed into the command box —
 // there is no second launch path — so a catalog model can be edited afterwards
 // like any other.
-func CatalogCommand(model ServingModel, variant ServingVariant, port int) string {
+func CatalogCommand(model ServingModel, variant ServingVariant, port, context int) string {
 	args := []string{
 		"serve", variant.Repo,
 		"--host", "127.0.0.1",
 		"--port", strconv.Itoa(port),
 		"--served-model-name", model.ServedID,
-		"--max-model-len", strconv.Itoa(model.MaxModelLen),
+		"--max-model-len", strconv.Itoa(model.ClampContext(context)),
 		"--gpu-memory-utilization", model.GPUMemoryUtilization,
 		"--kv-cache-dtype", KVCacheFP8,
 	}
@@ -239,19 +401,27 @@ func WithModelDefaults(cfg Veil, repo string) Veil {
 	return WithServerDefaults(cfg)
 }
 
-// WithServerDefaults refills the settings that are constants now.
+// WithServerDefaults pins the settings that are not a deployment's to make.
 //
-// Maximum output was a number box capped at 32768 and defaulted to 8192, which
-// is a truncated answer waiting to happen on a model that reasons before it
-// replies; it is the cap now. Request size was a five-stop slider nobody has a
-// reason to move off 64 MiB. Parallel tool calls is on, which is what every
-// model in the catalog supports and what agentic work needs.
+// Parallel tool calls is on: every model in the catalog supports it and agentic
+// work needs it. Reasoning effort and the thinking budget stay unset because
+// they are a per-request choice the person asking the question makes in the
+// app, and pinning either here would override them on every turn.
+//
+// Maximum output and request size are not in this list. They were, briefly, and
+// that was one step too far: they are real deployment limits with real reasons
+// to move, so they are fields under Advanced with sensible defaults rather than
+// constants nobody can reach.
 func WithServerDefaults(cfg Veil) Veil {
-	cfg.MaxOutputTokens = DefaultMaxOutputTokens
-	cfg.MaxBodyBytes = DefaultMaxBodyBytes
 	cfg.ParallelToolCalls = true
 	cfg.ThinkingTokenBudget = nil
 	cfg.ReasoningEffort = ReasoningNone
+	if cfg.MaxOutputTokens <= 0 {
+		cfg.MaxOutputTokens = DefaultMaxOutputTokens
+	}
+	if cfg.MaxBodyBytes <= 0 {
+		cfg.MaxBodyBytes = DefaultMaxBodyBytes
+	}
 	return cfg
 }
 

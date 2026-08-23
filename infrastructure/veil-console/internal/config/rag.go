@@ -8,11 +8,14 @@ import (
 	"time"
 )
 
-// Routes are the product routes a document can be tagged with. "all" is the
-// catch-all every route retrieves alongside its own tag.
-const RouteAll = "all"
-
-var Routes = []string{"engineering", "sales", "marketing", RouteAll}
+// Routes are the teams a document can be made available to.
+//
+// There is no "all" any more. It was a fourth route that meant "the other
+// three", which made a document either targeted or shared but never, say, both
+// engineering and sales — and it put a catch-all in the same menu as the things
+// it was a catch-all for. A document now carries a set of routes, and
+// everything that used to be "all" is all three of them checked.
+var Routes = []string{"engineering", "sales", "marketing"}
 
 func ValidRoute(route string) bool {
 	for _, candidate := range Routes {
@@ -21,6 +24,54 @@ func ValidRoute(route string) bool {
 		}
 	}
 	return false
+}
+
+// ParseRoutes reads the stored form — one comma-separated field, canonically
+// ordered — into a set. Unknown and duplicate entries are dropped rather than
+// carried: this value decides who can retrieve a document, so anything not
+// recognized is not a route.
+func ParseRoutes(stored string) []string {
+	seen := make(map[string]bool, len(Routes))
+	for _, part := range strings.Split(stored, ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		// "all" is how the fourth route was spelled before it was removed.
+		if part == "all" {
+			return append([]string(nil), Routes...)
+		}
+		if ValidRoute(part) {
+			seen[part] = true
+		}
+	}
+	return canonicalRoutes(seen)
+}
+
+// NormalizeRoutes canonicalizes a set arriving from a form.
+func NormalizeRoutes(routes []string) []string {
+	seen := make(map[string]bool, len(routes))
+	for _, route := range routes {
+		route = strings.ToLower(strings.TrimSpace(route))
+		if ValidRoute(route) {
+			seen[route] = true
+		}
+	}
+	return canonicalRoutes(seen)
+}
+
+// canonicalRoutes returns the set in catalog order, so the stored string for a
+// given set is always the same string.
+func canonicalRoutes(seen map[string]bool) []string {
+	routes := make([]string, 0, len(seen))
+	for _, route := range Routes {
+		if seen[route] {
+			routes = append(routes, route)
+		}
+	}
+	return routes
+}
+
+// FormatRoutes is the stored form.
+func FormatRoutes(routes []string) string {
+	return strings.Join(NormalizeRoutes(routes), ",")
 }
 
 // RAG is the retrieval configuration Console owns and Veil receives through the
