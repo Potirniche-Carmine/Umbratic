@@ -130,9 +130,10 @@ printf 'Console stays on 127.0.0.1:%s. Use an SSH tunnel for administrator acces
 printf '  ssh -N -L %s:127.0.0.1:%s USER@SERVER\n' "$console_port" "$console_port"
 printf 'Then open: http://127.0.0.1:%s/setup\n' "$console_port"
 printf 'Read the one-time setup code with:\n  sudo cat /run/veil-console/setup-code\n'
-printf '\nOllama or vLLM must run locally before you configure Veil.\n'
+printf '\nInstall vLLM on this server, then add --vllm-binary /path/to/vllm to the\n'
+printf 'veil-console systemd unit so Console can start models from its Models page.\n'
 printf 'To answer from company documents, open Documents in Console, set an\n'
 printf 'embedding runtime, and upload files. Qdrant runs on 127.0.0.1:6333.\n'
 printf '\nSECURITY: This installer does not change your firewall or cloud security group.\n'
 printf 'Restrict the Veil HTTPS port to your VPN or approved desktop IP addresses.\n'
-printf 'Never publish the private Console, Veil, Ollama, or vLLM ports.\n'
+printf 'Never publish the private Console, Veil, or vLLM ports.\n'

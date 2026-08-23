@@ -53,7 +53,7 @@ Enter the setup code, choose the owner username, and choose a password with at l
 - Model: the exact model ID reported by the runtime.
 - Advanced: one generation profile (temperature, top P, output tokens, reasoning, concurrency).
 
-Veil Console always starts Veil in server mode against vLLM. Local Ollama is managed by the desktop app, not Console.
+Veil Console always starts Veil in server mode against vLLM. The desktop app manages its own local llama.cpp runtime; Console plays no part in it.
 
 Veil and Veil Console do not accept a model-provider API key.
 
@@ -311,7 +311,7 @@ The advanced `--console-port` and `--veil-port` options change only the private 
 sudo ./install.sh --dnsname veil.example.com --port 8400 --console-port 8177 --veil-port 8080
 ```
 
-The installer adds the system account, installs the two compiled binaries, writes the systemd and Caddy configuration, validates Caddy, and starts the services. It does not install Ollama, vLLM, or a model because model and hardware requirements differ by server.
+The installer adds the system account, installs the two compiled binaries, writes the systemd and Caddy configuration, validates Caddy, and starts the services. It does not install vLLM or a model because model and hardware requirements differ by server.
 
 Caddy can get a public certificate when the domain has valid DNS and the server can complete certificate validation. A private hostname needs an internal certificate authority. Each desktop device must trust that authority. No safe installer can remove this trust requirement.
 

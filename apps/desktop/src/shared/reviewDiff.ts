@@ -430,7 +430,7 @@ function alignReplacementBlock(deletions: DiffLine[], additions: DiffLine[]): Pa
   return pairs.reverse();
 }
 
-function emptyCell(side: DiffSide): DiffCell {
+export function emptyCell(side: DiffSide): DiffCell {
   return { side, line: null, content: "", origin: "empty" };
 }
 
@@ -482,7 +482,12 @@ export function alignReviewFile(file: ReviewFile): SideBySideRow[] {
   return file.hunks.flatMap(alignHunk);
 }
 
-export function reviewPatchHash(files: ReviewFile[]): string {
+/**
+ * A renderer-side stand-in for the task's `reviewPatchHash` when the task
+ * has not supplied one. Hashes content identity, not patches — the two are
+ * different formulas on purpose and are never compared to each other.
+ */
+export function reviewContentHash(files: ReviewFile[]): string {
   return stableReviewHash(files.map((file) => `${file.path}\0${file.contentHash}`).sort().join("\0"));
 }
 

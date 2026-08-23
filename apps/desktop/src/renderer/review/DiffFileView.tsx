@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { DiffCell, DiffSide, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
-import { alignHunk, hiddenLinesBeforeHunk } from "../../shared/reviewDiff";
+import { alignHunk, emptyCell, hiddenLinesBeforeHunk } from "../../shared/reviewDiff";
 import { DiffRow, type ReviewLineSelection } from "./DiffRow";
 
 const diffRenderChunkSize = 80;
@@ -25,10 +25,6 @@ function chunkEntries(entries: DiffRowEntry[]): DiffRowEntry[][] {
     chunks.push(entries.slice(index, index + diffRenderChunkSize));
   }
   return chunks;
-}
-
-function emptyCell(side: DiffSide): DiffCell {
-  return { side, line: null, content: "", origin: "empty" };
 }
 
 function unifiedEntries(row: SideBySideRow): DiffRowEntry[] {

@@ -7,7 +7,7 @@ import { app } from "electron";
 
 import { skillsDirectory } from "./appPaths";
 import { readHarnessProfileSetting, readSkillSettings, writeSkillSettings } from "./storage";
-import { pathInside } from "./utils";
+import { isRecord, pathInside } from "./utils";
 import { systemSkillEnabled, systemSkillIds } from "../shared/harnessSkills";
 import type { SkillDocument, SkillInfo } from "../shared/desktopApi";
 
@@ -59,10 +59,6 @@ const skillManifestFileName = ".manifest.json";
 const zipUnixSymlinkMode = 0o120000;
 
 const systemSkillDefinitions: SystemSkillDefinition[] = systemSkillIds.map((id) => ({ id }));
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function sha256Hex(buffer: Buffer | string): string {
   return `sha256:${crypto.createHash("sha256").update(buffer).digest("hex")}`;

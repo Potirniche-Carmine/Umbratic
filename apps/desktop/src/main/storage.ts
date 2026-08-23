@@ -24,7 +24,6 @@ import type {
 import {
   appDatabasePath,
   chatsDatabasePath,
-  isRecord,
   parsePayload,
   readPayloads,
   runTransaction,
@@ -32,6 +31,7 @@ import {
   withChatsDatabase,
   withStorageDatabase,
 } from "./storageDatabase";
+import { isRecord, pathKey } from "./utils";
 import type { PayloadRow, PositionRow } from "./storageDatabase";
 
 export * from "./storageDatabase";
@@ -386,11 +386,6 @@ export function activateTaskWorkspace(
       active.sourceCheckpointId ?? null, active.createdAt, active.state);
     upsertTaskRowInDatabase(db, normalized, false);
   }));
-}
-
-function pathKey(pathValue: string): string {
-  const resolved = path.resolve(pathValue);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 export function normalizeConversationState(value: unknown): ChatRecord["conversationState"] | undefined {

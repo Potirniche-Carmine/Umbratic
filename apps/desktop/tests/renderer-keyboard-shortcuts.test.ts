@@ -145,7 +145,7 @@ test("the shortcuts that fire and the shortcuts that are documented are one tabl
   // listener always calls today's closures rather than the render it
   // subscribed on — a stale one would act on an old copy of the composer.
   assert.match(main, /shortcutActionsRef\.current\[shortcut\.id\]/);
-  assert.match(main, /document\.addEventListener\("keydown", runShortcut, true\);\n    return \(\) => document\.removeEventListener\("keydown", runShortcut, true\);\n  \}, \[\]\)/);
+  assert.match(main, /document\.addEventListener\("keydown", runShortcut, true\);\r?\n    return \(\) => document\.removeEventListener\("keydown", runShortcut, true\);\r?\n  \}, \[\]\)/);
   // Each installed chord has something to run.
   for (const id of ["dictation.toggle", "chat.new", "app.settings", "app.shortcuts", "review.toggle", "composer.focus", "run.stop"]) {
     assert.ok(main.includes(`"${id}":`), `main.tsx should handle ${id}`);

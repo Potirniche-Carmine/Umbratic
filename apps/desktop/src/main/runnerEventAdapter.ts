@@ -16,10 +16,7 @@ import type {
   ToolErrorCode,
   ToolResultStatus,
 } from "./types";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "./utils";
 
 // Recovering compacted context is runner bookkeeping, not workspace activity
 // the user asked for, so it never becomes a timeline row.

@@ -125,7 +125,3 @@ function remember(key: string, preview: DocumentReviewSnapshot | null): void {
   cache.set(key, { preview });
 }
 
-/** Drops every cached preview. Used when a task's workspace is replaced. */
-export function clearArtifactPreviewCache(): void {
-  cache.clear();
-}

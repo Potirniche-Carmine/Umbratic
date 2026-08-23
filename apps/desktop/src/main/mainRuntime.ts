@@ -42,8 +42,6 @@ import {
   appendTaskEvent,
   appendTaskEvents,
   compactTaskEvents,
-  filterReviewPaths,
-  hiddenRendererReviewPaths,
   mergeTaskEvents,
   rendererReviewFiles,
 } from "./taskReviewPresentation";
@@ -313,14 +311,12 @@ export function publicTask(task: TaskRecord): TaskInfo {
     patchHash,
     error,
   } = task;
-  const ignoredReviewPaths = hiddenRendererReviewPaths(task);
-  const publicReviewFiles = rendererReviewFiles(reviewFiles, ignoredReviewPaths);
+  const publicReviewFiles = rendererReviewFiles(reviewFiles);
   const publicEvents = compactTaskEvents(events, 500).map((event) => {
     if (event.type !== "review.ready") return event;
     return {
       ...event,
-      changedFiles: filterReviewPaths(event.changedFiles, ignoredReviewPaths),
-      reviewFiles: rendererReviewFiles(event.reviewFiles, ignoredReviewPaths),
+      reviewFiles: rendererReviewFiles(event.reviewFiles),
     };
   });
   return {
@@ -342,7 +338,7 @@ export function publicTask(task: TaskRecord): TaskInfo {
     runnerVersion,
     policyVersion,
     createdAt,
-    changedFiles: filterReviewPaths(changedFiles, ignoredReviewPaths),
+    changedFiles,
     reviewFiles: publicReviewFiles,
     reviewPatchHash,
     reviewScope,

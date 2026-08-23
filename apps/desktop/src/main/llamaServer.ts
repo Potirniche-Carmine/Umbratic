@@ -9,6 +9,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { stopChild, stopRequested } from "./childShutdown";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -114,23 +115,6 @@ function sidecarEnvironment(apiKey: string): NodeJS.ProcessEnv {
   return env;
 }
 
-const stoppingChildren = new WeakSet<ChildProcess>();
-
-function stopChild(child: ChildProcess | null) {
-  if (!child || child.exitCode !== null || child.killed) return;
-  stoppingChildren.add(child);
-  // A plain kill on Windows leaves the child's own children behind; llama-server
-  // holds the port until every one of them is gone.
-  if (process.platform === "win32" && child.pid) {
-    const terminator = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    terminator.unref();
-    return;
-  }
-  child.kill();
-}
 
 /**
  * Polls /health until the runtime reports ready.
@@ -247,7 +231,7 @@ export function createLlamaSupervisor(options: { label: string }): LlamaSupervis
         lastObservation = observation;
       });
     }).catch((error) => {
-      const superseded = stoppingChildren.has(child);
+      const superseded = stopRequested(child);
       stopChild(child);
       // A start that lost to a newer settings change was killed on purpose and
       // is not a failure worth alarming anyone with. The runtime's own output
@@ -273,7 +257,7 @@ export function createLlamaSupervisor(options: { label: string }): LlamaSupervis
     running = { key, child };
     child.once("exit", (code, signal) => {
       if (running?.child === child) running = null;
-      if (!stoppingChildren.has(child)) {
+      if (!stopRequested(child)) {
         onDiagnostic({
           level: "warn",
           event: `${options.label}.process_exited`,

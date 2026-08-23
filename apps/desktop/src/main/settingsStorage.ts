@@ -19,7 +19,8 @@ import { assertCompanyCredentialStorageAvailable, companyConnectionStatusFromVal
 import { decodeCompanyDeviceCredential, encodeCompanyDeviceCredential, readProtectedString, writeProtectedString } from "./companyCredentialStorage";
 import type { CompanyDeviceCredential, StoredProtectedString } from "./companyCredentialStorage";
 import { activeStoredEndpoint, endpointModesWithNext, storedEndpointForMode, type RawModelEndpointSettings } from "./endpointModeStorage";
-import { isRecord, parsePayload, withAppDatabase } from "./storageDatabase";
+import { parsePayload, withAppDatabase } from "./storageDatabase";
+import { isRecord } from "./utils";
 import type {
   ActiveModelEndpointSettings,
   HarnessProfileId,

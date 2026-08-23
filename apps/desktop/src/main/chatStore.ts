@@ -24,7 +24,7 @@ import {
   writeProjects,
 } from "./storage";
 import type { ChatAttachment, ChatRecord, RepositoryInfo, TaskRecord, UserNotes } from "./types";
-import { isRecord, normalizeRelativePath, pathInside, requiredString } from "./utils";
+import { isRecord, normalizeRelativePath, pathInside, pathKey, requiredString } from "./utils";
 import * as appPaths from "./appPaths";
 
 export function stableRepositoryId(rootPath: string): string {
@@ -266,11 +266,6 @@ export function deleteChat(input: unknown): { ok: true } {
   writeChats(readChats().filter((chat) => chat.id !== id));
   deleteChatManagedFiles(id);
   return { ok: true };
-}
-
-export function pathKey(pathValue: string): string {
-  const resolved = path.resolve(pathValue);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 export function projectFromId(input: unknown, action: string): RepositoryInfo {

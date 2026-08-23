@@ -1,11 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Columns2, ExternalLink, FileText, MessageSquarePlus, PanelRight, Rows3, Undo2, WrapText } from "lucide-react";
-import {
-  isDocumentReviewArtifactPath,
-  type DocumentReviewSnapshot,
-} from "../../shared/documentReview";
+import { isArtifactPath } from "../../shared/artifactReview";
+import type { DocumentReviewSnapshot } from "../../shared/documentReview";
 import type { DiffCell, DiffSide, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
-import { reviewPatchHash } from "../../shared/reviewDiff";
+import { reviewContentHash } from "../../shared/reviewDiff";
 import { DocumentReviewPreview } from "./DocumentReviewPreview";
 import { DiffFileView } from "./DiffFileView";
 import type { ReviewLineSelection } from "./DiffRow";
@@ -120,15 +118,15 @@ export function ReviewPanel({
   const [splitFits, setSplitFits] = useState(true);
   const feedbackAddedTimerRef = useRef<number | null>(null);
   const loadDocumentReviewRef = useRef(onLoadDocumentReview);
-  const actualPatchHash = patchHash || reviewPatchHash(files);
+  const actualPatchHash = patchHash || reviewContentHash(files);
   const selectedIndex = Math.max(0, files.findIndex((file) => file.path === selectedPath));
   const selectedFile = files[selectedIndex] ?? files[0];
-  const selectedFileIsDocument = !!selectedFile && isDocumentReviewArtifactPath(selectedFile.path);
+  const selectedFileIsDocument = !!selectedFile && isArtifactPath(selectedFile.path);
   // The files arrive in the order the panel should show them: by review
   // priority when change analysis was available, by path otherwise. The panel
   // does not reorder them and does not say which one it got.
   const navigatorFiles = useMemo(
-    () => files.filter((file) => !isDocumentReviewArtifactPath(file.path)),
+    () => files.filter((file) => !isArtifactPath(file.path)),
     [files],
   );
   const navigatorTotals = useMemo(

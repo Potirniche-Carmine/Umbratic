@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { stopChild, stopRequested } from "./childShutdown";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -71,7 +72,6 @@ type RunningLocalVeil = LocalVeilConnection & {
 let running: RunningLocalVeil | null = null;
 let launchingChild: ChildProcess | null = null;
 let starting: { key: string; promise: Promise<LocalVeilConnection> } | null = null;
-const stoppingChildren = new WeakSet<ChildProcess>();
 const veilDiagnosticMarker = "VEIL_DIAGNOSTIC ";
 
 export function parseLocalVeilDiagnosticLine(line: string): LocalVeilDiagnostic | null {
@@ -178,19 +178,6 @@ function localVeilCommand(): { command: string; args: string[]; cwd?: string } {
   throw new Error("The bundled local Veil runtime is missing. Reinstall Umbratic or switch to Server mode.");
 }
 
-function stopChild(child: ChildProcess | null) {
-  if (!child || child.exitCode !== null || child.killed) return;
-  stoppingChildren.add(child);
-  if (process.platform === "win32" && child.pid) {
-    const terminator = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    terminator.unref();
-    return;
-  }
-  child.kill();
-}
 
 function probeLocalVeil(
   baseUrl: string,
@@ -450,7 +437,7 @@ async function startLocalVeil(
   running = connection;
   child.once("exit", (code, signal) => {
     if (running?.child === child) running = null;
-    if (!stoppingChildren.has(child)) {
+    if (!stopRequested(child)) {
       onDiagnostic({
         level: "warn",
         event: "veil.process_exited",

@@ -108,7 +108,8 @@ test("managed local Veil source keeps readiness independent of go run output and
   assert.match(source, /model runtime at \$\{runtimeBaseUrl\} to answer/);
   assert.match(source, /VEIL_ADDR.*127\.0\.0\.1:0|127\.0\.0\.1:0/);
   assert.match(source, /VEIL_ENV_FILE: "-"/);
-  assert.match(source, /spawn\("taskkill", \["\/pid", String\(child\.pid\), "\/t", "\/f"\]/);
+  const shutdownSource = fs.readFileSync(new URL("../src/main/childShutdown.ts", import.meta.url), "utf8");
+  assert.match(shutdownSource, /spawn\("taskkill", \["\/pid", String\(child\.pid\), "\/t", "\/f"\]/);
   assert.equal(source.includes("...process.env"), false);
 });
 

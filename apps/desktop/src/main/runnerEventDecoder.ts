@@ -1,4 +1,5 @@
 import { isContextBreakdown, type BackendContextBreakdown } from "../shared/backendEvents";
+import { hasNonNegativeNumber, hasString, isRecord } from "../shared/records";
 
 type RunnerEventBase = {
   taskId: string;
@@ -226,20 +227,8 @@ const ignoredTypes = new Set([
   "artifact.resolved",
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
-}
-
-function hasString(value: Record<string, unknown>, name: string): boolean {
-  return typeof value[name] === "string";
-}
-
-function hasNonNegativeNumber(value: Record<string, unknown>, name: string): boolean {
-  return isFiniteNumber(value[name]) && value[name] >= 0;
 }
 
 function validTimestamps(value: Record<string, unknown>): boolean {

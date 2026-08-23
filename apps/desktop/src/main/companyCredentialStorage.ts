@@ -1,6 +1,7 @@
 import { safeStorage } from "electron";
 
 import type { CompanyConnectionStatus } from "../shared/desktopApi";
+import { isRecord } from "./utils";
 
 export type StoredProtectedString = {
   encoding: "electron-safe-storage-v1";
@@ -21,10 +22,6 @@ type StoredCompanyDeviceCredential = {
 export type CompanyDeviceCredential = Omit<StoredCompanyDeviceCredential, "privateKeyPkcs8"> & {
   privateKeyPkcs8: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 /**
  * Only an OS-encrypted envelope is a valid secret. A bare string would let

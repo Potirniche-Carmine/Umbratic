@@ -160,7 +160,8 @@ import {
 import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
 import { AssistantMessage } from "./assistantMessage";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
-import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
+import { isArtifactPath } from "../shared/artifactReview";
+import type { DocumentReviewSnapshot } from "../shared/documentReview";
 import { appendTaskEvent, appendTaskEvents, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
 import {
   responseFeedbackReasons,
@@ -518,11 +519,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     return Array.from(byPath.values());
   }, [rawReviewFiles]);
   const documentReviewFiles = useMemo(
-    () => reviewFiles.filter((file) => isDocumentReviewArtifactPath(file.path)),
+    () => reviewFiles.filter((file) => isArtifactPath(file.path)),
     [reviewFiles],
   );
   const codeReviewFiles = useMemo(
-    () => reviewFiles.filter((file) => !isDocumentReviewArtifactPath(file.path)),
+    () => reviewFiles.filter((file) => !isArtifactPath(file.path)),
     [reviewFiles],
   );
   const codeReviewTotals = useMemo(
@@ -4498,7 +4499,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           onResizeKeyDown={handleReviewResizeKeyDown}
           onAddFeedback={addReviewFeedbackToPrompt}
           onLoadDocumentReview={(documentPath) => task
-            ? api.readDocumentReview({ taskId: task.id, documentPath })
+            ? api.readArtifactPreview({ taskId: task.id, documentPath })
             : Promise.resolve({ ok: false, code: "not_available", message: "Document previews are available for task reviews." })}
         />
       </aside>

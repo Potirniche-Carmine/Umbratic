@@ -167,7 +167,6 @@ async function runDevelopment() {
   console.log(`Development platform: ${process.platform}-${process.arch}`);
   console.log(`State directory: ${stateDirectory}`);
   console.log(`Console URL: ${consoleURL}`);
-  console.log("Default local Ollama URL: http://127.0.0.1:11434");
   await run(
     consoleBinary,
     [

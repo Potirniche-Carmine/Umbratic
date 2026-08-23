@@ -8,7 +8,7 @@ apps/desktop/dist-electron/
 apps/desktop/.package/
 apps/desktop/.llama-cache/
 packages/runner/dist/
-artifacts/
+/artifacts/
 %SystemDrive%/ProgramData/Microsoft/Windows/Caches/
 .build
 *.profraw

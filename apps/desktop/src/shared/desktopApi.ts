@@ -25,7 +25,7 @@ export const desktopIpcChannels = {
   restoreTaskCheckpoint: "umbratic:restore-task-checkpoint",
   refreshTaskReview: "umbratic:refresh-task-review",
   refreshWorkspaceReview: "umbratic:refresh-workspace-review",
-  readDocumentReview: "umbratic:read-document-review",
+  readArtifactPreview: "umbratic:read-artifact-preview",
   searchFiles: "umbratic:search-files",
   pickRepository: "umbratic:pick-repository",
   pickAttachmentFiles: "umbratic:pick-attachment-files",

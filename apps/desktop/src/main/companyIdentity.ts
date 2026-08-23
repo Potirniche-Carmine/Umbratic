@@ -12,6 +12,7 @@ import {
   writeUpdateFeedTokenSetting,
 } from "./storage";
 import type { CompanyDeviceCredential } from "./companyCredentialStorage";
+import { isRecord } from "./utils";
 
 type TransportOptions = {
   headers?: Record<string, string>;
@@ -26,10 +27,6 @@ type SessionCache = {
 
 let sessionCache: SessionCache | null = null;
 let sessionDisconnected = false;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function route(baseUrl: string, path: string): string {
   const base = new URL(baseUrl);

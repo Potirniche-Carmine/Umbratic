@@ -1,4 +1,5 @@
 import type { ReviewFile as NormalizedReviewFile } from "./reviewDiff";
+import { hasNonNegativeNumber, hasNumber, hasString, hasStringArray, isRecord } from "./records";
 import {
   isResponseFeedbackReason,
   type ResponseFeedbackReason,
@@ -151,26 +152,6 @@ const eventTypes = new Set([
   "required_tool.failed",
   "task.error",
 ]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasString(value: Record<string, unknown>, key: string): boolean {
-  return typeof value[key] === "string";
-}
-
-function hasNumber(value: Record<string, unknown>, key: string): boolean {
-  return typeof value[key] === "number" && Number.isFinite(value[key]);
-}
-
-function hasNonNegativeNumber(value: Record<string, unknown>, key: string): boolean {
-  return hasNumber(value, key) && Number(value[key]) >= 0;
-}
-
-function hasStringArray(value: Record<string, unknown>, key: string): boolean {
-  return Array.isArray(value[key]) && (value[key] as unknown[]).every((item) => typeof item === "string");
-}
 
 const breakdownTokenFields = [
   "systemPromptTokens", "toolDefinitionTokens", "skillTokens",

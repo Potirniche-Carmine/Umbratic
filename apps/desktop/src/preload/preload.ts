@@ -82,7 +82,7 @@ const umbraticApi = {
     invoke("umbratic:restore-task-checkpoint", input),
   refreshTaskReview: (input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }) => invoke("umbratic:refresh-task-review", input),
   refreshWorkspaceReview: (input: { repositoryPath: string }) => invoke("umbratic:refresh-workspace-review", input),
-  readDocumentReview: (input: { taskId: string; documentPath: string }) => invoke("umbratic:read-document-review", input),
+  readArtifactPreview: (input: { taskId: string; documentPath: string }) => invoke("umbratic:read-artifact-preview", input),
   searchFiles: (input: { repositoryId: string; query: string; limit?: number; kind?: "file" | "folder" | "all" }) =>
     invoke("umbratic:search-files", input),
   pickRepository: () => invoke("umbratic:pick-repository"),
