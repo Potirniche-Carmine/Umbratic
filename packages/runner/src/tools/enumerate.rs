@@ -2,6 +2,7 @@ use globset::{GlobBuilder, GlobSetBuilder};
 use serde_json::json;
 
 use super::read::{list_entries, missing_path_message};
+use super::workspace_ignore::WorkspaceIgnore;
 use super::*;
 
 pub(super) async fn ls_tool(session: &Session, input: &Map<String, Value>) -> ToolExecutionResult {
@@ -36,10 +37,12 @@ pub(super) async fn ls_tool(session: &Session, input: &Map<String, Value>) -> To
         .cwd
         .canonicalize()
         .unwrap_or_else(|_| session.config.cwd.clone());
+    let ignore = WorkspaceIgnore::load(&workspace_root);
     let entries = list_entries(&absolute)
         .into_iter()
         .filter(|entry| {
             let trimmed = entry.trim_end_matches('/');
+            let is_dir = entry.ends_with('/');
             let relative_workspace = absolute
                 .join(trimmed)
                 .strip_prefix(&workspace_root)
@@ -51,7 +54,7 @@ pub(super) async fn ls_tool(session: &Session, input: &Map<String, Value>) -> To
                         format!("{relative}/{trimmed}")
                     }
                 });
-            !should_skip(&relative_workspace)
+            !should_skip(&relative_workspace) && !ignore.is_ignored(&relative_workspace, is_dir)
         })
         .collect::<Vec<_>>();
     let start = offset.saturating_sub(1).min(entries.len());
@@ -133,6 +136,7 @@ pub(super) async fn find_tool(
         .cwd
         .canonicalize()
         .unwrap_or_else(|_| session.config.cwd.clone());
+    let ignore = WorkspaceIgnore::load(&workspace_root);
     let mut matches = BTreeSet::new();
     let walker = if metadata.is_file() {
         WalkDir::new(&absolute).max_depth(0)
@@ -158,6 +162,7 @@ pub(super) async fn find_tool(
                 .to_string_lossy()
                 .replace('\\', "/");
             !should_skip(&relative_workspace)
+                && !ignore.is_ignored(&relative_workspace, entry.file_type().is_dir())
         })
         .filter_map(Result::ok)
     {
@@ -167,7 +172,9 @@ pub(super) async fn find_tool(
             .unwrap_or(entry.path())
             .to_string_lossy()
             .replace('\\', "/");
-        if should_skip(&relative_workspace) {
+        if should_skip(&relative_workspace)
+            || ignore.is_ignored(&relative_workspace, entry.file_type().is_dir())
+        {
             continue;
         }
         let name = entry.file_name().to_string_lossy();

@@ -25,6 +25,7 @@ use regex::{Regex, RegexBuilder};
 use serde_json::json;
 
 use super::read::missing_path_message;
+use super::workspace_ignore::WorkspaceIgnore;
 use super::*;
 
 /// Refuse to publish a partial index rather than silently answer from one.
@@ -247,6 +248,7 @@ fn index_too_large() -> ToolError {
 fn build_entries(root: &Path, session: &Session) -> Result<Vec<IndexEntry>, ToolError> {
     let mut entries = Vec::new();
     let mut last_poll = Instant::now();
+    let ignore = WorkspaceIgnore::load(root);
     let walker = WalkDir::new(root)
         .follow_links(false)
         .sort_by_file_name()
@@ -260,7 +262,9 @@ fn build_entries(root: &Path, session: &Session) -> Result<Vec<IndexEntry>, Tool
             if entry.file_type().is_symlink() {
                 return false;
             }
-            relative_path(root, entry.path()).is_some_and(|relative| !should_skip(&relative))
+            relative_path(root, entry.path()).is_some_and(|relative| {
+                !should_skip(&relative) && !ignore.is_ignored(&relative, entry.file_type().is_dir())
+            })
         });
     for entry in walker {
         if last_poll.elapsed() >= ABORT_POLL {

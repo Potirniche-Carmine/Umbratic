@@ -46,6 +46,7 @@ mod search;
 mod skill;
 mod surface;
 mod web;
+mod workspace_ignore;
 #[cfg(test)]
 mod web_tests;
 mod write;

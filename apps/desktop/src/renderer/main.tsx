@@ -518,14 +518,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     normalizedReviewFilesRef.current = byPath;
     return Array.from(byPath.values());
   }, [rawReviewFiles]);
-  const documentReviewFiles = useMemo(
-    () => reviewFiles.filter((file) => isArtifactPath(file.path)),
-    [reviewFiles],
-  );
-  const codeReviewFiles = useMemo(
-    () => reviewFiles.filter((file) => !isArtifactPath(file.path)),
-    [reviewFiles],
-  );
+  const documentReviewFiles = useMemo(() => reviewFiles.filter((file) => isArtifactPath(file.path)), [reviewFiles]);
+  const codeReviewFiles = useMemo(() => reviewFiles.filter((file) => !isArtifactPath(file.path)), [reviewFiles]);
   const codeReviewTotals = useMemo(
     () =>
       codeReviewFiles.reduce(

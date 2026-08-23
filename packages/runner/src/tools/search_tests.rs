@@ -755,3 +755,77 @@ async fn nested_generated_trees_are_invisible_to_search_find_and_ls() {
         searched.content
     );
 }
+
+/// The workspace's own `.gitignore` bounds discovery the same way the fixed
+/// lists do — and stops there: an explicit `read` of an ignored path is a
+/// deliberate act and still answers.
+#[tokio::test]
+async fn discovery_honors_the_workspace_gitignore_and_read_does_not() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("logs")).unwrap();
+    std::fs::write(root.join(".gitignore"), "logs/\n*.tmp\n").unwrap();
+    std::fs::write(root.join("src/app.rs"), "let marker_needle = 1;\n").unwrap();
+    std::fs::write(root.join("logs/run.log"), "marker_needle in a log\n").unwrap();
+    std::fs::write(root.join("scratch.tmp"), "marker_needle scratch\n").unwrap();
+    let session = crate::session::test_session(root);
+
+    let found = find_tool(
+        &session,
+        json!({"path":".","glob":"**"}).as_object().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(found.content.contains("src/app.rs"), "{}", found.content);
+    assert!(!found.content.contains("logs"), "{}", found.content);
+    assert!(!found.content.contains("scratch.tmp"), "{}", found.content);
+
+    let listed = ls_tool(&session, json!({"path":"."}).as_object().unwrap())
+        .await
+        .unwrap();
+    assert!(listed.content.contains("src"), "{}", listed.content);
+    assert!(!listed.content.contains("logs"), "{}", listed.content);
+    assert!(
+        !listed.content.contains("scratch.tmp"),
+        "{}",
+        listed.content
+    );
+
+    let searched = run_search(
+        &session,
+        json!({"query":"marker_needle","mode":"content","path":"."}),
+    )
+    .await;
+    assert_eq!(searched.status, "success", "{:?}", searched.error_message);
+    assert!(
+        searched.content.contains("src/app.rs"),
+        "{}",
+        searched.content
+    );
+    assert!(
+        !searched.content.contains("run.log"),
+        "{}",
+        searched.content
+    );
+    assert!(
+        !searched.content.contains("scratch.tmp"),
+        "{}",
+        searched.content
+    );
+
+    let read = execute_tool(
+        session.clone(),
+        crate::session::test_sink(&session.config.cwd),
+        Arc::new(crate::permission::PermissionBroker::default()),
+        ToolCall {
+            id: "read-ignored".into(),
+            name: "read".into(),
+            arguments: json!({"path":"logs/run.log"}),
+            index: 0,
+        },
+    )
+    .await;
+    assert_eq!(read.status, "success", "{:?}", read.error_message);
+    assert!(read.content.contains("marker_needle"), "{}", read.content);
+}
