@@ -1,0 +1,17 @@
+name = "umbratic-downloads"
+main = "src/worker.js"
+compatibility_date = "2026-08-01"
+workers_dev = false
+
+routes = [{ pattern = "downloads.umbratic.ai/*", custom_domain = true }]
+
+# The release bucket. Nothing else may reach it: it has no public URL and no
+# custom domain of its own.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "umbratic-downloads"
+
+# Revoked organizations. A key here is one org UID; the value is unused.
+[[kv_namespaces]]
+binding = "REVOKED"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"

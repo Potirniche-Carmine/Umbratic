@@ -13,6 +13,15 @@ function assertSecureEndpoint(url: URL) {
   }
 }
 
+/**
+ * How long a connection attempt may take before the endpoint is treated as
+ * unreachable. This bounds the socket setup only, not the response: a company
+ * server behind a dropped VPN answers no SYN at all, and without this the
+ * request would sit on the operating system's connect timeout. Callers still
+ * pass an AbortSignal for everything after the connection is up.
+ */
+const CONNECT_TIMEOUT_MS = 10_000;
+
 function readOptionalFile(filePath?: string): Buffer | undefined {
   if (!filePath) return undefined;
   return fs.readFileSync(filePath);
@@ -152,6 +161,14 @@ async function requestProviderJson(
           json,
         });
       });
+    });
+    request.setTimeout(CONNECT_TIMEOUT_MS, () => {
+      // setTimeout measures socket inactivity, so clearing it once the
+      // connection is established leaves long responses alone.
+      request.destroy(new Error("The model endpoint did not respond."));
+    });
+    request.once("socket", (socket) => {
+      socket.once("connect", () => request.setTimeout(0));
     });
     const abort = () => {
       request.destroy(new Error("Request aborted."));

@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
-  <link rel="stylesheet" href="/assets/style.css?v=10">
-  <link rel="stylesheet" href="/assets/documents.css?v=1">
-  <script defer src="/assets/console.js?v=11"></script>
+  <link rel="stylesheet" href="/assets/style.css?v=13">
+  <link rel="stylesheet" href="/assets/controls.css?v=3">
+  <link rel="stylesheet" href="/assets/documents.css?v=4">
+  <script defer src="/assets/console.js?v=14"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -15,67 +16,146 @@
   <div class="page">
     <header class="page-header">
       <h1>Documents</h1>
-      <span class="corpus-counts">{{.Corpus.Documents}} of {{.Corpus.MaxDocs}} documents · {{.Corpus.Chunks}} of {{.Corpus.MaxChunks}} chunks</span>
+      <p class="page-subtitle">What Veil answers from, beyond the model's own training.</p>
     </header>
 
-    {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
-    {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
-    {{if not .Corpus.Configured}}<p class="banner notice" role="status">Set an embedding runtime below to index uploads.</p>{{end}}
+    {{template "banners" .}}
 
-    {{range .Corpus.Sections}}
-    <section class="panel route-panel">
+    <!--
+      One upload area, not one per route.
+
+      This page used to stack four identical panels — Engineering, Sales,
+      Marketing, All routes — each with its own drop zone and its own "0
+      Documents". Four empty boxes is not four pieces of information, and the
+      route is a property of a document rather than a place documents live. So
+      there is one place to put a file, the route is a field on the way in, and
+      the corpus is one list underneath.
+    -->
+    <section class="panel upload-panel">
+      <form class="upload-form" method="post" action="/documents/upload" enctype="multipart/form-data">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <label class="dropzone" data-dropzone>
+          <input class="visually-hidden" type="file" name="document" accept=".pdf,.docx,.pptx,.xlsx,.md,.txt" required data-dropzone-input>
+          <span class="dropzone-empty" data-dropzone-empty>
+            <span class="dropzone-icon" aria-hidden="true"></span>
+            <strong>Drop a file here, or click to choose</strong>
+            <small>PDF, Word, PowerPoint, Excel, Markdown or plain text — up to 25 MiB</small>
+          </span>
+          <span class="dropzone-file" data-dropzone-file hidden>
+            <span class="file-chip">
+              <span class="file-kind" data-dropzone-kind aria-hidden="true"></span>
+              <span class="file-meta">
+                <strong data-dropzone-name></strong>
+                <small data-dropzone-size></small>
+              </span>
+            </span>
+            <button class="text-button" type="button" data-dropzone-clear>Remove</button>
+          </span>
+        </label>
+
+        <!--
+          Teams are checkboxes because a document can belong to more than one.
+          The menu this replaced offered them one at a time plus an "Everyone"
+          that meant the other three — so a document could be for engineering,
+          or for everyone, but never for engineering and sales.
+        -->
+        <div class="upload-actions">
+          <fieldset class="route-set">
+            <legend>Available to</legend>
+            <div class="checkbox-row">
+              {{range .RouteChoices}}
+              <label class="checkbox">
+                <input type="checkbox" name="route" value="{{.Route}}" checked>
+                <span class="checkbox-box" aria-hidden="true"></span>
+                <span>{{.Label}}</span>
+              </label>
+              {{end}}
+            </div>
+          </fieldset>
+          <button class="button primary" type="submit" data-dropzone-submit disabled>Upload</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel corpus-panel">
       <div class="section-heading">
-        <h2>{{.Label}}</h2>
-        <span>{{len .Documents}} documents</span>
+        <h2>Corpus</h2>
+        <span class="corpus-counts">{{.Corpus.Documents}} of {{.Corpus.MaxDocs}} documents</span>
       </div>
 
-      <form class="upload-form" method="post" action="/documents/upload" enctype="multipart/form-data">
-        <input type="hidden" name="csrf" value="{{$.CSRF}}">
-        <input type="hidden" name="route" value="{{.Route}}">
-        <input type="file" name="document" accept=".pdf,.docx,.pptx,.xlsx,.md,.txt" required>
-        <button class="button secondary" type="submit">Upload</button>
-      </form>
-
-      {{if .Documents}}
+      {{if .Corpus.All}}
       <table class="document-table">
         <thead>
-          <tr><th>Name</th><th>Type</th><th>Status</th><th>Chunks</th><th>Uploaded</th><th></th></tr>
+          <tr>
+            <th>Name</th>
+            <th>Available to</th>
+            <th>Status</th>
+            <th class="numeric">Chunks</th>
+            <th>Uploaded</th>
+            <th><span class="visually-hidden">Actions</span></th>
+          </tr>
         </thead>
         <tbody>
-          {{range .Documents}}
+          {{range .Corpus.All}}
           <tr>
-            <td>{{.Name}}{{if .Error}}<small class="document-error">{{.Error}}</small>{{end}}</td>
-            <td>{{.Kind}}</td>
+            <td>
+              <span class="document-name">
+                <span class="file-kind" aria-hidden="true">{{.Kind}}</span>
+                <span>{{.Name}}{{if .Error}}<small class="document-error">{{.Error}}</small>{{end}}</span>
+              </span>
+            </td>
+            <td>
+              <form class="route-form" method="post" action="/documents/{{.ID}}/retag">
+                <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                {{$document := .}}
+                <div class="checkbox-row">
+                  {{range $.RouteChoices}}
+                  <label class="checkbox compact" title="{{.Label}}">
+                    <input type="checkbox" name="route" value="{{.Route}}" {{if $document.HasRoute .Route}}checked{{end}} data-autosubmit aria-label="{{.Label}}, for {{$document.Name}}">
+                    <span class="checkbox-box" aria-hidden="true"></span>
+                    <span>{{.Short}}</span>
+                  </label>
+                  {{end}}
+                </div>
+              </form>
+            </td>
             <td><span class="status status-{{.Status}}">{{.Status}}</span></td>
-            <td>{{.ChunkCount}}</td>
-            <td>{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+            <td class="numeric">{{.ChunkCount}}</td>
+            <td class="document-date">{{.UploadedAt.Format "2 Jan 2006"}}</td>
             <td class="document-actions">
-              <form method="post" action="/documents/{{.ID}}/retag">
-                <input type="hidden" name="csrf" value="{{$.CSRF}}">
-                <select name="route" aria-label="Route for {{.Name}}">
-                  {{$current := .Route}}
-                  {{range $.Routes}}<option value="{{.}}" {{if eq . $current}}selected{{end}}>{{.}}</option>{{end}}
-                </select>
-                <button class="text-button" type="submit">Move</button>
-              </form>
-              <form method="post" action="/documents/{{.ID}}/reindex">
-                <input type="hidden" name="csrf" value="{{$.CSRF}}">
-                <button class="text-button" type="submit">Re-index</button>
-              </form>
-              <form method="post" action="/documents/{{.ID}}/delete">
-                <input type="hidden" name="csrf" value="{{$.CSRF}}">
-                <button class="text-button danger-text" type="submit">Delete</button>
-              </form>
+              <!--
+                The flex row is inside the cell, not the cell itself: a `td`
+                with `display: flex` leaves table layout, which is why these
+                buttons used to render over the column beside them.
+              -->
+              <div class="action-row">
+                <form method="post" action="/documents/{{.ID}}/reindex">
+                  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                  <button class="text-button" type="submit">Re-index</button>
+                </form>
+                <form method="post" action="/documents/{{.ID}}/delete">
+                  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                  <button class="text-button danger-text" type="submit">Delete</button>
+                </form>
+              </div>
             </td>
           </tr>
           {{end}}
         </tbody>
       </table>
+      {{else}}
+      <p class="empty-state">Nothing uploaded yet. Anything added above is chunked, embedded, and searched on every question.</p>
       {{end}}
     </section>
-    {{end}}
 
-    <form class="settings-form" method="post">
+    <!--
+      What is left of the retrieval settings: whether it is on, and which model
+      embeds. The vector database URL, the embedding runtime URL, the collection
+      name, the result count, the injected-context budget and the retrieval
+      timeout were all fields here, and each had exactly one right answer. They
+      are constants in `config/rag.go` now.
+    -->
+    <form class="settings-form" id="retrieval-form" method="post" action="/documents/settings">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <section class="panel">
         <div class="section-heading">
@@ -83,60 +163,53 @@
           {{if gt .RAG.Dimension 0}}<span>{{.RAG.Dimension}} dimensions</span>{{end}}
         </div>
 
-        <div class="field-grid">
-          <label class="field checkbox-field">
-            <input type="checkbox" name="rag_enabled" {{if .RAG.Enabled}}checked{{end}}>
-            <span>Answer with company documents</span>
-          </label>
-          <label class="field">
-            <span>Embedding runtime URL</span>
-            <input type="url" name="embedding_base_url" value="{{.RAG.EmbeddingBaseURL}}" required>
-          </label>
-          <label class="field">
-            <span>Embedding model</span>
-            <input name="embedding_model" value="{{.RAG.EmbeddingModel}}" maxlength="256" placeholder="Qwen/Qwen3-Embedding-0.6B">
-          </label>
-          <label class="field">
-            <span>Vector database URL</span>
-            <input type="url" name="vector_base_url" value="{{.RAG.VectorBaseURL}}" required>
-          </label>
-        </div>
-
-        <details class="disclosure">
-          <summary><strong>Advanced</strong><span class="disclosure-mark" aria-hidden="true"></span></summary>
-          <div class="field-grid advanced-grid">
-            <label class="field">
-              <span>Collection</span>
-              <input name="collection" value="{{.RAG.Collection}}" maxlength="64" required>
-            </label>
-            <label class="field">
-              <span>Results per request</span>
-              <input type="number" name="top_k" value="{{.RAG.TopK}}" min="1" max="32" required>
-            </label>
-            <label class="field">
-              <span>Injected context</span>
-              <div class="input-suffix">
-                <input type="number" name="max_injected_bytes" value="{{.RAG.MaxInjectedBytes}}" min="1024" max="262144" required>
-                <span>bytes</span>
-              </div>
-            </label>
-            <label class="field">
-              <span>Retrieval timeout</span>
-              <input name="rag_timeout" value="{{.RAG.Timeout}}" required>
-            </label>
+        <div class="retrieval-grid">
+          <div class="field">
+            <span id="retrieval-label">Answer with company documents</span>
+            <!--
+              A two-button segmented control rather than a checkbox. It is the
+              setting this whole page exists for, and a checkbox reads as one
+              more option in a form.
+            -->
+            <div class="segmented" role="group" aria-labelledby="retrieval-label" data-segmented>
+              <input type="hidden" name="rag_enabled" value="{{if .RAG.Enabled}}on{{else}}off{{end}}" data-segmented-input>
+              <button type="button" data-segmented-value="on" aria-pressed="{{.RAG.Enabled}}">On</button>
+              <button type="button" data-segmented-value="off" aria-pressed="{{not .RAG.Enabled}}">Off</button>
+            </div>
           </div>
-        </details>
+
+          <div class="field">
+            <span id="embedding-label">Embedding model</span>
+            <div class="choice" data-choice>
+              <input type="hidden" name="embedding_model" value="{{.RAG.EmbeddingModel}}" data-choice-input>
+              <button class="choice-trigger" type="button" aria-labelledby="embedding-label embedding-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
+                <span id="embedding-value" data-choice-label>{{.RAG.EmbeddingLabel}}</span>
+                <span class="choice-chevron" aria-hidden="true"></span>
+              </button>
+              <div class="choice-menu" role="listbox" aria-labelledby="embedding-label" data-choice-menu hidden>
+                {{range .EmbeddingChoices}}
+                <button type="button" role="option" data-choice-value="{{.Model}}" aria-selected="{{eq .Model $.RAG.EmbeddingModel}}">
+                  <span class="option-row">
+                    <span class="option-title">{{.Label}}</span>
+                    <span class="option-size">{{printf "%.1f" .SizeGB}} GB</span>
+                  </span>
+                  <span class="option-detail">{{.Detail}}</span>
+                </button>
+                {{end}}
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="panel apply-panel">
         <label class="field password-field">
           <span>Owner password</span>
-          <input type="password" name="password" autocomplete="current-password" {{if .PasswordError}}aria-invalid="true" aria-describedby="password-error"{{end}}>
+          <input type="password" name="password" autocomplete="current-password" required {{if .PasswordError}}aria-invalid="true" aria-describedby="password-error"{{end}} data-retrieval-password>
           {{if .PasswordError}}<small class="field-error" id="password-error" role="alert">Owner password is incorrect.</small>{{end}}
         </label>
         <div class="apply-actions">
-          <button class="button secondary" formaction="/documents/settings/test" type="submit" formnovalidate>Test runtime</button>
-          <button class="button primary" formaction="/documents/settings" type="submit">Save and restart</button>
+          <button class="button primary" type="submit">Save and restart</button>
         </div>
       </section>
     </form>

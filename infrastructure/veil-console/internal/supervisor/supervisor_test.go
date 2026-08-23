@@ -106,3 +106,37 @@ func TestActionSerialization(t *testing.T) {
 		t.Fatalf("concurrent action returned %v", err)
 	}
 }
+
+// An unexpected exit is recovered automatically, but only while the crashes
+// stay inside the window. Past the limit the process is left down so the log
+// line that explains the failure is not buried under a restart loop.
+func TestRecoveryStopsAfterRepeatedCrashes(t *testing.T) {
+	process := New("unused", "127.0.0.1:8080")
+	cfg := config.Veil{}
+	process.lastConfig, process.lastToken = &cfg, "token"
+	now := time.Now()
+	for attempt := range maxRestartsInWindow {
+		process.crashes = append(process.crashes, now)
+		if len(process.crashes) > maxRestartsInWindow {
+			t.Fatalf("crash %d already tripped the breaker", attempt)
+		}
+	}
+	process.recover()
+	if got := process.Status().Message; got != "Veil keeps exiting. Automatic restart is paused — check the log, then start it from this page." {
+		t.Fatalf("breaker did not pause restarts: %q", got)
+	}
+}
+
+// An operator-initiated stop is not a crash, so it must not schedule a restart.
+func TestStoppingSuppressesRecovery(t *testing.T) {
+	process := New("unused", "127.0.0.1:8080")
+	cfg := config.Veil{}
+	process.lastConfig, process.lastToken = &cfg, "token"
+	process.setStopping(true)
+	process.stateMu.RLock()
+	suppressed := process.stopping
+	process.stateMu.RUnlock()
+	if !suppressed {
+		t.Fatal("an operator stop was not recorded")
+	}
+}

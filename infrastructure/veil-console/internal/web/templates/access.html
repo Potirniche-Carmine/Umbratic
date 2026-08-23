@@ -6,6 +6,7 @@
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
   <link rel="stylesheet" href="/assets/style.css?v=10">
+  <link rel="stylesheet" href="/assets/controls.css?v=1">
   <link rel="stylesheet" href="/assets/access.css?v=13">
   <script defer src="/assets/console.js?v=11"></script>
 </head>
@@ -18,8 +19,7 @@
       {{if and .EnterpriseEnabled .Configured .Running}}<a class="button secondary" href="/access?filter={{.Access.Filter}}">Refresh</a>{{end}}
     </header>
 
-    {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
-    {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
+    {{template "banners" .}}
 
     {{if not .EnterpriseEnabled}}
       <section class="panel unavailable-panel">

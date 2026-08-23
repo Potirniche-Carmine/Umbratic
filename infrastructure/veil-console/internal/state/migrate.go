@@ -28,6 +28,7 @@ var migrations = []migration{
 	{name: "rag_corpus", apply: applyCorpusSchema},
 	{name: "managed_models", apply: applyManagedModelSchema},
 	{name: "managed_model_role", apply: applyManagedModelRole},
+	{name: "document_route_set", apply: applyDocumentRouteSet},
 }
 
 // Connection pragmas. These are per-connection settings rather than schema, and
@@ -82,7 +83,10 @@ CREATE TABLE IF NOT EXISTS documents (
   route TEXT NOT NULL, status TEXT NOT NULL, error TEXT NOT NULL,
   chunk_count INTEGER NOT NULL, byte_size INTEGER NOT NULL,
   sha256 TEXT NOT NULL, uploaded_at INTEGER NOT NULL,
-  CHECK (route IN ('engineering','sales','marketing','all')),
+  -- A set, comma separated and canonically ordered. The old single-route CHECK
+  -- cannot express that, and a table constraint is the wrong place to validate
+  -- a list; config.ParseRoutes is what reads it and drops anything unknown.
+
   CHECK (status IN ('pending','processing','indexed','failed'))
 );
 CREATE INDEX IF NOT EXISTS documents_route ON documents(route);
@@ -288,4 +292,39 @@ func tableColumns(tx *sql.Tx, table string) (map[string]bool, error) {
 		columns[name] = true
 	}
 	return columns, rows.Err()
+}
+
+// applyDocumentRouteSet turns the single route column into a set.
+//
+// "all" was a fourth route meaning "the other three". Rewriting it as the three
+// it stood for is what makes the column a set with no special member, and it
+// preserves what every existing document was actually visible to. The CHECK
+// goes with it: a comma-separated set is not something a column constraint can
+// usefully express.
+func applyDocumentRouteSet(tx *sql.Tx) error {
+	// The corpus schema may not exist yet on a database that has never had the
+	// Documents tab used; applyCorpusSchema runs before this step, so it does.
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS documents_route_set (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+  route TEXT NOT NULL, status TEXT NOT NULL, error TEXT NOT NULL,
+  chunk_count INTEGER NOT NULL, byte_size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL, uploaded_at INTEGER NOT NULL,
+  CHECK (status IN ('pending','processing','indexed','failed'))
+)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO documents_route_set
+SELECT id,name,kind,
+  CASE route WHEN 'all' THEN 'engineering,sales,marketing' ELSE route END,
+  status,error,chunk_count,byte_size,sha256,uploaded_at FROM documents`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DROP TABLE documents"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("ALTER TABLE documents_route_set RENAME TO documents"); err != nil {
+		return err
+	}
+	_, err := tx.Exec("CREATE INDEX IF NOT EXISTS documents_route ON documents(route)")
+	return err
 }

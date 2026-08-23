@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -346,7 +347,7 @@ func TestDashboardHidesStartWhenVeilIsRunning(t *testing.T) {
 
 	response = httptest.NewRecorder()
 	server.render(response, "dashboard.html", pageData{
-		Title: "Veil Console", CSRF: "test", Configured: true, Running: false, Status: "stopped",
+		Title: "Veil Console", CSRF: "test", Configured: true, Running: false, Status: "Stopped",
 	})
 	body = response.Body.String()
 	if strings.Contains(body, `action="/veil/restart"`) {
@@ -370,19 +371,16 @@ func TestRestartCooldown(t *testing.T) {
 	}
 }
 
-func TestContextPresentationUsesCommonPresets(t *testing.T) {
-	for _, test := range []struct {
-		value int
-		index int
-		label string
-	}{
-		{value: 0, index: 3, label: "64K tokens"},
-		{value: 131_072, index: 4, label: "128K tokens"},
-		{value: 1_048_576, index: 7, label: "1M tokens"},
+// Context is a per-model label now, not a slider index. What matters is that
+// what the Settings page prints for the default model reads as tokens.
+func TestContextLabelReadsAsTokens(t *testing.T) {
+	for value, want := range map[int]string{
+		65_536:    "64K",
+		262_144:   "256K",
+		1_048_576: "1M",
 	} {
-		index, label := contextPresentation(test.value)
-		if index != test.index || label != test.label {
-			t.Errorf("context %d presented as %d %q", test.value, index, label)
+		if got := config.ContextLabel(value); got != want {
+			t.Errorf("context %d presented as %q, want %q", value, got, want)
 		}
 	}
 }
@@ -407,4 +405,64 @@ func tempStateDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// Every stylesheet and script a template links has to actually be served. The
+// pages used to name their assets in one place and route them in another, and
+// controls.css shipped linked-but-unrouted: the console rendered with half its
+// styling and nothing errored.
+func TestEveryLinkedAssetIsServed(t *testing.T) {
+	server, closeServer := testServer(t)
+	defer closeServer()
+	handler := server.Handler()
+
+	linked := map[string]bool{}
+	pattern := regexp.MustCompile(`(?:href|src)="(/assets/[A-Za-z0-9._-]+)`)
+	entries, err := content.ReadDir("templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		body, err := content.ReadFile("templates/" + entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, match := range pattern.FindAllStringSubmatch(string(body), -1) {
+			linked[match[1]] = true
+		}
+	}
+	if len(linked) == 0 {
+		t.Fatal("no assets were found in the templates")
+	}
+	for path := range linked {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Host = "127.0.0.1:8177"
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s is linked by a template but answers %d", path, response.Code)
+		}
+	}
+}
+
+// The asset handler serves a directory, so it has to refuse everything that is
+// not one of its own files.
+func TestAssetHandlerRefusesTraversalAndUnknownTypes(t *testing.T) {
+	server, closeServer := testServer(t)
+	defer closeServer()
+	handler := server.Handler()
+	for _, path := range []string{
+		"/assets/../server.go",
+		"/assets/console.db",
+		"/assets/.hidden",
+		"/assets/nothing.css",
+	} {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Host = "127.0.0.1:8177"
+		handler.ServeHTTP(response, request)
+		if response.Code == http.StatusOK {
+			t.Fatalf("%s must not be served", path)
+		}
+	}
 }

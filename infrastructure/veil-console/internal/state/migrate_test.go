@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,7 +137,7 @@ func TestDocumentLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	doc := Document{ID: "doc-1", Name: "handbook.md", Kind: "md", Route: "sales",
+	doc := Document{ID: "doc-1", Name: "handbook.md", Kind: "md", Routes: []string{"sales"},
 		ByteSize: 24, SHA256: "abc", UploadedAt: time.Unix(2000, 0)}
 	if err := store.InsertDocument(ctx, doc); err != nil {
 		t.Fatal(err)
@@ -155,18 +156,32 @@ func TestDocumentLifecycle(t *testing.T) {
 	if err != nil || documents != 1 || chunks != 7 {
 		t.Fatalf("totals wrong: %d %d %v", documents, chunks, err)
 	}
-	if err := store.QueueDocument(ctx, "doc-1", "engineering"); err != nil {
+	// A document can be available to more than one team, and the stored set is
+	// canonically ordered so the same set is always the same string.
+	if err := store.QueueDocument(ctx, "doc-1", []string{"marketing", "engineering"}); err != nil {
 		t.Fatal(err)
 	}
 	stored, _, err := store.Document(ctx, "doc-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Route != "engineering" || stored.Status != DocumentPending || stored.ChunkCount != 0 {
+	if strings.Join(stored.Routes, ",") != "engineering,marketing" {
+		t.Fatalf("retag did not store the set: %+v", stored)
+	}
+	if stored.Status != DocumentPending || stored.ChunkCount != 0 {
 		t.Fatalf("retag did not requeue: %+v", stored)
 	}
-	if err := store.QueueDocument(ctx, "doc-1", "everyone"); err == nil {
-		t.Fatal("an unknown route was accepted")
+	if !stored.HasRoute("engineering") || stored.HasRoute("sales") {
+		t.Fatalf("HasRoute disagrees with the stored set: %+v", stored)
+	}
+	// An unknown route is dropped rather than stored, so a set of nothing but
+	// unknowns leaves the document where it was.
+	if err := store.QueueDocument(ctx, "doc-1", []string{"everyone"}); err != nil {
+		t.Fatal(err)
+	}
+	stored, _, _ = store.Document(ctx, "doc-1")
+	if strings.Join(stored.Routes, ",") != "engineering,marketing" {
+		t.Fatalf("an unknown route changed the set: %+v", stored)
 	}
 }
 

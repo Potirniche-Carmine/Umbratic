@@ -42,7 +42,7 @@ func TestVLLMContextLengthIsSupported(t *testing.T) {
 	if !strings.Contains(env, "VEIL_CONTEXT_LENGTH=65536") {
 		t.Fatalf("context length is missing from environment: %s", env)
 	}
-	if !strings.Contains(env, "VEIL_TEMPERATURE=0.2") || !strings.Contains(env, "VEIL_TOP_P=0.95") {
+	if !strings.Contains(env, "VEIL_TEMPERATURE=0.7") || !strings.Contains(env, "VEIL_TOP_P=0.95") {
 		t.Fatalf("generation profile missing from environment: %s", env)
 	}
 }

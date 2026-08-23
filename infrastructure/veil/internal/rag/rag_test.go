@@ -75,6 +75,10 @@ func point(name, section, text string) map[string]any {
 	}}
 }
 
+// A document carries the set of teams it was made available to, so a request
+// asks for its own route and nothing else — there is no shared "all" tag to
+// widen the query with, and asking for one would reach another team's corpus.
+//
 // The route split is the whole tenancy guarantee: a sales request must ask for
 // sales and all, and for nothing else.
 func TestOverlayFiltersByRouteAndModel(t *testing.T) {
@@ -93,7 +97,7 @@ func TestOverlayFiltersByRouteAndModel(t *testing.T) {
 	}
 	encoded, _ := json.Marshal(stub.lastBody["filter"])
 	filter := string(encoded)
-	for _, want := range []string{`"route"`, `"sales"`, `"all"`, `"embedding_model"`, `"test-embed"`} {
+	for _, want := range []string{`"route"`, `"sales"`, `"embedding_model"`, `"test-embed"`} {
 		if !strings.Contains(filter, want) {
 			t.Fatalf("filter %s is missing %s", filter, want)
 		}

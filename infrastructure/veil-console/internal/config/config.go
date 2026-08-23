@@ -55,9 +55,12 @@ type Veil struct {
 
 func DefaultVeil() Veil {
 	return Veil{
-		ProviderBaseURL:              "http://127.0.0.1:8000/v1",
-		MaxOutputTokens:              8192,
-		Temperature:                  0.2,
+		ProviderBaseURL: "http://127.0.0.1:8000/v1",
+		MaxOutputTokens: DefaultMaxOutputTokens,
+		// Sampling that no longer comes from a form has to come from
+		// somewhere. These are the fallback for a model the catalog has no card
+		// for; a catalog model overwrites them with its own on registration.
+		Temperature:                  0.7,
 		TopP:                         0.95,
 		ReasoningEffort:              ReasoningNone,
 		ParallelToolCalls:            true,
@@ -66,7 +69,7 @@ func DefaultVeil() Veil {
 		QueueTimeout:                 30 * time.Second,
 		ModelTimeout:                 60 * time.Second,
 		RequestTimeout:               75 * time.Second,
-		MaxBodyBytes:                 64 << 20,
+		MaxBodyBytes:                 DefaultMaxBodyBytes,
 	}
 }
 

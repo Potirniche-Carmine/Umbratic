@@ -2,29 +2,175 @@
   color: var(--faint);
   font-size: 0.78rem;
   font-weight: 560;
+  font-variant-numeric: tabular-nums;
 }
 
-.route-panel {
+.upload-panel,
+.corpus-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.upload-form {
   display: grid;
   gap: 0.9rem;
 }
 
-.upload-form {
+/* The route menu on the left, the action on the right. */
+.upload-actions {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
   flex-wrap: wrap;
 }
 
-.upload-form input[type="file"] {
-  flex: 1 1 18rem;
+.upload-actions .field {
+  min-width: 12rem;
+}
+
+.upload-actions .button {
+  min-width: 7rem;
+}
+
+.retrieval-grid {
+  display: grid;
+  align-items: start;
+  gap: 1rem 1.4rem;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+}
+
+.empty-state {
+  margin: 0;
+  padding: 1.6rem 1rem;
+  color: var(--faint);
+  font-size: 0.83rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/*
+  The drop area is the label of a hidden file input, which is what lets the
+  whole box be the click target and the drop target at once. The native control
+  it replaces rendered as a small grey "Choose File" button and the words "no
+  file selected", jammed against the left edge of a box that was already drawn
+  as a drop zone and did not behave like one.
+*/
+.dropzone {
+  display: grid;
   min-width: 0;
-  padding: 0.55rem 0.7rem;
+  min-height: 8rem;
+  padding: 0.85rem 1rem;
   border: 1px dashed var(--line-strong);
-  border-radius: var(--control-radius);
-  color: var(--muted);
+  border-radius: 14px;
   background: var(--control);
-  font-size: 0.78rem;
+  place-items: center;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color 160ms var(--ease-out),
+    background 160ms var(--ease-out);
+}
+
+.dropzone:hover,
+.dropzone.is-dragging {
+  border-color: var(--blue);
+  background: var(--control-hover);
+}
+
+.dropzone:focus-within {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.dropzone-empty {
+  display: grid;
+  gap: 0.2rem;
+  justify-items: center;
+}
+
+.dropzone-empty strong {
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 620;
+}
+
+.dropzone-empty small {
+  color: var(--faint);
+  font-size: 0.72rem;
+}
+
+/*
+  The icon is drawn rather than shipped: a sheet of paper with its corner
+  turned, in two gradients and a clip path, so there is no asset to embed.
+*/
+.dropzone-icon {
+  width: 22px;
+  height: 26px;
+  margin-bottom: 0.25rem;
+  border-radius: 3px;
+  background:
+    linear-gradient(225deg, transparent 50%, var(--line-strong) 50%) top right / 8px 8px no-repeat,
+    var(--faint);
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+  opacity: 0.55;
+}
+
+/* What a chosen file looks like before it is uploaded. */
+.dropzone-file {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  text-align: left;
+}
+
+/* The extension, set in the chip, so the type is legible before upload. */
+.file-kind {
+  display: grid;
+  min-width: 2.6rem;
+  padding: 0.28rem 0.4rem;
+  border-radius: 7px;
+  color: var(--blue);
+  background: rgba(70, 132, 255, 0.14);
+  font-size: 0.64rem;
+  font-weight: 720;
+  letter-spacing: 0.04em;
+  place-items: center;
+  text-transform: uppercase;
+}
+
+.file-meta {
+  display: grid;
+  min-width: 0;
+  gap: 0.05rem;
+}
+
+.file-meta strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-meta small {
+  color: var(--faint);
+  font-size: 0.71rem;
 }
 
 .document-table {
@@ -43,7 +189,7 @@
 }
 
 .document-table td {
-  padding: 0.5rem;
+  padding: 0.45rem 0.5rem;
   border-bottom: 1px solid var(--line);
   color: var(--text);
   vertical-align: middle;
@@ -57,12 +203,27 @@
 }
 
 .status {
-  padding: 0.14rem 0.5rem;
+  display: inline-block;
+  padding: 0.16rem 0.55rem;
   border-radius: 999px;
   background: var(--control);
   color: var(--muted);
   font-size: 0.7rem;
   font-weight: 620;
+  /* The states come off the store lowercase; they are labels here. */
+  text-transform: capitalize;
+}
+
+.status-indexed {
+  background: rgba(69, 210, 138, 0.12);
+}
+
+.status-failed {
+  background: rgba(255, 102, 115, 0.12);
+}
+
+.status-processing {
+  background: rgba(232, 184, 77, 0.12);
 }
 
 .status-indexed {
@@ -77,17 +238,15 @@
   color: var(--amber);
 }
 
-.document-actions {
+.action-row {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 0.35rem;
 }
 
-.document-actions form {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
+.document-actions {
+  text-align: right;
 }
 
 .document-actions select {
@@ -146,8 +305,56 @@
     width: 100%;
   }
 
-  .document-actions {
+  .action-row {
     justify-content: flex-start;
     flex-wrap: wrap;
   }
+}
+
+/* The name cell: the extension as a chip, then the file name. */
+.document-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.document-table .file-kind {
+  flex: none;
+  min-width: 2.9rem;
+}
+
+/*
+  The name column absorbs the slack and every other column sizes to its
+  content, so the actions sit against the right edge instead of floating in the
+  middle of the row. Squeezing the last column with `width: 1%` did the
+  opposite: the cell collapsed and its flex row overflowed back over the date.
+*/
+.document-table th:first-child,
+.document-table td:first-child {
+  width: 99%;
+}
+
+.document-table th:not(:first-child),
+.document-table td:not(:first-child) {
+  white-space: nowrap;
+}
+
+.document-table td.numeric,
+.document-table th.numeric {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.document-date {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+
+
+/* The team checkboxes sit against the left of their column. */
+.route-form .checkbox-row {
+  gap: 0.3rem;
+  flex-wrap: nowrap;
 }

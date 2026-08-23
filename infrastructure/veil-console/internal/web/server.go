@@ -50,19 +50,18 @@ type Server struct {
 const restartCooldown = 5 * time.Second
 
 type pageData struct {
-	Title             string
-	CSRF              string
-	Error             string
-	Notice            string
-	Username          string
-	Setup             bool
-	Configured        bool
-	Status            string
-	Config            config.Veil
-	Token             string
-	BodySizeIndex     int
-	BodySizeLabel     string
-	ContextIndex      int
+	Title      string
+	CSRF       string
+	Error      string
+	Notice     string
+	Username   string
+	Setup      bool
+	Configured bool
+	Status     string
+	Config     config.Veil
+	Token      string
+	// ContextLabel is the default model's context, printed beside its name. It
+	// is not editable here: context belongs to the model.
 	ContextLabel      string
 	PasswordError     bool
 	Running           bool
@@ -71,15 +70,17 @@ type pageData struct {
 	Ops               supervisor.OpsMetrics
 	EnterpriseEnabled bool
 	Access            accessView
-	// SettingsModels is the default-model dropdown on the Settings page.
-	SettingsModels    []string
+	// DefaultModelName is the read-only line the Settings page shows in place
+	// of the model field it used to own.
+	DefaultModelName  string
 	Models            modelsView
 	EnrollmentCode    string
 	EnrollmentExpires string
 	RetryAfterSeconds int
 	RAG               config.RAG
+	RouteChoices      []routeChoice
+	EmbeddingChoices  []config.EmbeddingChoice
 	Corpus            documentsView
-	Routes            []string
 }
 
 type contextKey int
@@ -127,13 +128,7 @@ func (s *Server) qdrantAPIKey() string { return s.corpus.VectorAPIKey() }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("GET /assets/style.css", s.style)
-	mux.HandleFunc("GET /assets/access.css", s.accessStyle)
-	mux.HandleFunc("GET /assets/settings.css", s.settingsStyle)
-	mux.HandleFunc("GET /assets/documents.css", s.documentsStyle)
-	mux.HandleFunc("GET /assets/models.css", s.modelsStyle)
-	mux.HandleFunc("GET /assets/console.js", s.script)
-	mux.HandleFunc("GET /assets/umbratic-icon.png", s.logo)
+	mux.HandleFunc("GET /assets/{asset}", s.asset)
 	mux.HandleFunc("GET /favicon.ico", s.favicon)
 	mux.HandleFunc("GET /setup", s.setupPage)
 	mux.HandleFunc("POST /setup", s.setupSubmit)
@@ -150,6 +145,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /veil/restart", s.requireSession(http.HandlerFunc(s.veilRestart)))
 	mux.Handle("GET /models", s.requireSession(http.HandlerFunc(s.modelsPage)))
 	mux.Handle("POST /models/create", s.requireSession(http.HandlerFunc(s.modelsCreate)))
+	mux.Handle("POST /models/{model_id}/default", s.requireSession(http.HandlerFunc(s.modelsDefault)))
 	mux.Handle("POST /models/{model_id}/update", s.requireSession(http.HandlerFunc(s.modelsUpdate)))
 	mux.Handle("POST /models/{model_id}/delete", s.requireSession(http.HandlerFunc(s.modelsDelete)))
 	mux.Handle("POST /models/{model_id}/start", s.requireSession(http.HandlerFunc(s.modelsStart)))
@@ -157,7 +153,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /models/{model_id}/restart", s.requireSession(http.HandlerFunc(s.modelsRestart)))
 	mux.Handle("GET /documents", s.requireSession(http.HandlerFunc(s.documentsPage)))
 	mux.Handle("POST /documents/upload", s.requireSession(http.HandlerFunc(s.documentsUpload)))
-	mux.Handle("POST /documents/settings/test", s.requireSession(http.HandlerFunc(s.documentsSettingsTest)))
 	mux.Handle("POST /documents/settings", s.requireSession(http.HandlerFunc(s.documentsSettingsApply)))
 	mux.Handle("POST /documents/{document_id}/delete", s.requireSession(http.HandlerFunc(s.documentDelete)))
 	mux.Handle("POST /documents/{document_id}/retag", s.requireSession(http.HandlerFunc(s.documentRetag)))
@@ -180,9 +175,9 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
-		if r.URL.Path != "/healthz" && r.URL.Path != "/assets/style.css" &&
-			r.URL.Path != "/assets/access.css" && r.URL.Path != "/assets/settings.css" &&
-			r.URL.Path != "/assets/documents.css" {
+		// Assets carry their own caching; everything else is a page whose
+		// contents depend on a session and must not be stored.
+		if r.URL.Path != "/healthz" && !strings.HasPrefix(r.URL.Path, "/assets/") {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		next.ServeHTTP(w, r)
@@ -448,7 +443,8 @@ func (s *Server) settingsData(r *http.Request, cfg config.Veil, errorMessage, no
 	return pageData{
 		Title: "Settings", CSRF: csrfCookie(r), Config: cfg,
 		Error: errorMessage, Notice: noticeMessage,
-		SettingsModels: settingsModelChoices(r.Context(), cfg, managed),
+		DefaultModelName: s.defaultModelName(r, cfg),
+		ContextLabel:     config.ContextLabel(cfg.ContextLength),
 		// Only the count is needed here: it decides whether this field is a
 		// free-form model name or a choice among the managed runtimes.
 		Models: modelsView{Registered: len(managed)},
@@ -472,7 +468,7 @@ func (s *Server) defaultModelIsManaged(r *http.Request, cfg config.Veil) error {
 }
 
 func (s *Server) settingsTest(w http.ResponseWriter, r *http.Request) {
-	cfg, _ := parseSettings(r)
+	cfg, _ := s.parseSettings(r)
 	if err := s.freshPassword(w, r); err != nil {
 		status := http.StatusInternalServerError
 		data := s.settingsData(r, cfg, "Password confirmation failed. Try again.", "")
@@ -484,7 +480,7 @@ func (s *Server) settingsTest(w http.ResponseWriter, r *http.Request) {
 		s.renderStatus(w, "settings.html", status, data)
 		return
 	}
-	cfg, err := parseSettings(r)
+	cfg, err := s.parseSettings(r)
 	if err == nil {
 		err = s.defaultModelIsManaged(r, cfg)
 	}
@@ -499,7 +495,7 @@ func (s *Server) settingsTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
-	cfg, _ := parseSettings(r)
+	cfg, _ := s.parseSettings(r)
 	if err := s.freshPassword(w, r); err != nil {
 		status := http.StatusInternalServerError
 		data := s.settingsData(r, cfg, "Password confirmation failed. Try again.", "")
@@ -511,7 +507,7 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		s.renderStatus(w, "settings.html", status, data)
 		return
 	}
-	cfg, err := parseSettings(r)
+	cfg, err := s.parseSettings(r)
 	if err == nil {
 		err = s.defaultModelIsManaged(r, cfg)
 	}
@@ -570,7 +566,7 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) veilStart(w http.ResponseWriter, r *http.Request) {
 	if s.supervisor.Status().Running {
-		s.render(w, "dashboard.html", s.dashboardData(r, "", "Veil is already running."))
+		s.render(w, "dashboard.html", s.dashboardData(r, "Veil is already running.", ""))
 		return
 	}
 	if !s.confirmDashboardPassword(w, r) {
@@ -595,7 +591,7 @@ func (s *Server) veilStop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) veilRestart(w http.ResponseWriter, r *http.Request) {
 	if !s.supervisor.Status().Running {
-		s.render(w, "dashboard.html", s.dashboardData(r, "", "Veil is stopped. Use Start."))
+		s.render(w, "dashboard.html", s.dashboardData(r, "Veil is stopped. Use Start.", ""))
 		return
 	}
 	if !s.confirmDashboardPassword(w, r) {
@@ -681,16 +677,18 @@ func (s *Server) freshPassword(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func parseSettings(r *http.Request) (config.Veil, error) {
-	cfg := config.DefaultVeil()
-	cfg.ProviderBaseURL = strings.TrimSpace(r.FormValue("provider_base_url"))
-	cfg.Model = strings.TrimSpace(r.FormValue("model"))
-	if value := strings.TrimSpace(r.FormValue("context_length")); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil {
-			return cfg, errors.New("context length is invalid")
-		}
-		cfg.ContextLength = parsed
+// parseSettings reads the settings form onto the stored configuration.
+//
+// It is a method now because the form no longer carries the whole
+// configuration: the model, the runtime URL and the sampling are set from the
+// Models page and the catalog, so they have to be read from the store rather
+// than from the request. Anything a browser does send that this page no longer
+// shows is ignored — WithModelDefaults writes over it — so a stale or forged
+// field cannot reintroduce a setting the interface retired.
+func (s *Server) parseSettings(r *http.Request) (config.Veil, error) {
+	cfg, ok, err := s.store.Configuration(r.Context(), "current")
+	if err != nil || !ok {
+		cfg = config.DefaultVeil()
 	}
 	if value := strings.TrimSpace(r.FormValue("max_output_tokens")); value != "" {
 		parsed, err := strconv.Atoi(value)
@@ -699,41 +697,12 @@ func parseSettings(r *http.Request) (config.Veil, error) {
 		}
 		cfg.MaxOutputTokens = parsed
 	}
-	if value := strings.TrimSpace(r.FormValue("temperature")); value != "" {
-		parsed, err := strconv.ParseFloat(value, 64)
+	if value := strings.TrimSpace(r.FormValue("max_body_bytes")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
-			return cfg, errors.New("temperature is invalid")
+			return cfg, errors.New("maximum request size is invalid")
 		}
-		cfg.Temperature = parsed
-	}
-	if value := strings.TrimSpace(r.FormValue("top_p")); value != "" {
-		parsed, err := strconv.ParseFloat(value, 64)
-		if err != nil {
-			return cfg, errors.New("top p is invalid")
-		}
-		cfg.TopP = parsed
-	}
-	effort, err := config.ParseReasoningEffort(r.FormValue("reasoning_effort"))
-	if err != nil {
-		return cfg, err
-	}
-	cfg.ReasoningEffort = effort
-	if value := strings.TrimSpace(r.FormValue("thinking_token_budget")); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil {
-			return cfg, errors.New("thinking token budget is invalid")
-		}
-		cfg.ThinkingTokenBudget = &parsed
-	} else {
-		cfg.ThinkingTokenBudget = nil
-	}
-	switch strings.ToLower(strings.TrimSpace(r.FormValue("parallel_tool_calls"))) {
-	case "", "true", "on", "1":
-		cfg.ParallelToolCalls = true
-	case "false", "off", "0":
-		cfg.ParallelToolCalls = false
-	default:
-		return cfg, errors.New("parallel tool calls must be on or off")
+		cfg.MaxBodyBytes = parsed
 	}
 	if value := strings.TrimSpace(r.FormValue("max_concurrent_requests")); value != "" {
 		parsed, err := strconv.Atoi(value)
@@ -749,35 +718,61 @@ func parseSettings(r *http.Request) (config.Veil, error) {
 		}
 		cfg.MaxConcurrentRequestsPerUser = parsed
 	}
-	if value := strings.TrimSpace(r.FormValue("queue_timeout")); value != "" {
+	for _, field := range []struct {
+		name    string
+		label   string
+		operand *time.Duration
+	}{
+		{"queue_timeout", "queue timeout", &cfg.QueueTimeout},
+		{"model_timeout", "model timeout", &cfg.ModelTimeout},
+		{"request_timeout", "request timeout", &cfg.RequestTimeout},
+	} {
+		value := strings.TrimSpace(r.FormValue(field.name))
+		if value == "" {
+			continue
+		}
 		parsed, err := time.ParseDuration(value)
 		if err != nil {
-			return cfg, errors.New("queue timeout is invalid")
+			return cfg, errors.New(field.label + " is invalid")
 		}
-		cfg.QueueTimeout = parsed
+		*field.operand = parsed
 	}
-	if value := strings.TrimSpace(r.FormValue("model_timeout")); value != "" {
-		parsed, err := time.ParseDuration(value)
-		if err != nil {
-			return cfg, errors.New("model timeout is invalid")
-		}
-		cfg.ModelTimeout = parsed
-	}
-	if value := strings.TrimSpace(r.FormValue("request_timeout")); value != "" {
-		parsed, err := time.ParseDuration(value)
-		if err != nil {
-			return cfg, errors.New("request timeout is invalid")
-		}
-		cfg.RequestTimeout = parsed
-	}
-	if value := strings.TrimSpace(r.FormValue("max_body_bytes")); value != "" {
-		parsed, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return cfg, errors.New("maximum body size is invalid")
-		}
-		cfg.MaxBodyBytes = parsed
-	}
+	cfg = config.WithModelDefaults(cfg, s.defaultModelRepo(r, cfg))
 	return cfg, cfg.Validate()
+}
+
+// defaultModelRepo is the repository the default model is served from, which is
+// what its recommended sampling is looked up by. Empty for a model registered
+// by hand: the catalog has no card for it, so its sampling is left as stored.
+func (s *Server) defaultModelRepo(r *http.Request, cfg config.Veil) string {
+	models, err := s.store.ManagedModels(r.Context())
+	if err != nil {
+		return ""
+	}
+	for _, model := range models {
+		if model.ID != cfg.Model {
+			continue
+		}
+		facts, parseErr := model.Parse()
+		if parseErr != nil {
+			return ""
+		}
+		return facts.ModelPath
+	}
+	return ""
+}
+
+// defaultModelName is what the Settings page prints for the current default:
+// the display name if it is registered here, and otherwise the raw id, which is
+// still the honest answer for a model configured before the Models page existed.
+func (s *Server) defaultModelName(r *http.Request, cfg config.Veil) string {
+	models, _ := s.store.ManagedModels(r.Context())
+	for _, model := range models {
+		if model.ID == cfg.Model {
+			return model.DisplayName
+		}
+	}
+	return cfg.Model
 }
 
 func (s *Server) setSessionCookies(w http.ResponseWriter, token, csrf string) {
@@ -845,65 +840,11 @@ func (s *Server) render(w http.ResponseWriter, name string, data pageData) {
 }
 
 func (s *Server) renderStatus(w http.ResponseWriter, name string, status int, data pageData) {
-	data.BodySizeIndex, data.BodySizeLabel = bodySizePresentation(data.Config.MaxBodyBytes)
-	data.ContextIndex, data.ContextLabel = contextPresentation(data.Config.ContextLength)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := s.templates.ExecuteTemplate(w, name, data); err != nil {
 		log.Printf("render template: %v", err)
 	}
-}
-
-func contextPresentation(value int) (int, string) {
-	presets := []int{8_192, 16_384, 32_768, 65_536, 131_072, 262_144, 524_288, 1_048_576}
-	if value <= 0 {
-		value = presets[3]
-	}
-	nearest := 0
-	for index := range presets {
-		if absInt(presets[index]-value) < absInt(presets[nearest]-value) {
-			nearest = index
-		}
-	}
-	if value >= 1_048_576 && value%1_048_576 == 0 {
-		return nearest, fmt.Sprintf("%dM tokens", value/1_048_576)
-	}
-	if value%1024 == 0 {
-		return nearest, fmt.Sprintf("%dK tokens", value/1024)
-	}
-	return nearest, fmt.Sprintf("%d tokens", value)
-}
-
-func bodySizePresentation(value int64) (int, string) {
-	const mebibyte = int64(1 << 20)
-	presets := []int64{16 * mebibyte, 32 * mebibyte, 64 * mebibyte, 128 * mebibyte, 256 * mebibyte}
-	if value <= 0 {
-		value = presets[2]
-	}
-	nearest := 0
-	for index := range presets {
-		if abs64(presets[index]-value) < abs64(presets[nearest]-value) {
-			nearest = index
-		}
-	}
-	if value%mebibyte == 0 {
-		return nearest, fmt.Sprintf("%d MiB", value/mebibyte)
-	}
-	return nearest, fmt.Sprintf("%d bytes", value)
-}
-
-func abs64(value int64) int64 {
-	if value < 0 {
-		return -value
-	}
-	return value
-}
-
-func absInt(value int) int {
-	if value < 0 {
-		return -value
-	}
-	return value
 }
 
 // The lockout is a flat delay, so an attempt only needs to say when the next

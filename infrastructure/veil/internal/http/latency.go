@@ -99,7 +99,11 @@ func (m *streamMetrics) snapshot() map[string]any {
 
 // firstWriteObserver records when the first byte reaches the client, which is
 // the only honest measure of time to first token from the gateway's side.
+//
+// It also serialises writes, because the keep-alive that runs during prefill
+// shares this writer with the stream itself.
 type firstWriteObserver struct {
+	mu      sync.Mutex
 	dst     io.Writer
 	started time.Time
 	onFirst func(time.Duration)
@@ -107,6 +111,8 @@ type firstWriteObserver struct {
 }
 
 func (o *firstWriteObserver) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	if !o.seen && len(p) > 0 {
 		o.seen = true
 		if o.onFirst != nil {
@@ -117,7 +123,30 @@ func (o *firstWriteObserver) Write(p []byte) (int, error) {
 }
 
 func (o *firstWriteObserver) Flush() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.flushLocked()
+}
+
+func (o *firstWriteObserver) flushLocked() {
 	if flusher, ok := o.dst.(interface{ Flush() }); ok {
 		flusher.Flush()
 	}
+}
+
+// writeKeepAlive emits an SSE comment, but only while nothing real has been
+// written yet. Prefill on a long prompt can outlast the idle timeout of a proxy
+// between here and the desktop, and a stream cut during prefill looks to the
+// user exactly like a server that went away.
+func (o *firstWriteObserver) writeKeepAlive() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.seen {
+		return false
+	}
+	if _, err := o.dst.Write([]byte(":keep-alive\n\n")); err != nil {
+		return false
+	}
+	o.flushLocked()
+	return true
 }

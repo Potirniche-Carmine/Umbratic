@@ -68,15 +68,20 @@ When you use port `443`, the desktop Veil URL is
 Apply the same rules in the host firewall and the cloud firewall or security
 group. Do not publish a private port through NAT or a container port map.
 
-## 1. Create the signing key
+## 1. Create the signing keys
 
-Run this command once on the release-signing computer:
+Run these commands once on the release-signing computer:
 
 ```sh
 umask 077 && openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$HOME/umbratic-entitlement-signing.key" && chmod 600 "$HOME/umbratic-entitlement-signing.key"
+umask 077 && openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$HOME/umbratic-feed-master.key" && chmod 600 "$HOME/umbratic-feed-master.key"
 ```
 
-Keep a protected offline backup. Do not commit the key. Do not add it to a
+The second key is the update feed's; a customer release derives this
+organization's key from it so their desktop applications can download
+application updates. See `docs/update-feed.md`.
+
+Keep protected offline backups. Do not commit either key. Do not add them to a
 customer release.
 
 ## 2. Create the customer release
@@ -84,7 +89,7 @@ customer release.
 Run this command from the repository root:
 
 ```sh
-npm run veil-console:release -- --version 0.1.0 --seats 30 --devices-per-user 2 --signing-key-file "$HOME/umbratic-entitlement-signing.key"
+npm run veil-console:release -- --version 0.1.0 --seats 30 --devices-per-user 2 --signing-key-file "$HOME/umbratic-entitlement-signing.key" --feed-key-file "$HOME/umbratic-feed-master.key"
 ```
 
 The release appears at:

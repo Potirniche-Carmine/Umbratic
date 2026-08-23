@@ -303,23 +303,27 @@ func TestModelsPageRegistersADictationRuntime(t *testing.T) {
 		t.Fatalf("speech model create failed: %d", speech.Code)
 	}
 
-	body := authorizedGet(t, handler, cookies, "/models").Body.String()
-	for _, expected := range []string{
-		`name="role"`,
-		`<option value="speech" selected>Dictation</option>`,
-		`<option value="chat" selected>Chat</option>`,
-		"Qwen3 ASR", "qwen3-asr",
-		// The dictation card is marked, so the one model that cannot answer a
-		// chat request is told apart from the fleet by looking rather than by
-		// reading each role control in turn.
-		`class="model-role is-speech"`,
-	} {
-		if !strings.Contains(body, expected) {
-			t.Fatalf("the models page must show %q", expected)
+	// The two kinds are two tabs. Which tab a model appears under is what says
+	// what it is; there is no role control to read, and a dictation runtime
+	// never appears among the models a chat request could name.
+	chatTab := authorizedGet(t, handler, cookies, "/models").Body.String()
+	if strings.Contains(chatTab, "qwen3-asr") {
+		t.Fatalf("the dictation runtime must not be listed on the chat tab: %s", chatTab)
+	}
+	if strings.Contains(chatTab, `<option value="speech"`) {
+		t.Fatalf("the add form must not ask what kind of model this is: %s", chatTab)
+	}
+
+	dictationTab := authorizedGet(t, handler, cookies, "/models?kind=dictation").Body.String()
+	for _, expected := range []string{"Qwen3 ASR", "qwen3-asr", ">Dictation<"} {
+		if !strings.Contains(dictationTab, expected) {
+			t.Fatalf("the dictation tab must show %q: %s", expected, dictationTab)
 		}
 	}
-	if strings.Count(body, `class="model-role is-speech"`) != 1 {
-		t.Fatalf("only the dictation card may carry the marker: %s", body)
+	// One runtime at most, so the form says so rather than offering a
+	// submission that cannot succeed.
+	if !strings.Contains(dictationTab, "Veil takes one dictation runtime") {
+		t.Fatalf("the dictation tab must explain the slot is taken: %s", dictationTab)
 	}
 
 	// Veil takes one speech endpoint, so a second must be refused rather than

@@ -48,6 +48,7 @@ type RawSettings = {
   customModels?: unknown;
   localQuants?: unknown;
   automaticAppUpdates?: unknown;
+  updateFeedToken?: unknown;
 };
 
 type SettingsRow = {
@@ -525,6 +526,22 @@ export function writeAutomaticAppUpdatesSetting(value: unknown): boolean {
   const automaticAppUpdates = value !== false;
   writeRawSettings({ ...readRawSettings(), automaticAppUpdates });
   return automaticAppUpdates;
+}
+
+/**
+ * The token the company server minted for this device at its last session,
+ * which the update feed accepts for thirty days. Stored so an app that is
+ * checking for updates before it has reached Veil still has the last one, and
+ * kept out of the renderer: nothing in the product shows or asks for it.
+ */
+export function readUpdateFeedTokenSetting(): string {
+  const value = readRawSettings().updateFeedToken;
+  return typeof value === "string" ? value : "";
+}
+
+export function writeUpdateFeedTokenSetting(value: string): void {
+  if (!value || value === readUpdateFeedTokenSetting()) return;
+  writeRawSettings({ ...readRawSettings(), updateFeedToken: value });
 }
 
 /**

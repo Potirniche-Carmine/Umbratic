@@ -232,14 +232,6 @@ export const modelCatalog: readonly CatalogModel[] = [
         }],
       },
       {
-        quant: "Q3_K_M",
-        files: [{
-          name: "gemma-4-E2B-it-Q3_K_M.gguf",
-          bytes: 2_536_786_016,
-          sha256: "086e2f5ba85057f8f19712e3160a644728f74f323c9feeac4cd73fab11b43085",
-        }],
-      },
-      {
         quant: "Q5_K_M",
         files: [{
           name: "gemma-4-E2B-it-Q5_K_M.gguf",
@@ -284,14 +276,6 @@ export const modelCatalog: readonly CatalogModel[] = [
         }],
       },
       {
-        quant: "Q3_K_M",
-        files: [{
-          name: "gemma-4-E4B-it-Q3_K_M.gguf",
-          bytes: 4_058_137_728,
-          sha256: "0980898d0e7d9c75cea05141bf4010393312101ef6cf5b31f8197e0de18655f4",
-        }],
-      },
-      {
         quant: "Q5_K_M",
         files: [{
           name: "gemma-4-E4B-it-Q5_K_M.gguf",
@@ -333,14 +317,6 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-12b-it-Q4_K_M.gguf",
           bytes: 7_121_861_440,
           sha256: "0a270ec9fe6b34f4a0d33992b6135117b484ebc4766ab76b51d4ae8c457e4c42",
-        }, gemma12BHead],
-      },
-      {
-        quant: "Q3_K_M",
-        files: [{
-          name: "gemma-4-12b-it-Q3_K_M.gguf",
-          bytes: 5_693_872_960,
-          sha256: "dbf58f4c413b82b27106867eb42f7087e4172a172f6f201e2e11598a6582e504",
         }, gemma12BHead],
       },
       {
@@ -459,14 +435,6 @@ export const modelCatalog: readonly CatalogModel[] = [
         }],
       },
       {
-        quant: "Q3_K_M",
-        files: [{
-          name: "Qwen3.8-27B-Q3_K_M.gguf",
-          bytes: 13_818_690_528,
-          sha256: "7f3b845b563888ec3abc269474cf744bf703a7ce8766dbb7f696c63975facfd7",
-        }],
-      },
-      {
         quant: "Q5_K_M",
         files: [{
           name: "Qwen3.8-27B-Q5_K_M.gguf",
@@ -534,14 +502,6 @@ export const modelCatalog: readonly CatalogModel[] = [
         }],
       },
       {
-        quant: "Q3_K_M",
-        files: [{
-          name: "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q3_K_M.gguf",
-          bytes: 4_850_391_008,
-          sha256: "a60db97bb4f61f0167d64f369c198428b2bb10a636b6f339f2f947ac40202a98",
-        }],
-      },
-      {
         quant: "Q5_K_M",
         files: [{
           name: "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q5_K_M.gguf",
@@ -572,71 +532,73 @@ export const modelCatalog: readonly CatalogModel[] = [
     uncensored: true,
   },
   {
-    id: "qwen38-27b-abliterated",
+    id: "qwen38-27b-obliterated",
     kind: "chat",
-    displayName: "Qwen3.8 27B Abliterated",
-    hfRepo: "Blackfrost-AI/Qwen3.8-27B-ABLITERATED-GGUF",
-    hfRevision: "4f6732ce2123ced5d9df722a934f700619e066a8",
-    // The plain K-quant ladder, Q4_K_M first as the card's own default. The
-    // repository also publishes vision projectors; they are left out because
-    // chat here is text-only and an mmproj nobody loads is a gigabyte of
-    // download for nothing. Pinned at the August 16 re-upload, which is the
-    // first revision of this build to keep Qwen's MTP head in the weights.
+    displayName: "Qwen3.8 27B Obliterated",
+    hfRepo: "OBLITERATUS/Qwen3.8-27B-OBLITERATED",
+    hfRevision: "e335d239dbdfae590687e24b800e81a18d070ebe",
+    // One repository holding both the safetensors and its own GGUF builds,
+    // which is why the server's catalog and this one name the same place. The
+    // vision projector is left out — chat here is text-only — and so is the
+    // BF16 the server serves. IQ4_XS sits below Q4_K_M rather than a Q3: it is
+    // the smallest rung this build publishes, and an importance-weighted
+    // four-bit holds together where a three-bit K-quant of a 27B does not.
     quants: [
       {
         quant: "Q4_K_M",
         files: [{
-          name: "Qwen3.8-27B-ABLITERATED-Q4_K_M.gguf",
-          bytes: 16_810_716_384,
-          sha256: "5d53637a59cfcd3a4d8354e254ffd44943e5a693da2405a3e228c62962355509",
+          name: "Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf",
+          bytes: 16_810_714_400,
+          sha256: "da5da0b87a1501815f659a89641c75cff46cee722de0943a8fc136d39f654540",
         }],
       },
       {
-        quant: "Q3_K_M",
+        quant: "IQ4_XS",
         files: [{
-          name: "Qwen3.8-27B-ABLITERATED-Q3_K_M.gguf",
-          bytes: 13_500_738_784,
-          sha256: "18580f97cc179c2042ccca8ec52fa32921255ade624b5e28b69733c36ce4de2f",
+          name: "Qwen3.8-27B-OBLITERATED-IQ4_XS.gguf",
+          bytes: 15_420_450_080,
+          sha256: "c8665fafeb02d67c13cde4fa4e2d62f922938962e373d07f7159358b3629fdbb",
         }],
       },
       {
         quant: "Q5_K_M",
         files: [{
-          name: "Qwen3.8-27B-ABLITERATED-Q5_K_M.gguf",
-          bytes: 19_535_703_264,
-          sha256: "37e02edc312a35e73eca50ae26d72458f341e17427eeb1724d9927723256c49c",
+          name: "Qwen3.8-27B-OBLITERATED-Q5_K_M.gguf",
+          bytes: 19_535_701_280,
+          sha256: "c52cc63130efda07259a62bb4081b1f0dac7c20564909eb02aafd64cb4d84f2c",
         }],
       },
       {
         quant: "Q6_K",
         files: [{
-          name: "Qwen3.8-27B-ABLITERATED-Q6_K.gguf",
-          bytes: 22_431_001_824,
-          sha256: "34264197c0188b1b09da05692fcdd4625b7d2231d40b07a4b29836bdb7b4d2a1",
+          name: "Qwen3.8-27B-OBLITERATED-Q6_K.gguf",
+          bytes: 22_430_999_840,
+          sha256: "d8de48c8de37c6238c24a719238e377f94ff1b51c8192029dbfba0a778debcd4",
         }],
       },
       {
         quant: "Q8_0",
         files: [{
-          name: "Qwen3.8-27B-ABLITERATED-Q8_0.gguf",
-          bytes: 29_047_086_304,
-          sha256: "c01b61cf17a2ca61ed1476d0910f652388279fa91f0c223721a391457787cf39",
+          name: "Qwen3.8-27B-OBLITERATED-Q8_0.gguf",
+          bytes: 29_047_084_320,
+          sha256: "4cfb568f17fb58a0373279cc3b73602a350e25aea2953ce087dcea6b51fa6f3c",
         }],
       },
     ],
     minRamGB: 32,
-    // `qwen35.nextn_predict_layers = 1` with block 64 present in every
-    // quantization at this revision; the earlier upload had stripped it.
+    // `qwen35.nextn_predict_layers = 1`, and block 64 is present in the
+    // Q4_K_M's tensor list — read from the GGUF header at this revision, not
+    // assumed from Qwen3.8. The abliteration kept the head.
     mtp: true,
     role: {
       label: "Security agentic",
       detail: "Security and offensive research, with tool calling solid enough for agentic runs.",
     },
     reasoning: true,
-    // No "high" here, unlike the stock Qwen3.8 above. This build's template
-    // dropped the line that remaps `high` onto `xhigh`, so anything outside
-    // low/medium/xhigh raises out of the template and the request fails. The
-    // ladder stops at medium rather than offering a level that errors.
+    // Its template resolves `reasoning_effort` against xhigh, medium and low,
+    // and raises out of the template on anything else — "high" included, which
+    // stock Qwen3.8 remaps and this build does not. The ladder stops at medium
+    // rather than offering a level that errors.
     reasoningEfforts: ["off", "low", "medium"],
     // The card serves it with one set of numbers and says nothing about a
     // separate non-thinking set, so both slots point at the same thing.

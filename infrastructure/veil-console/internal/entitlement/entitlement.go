@@ -2,7 +2,9 @@ package entitlement
 
 import (
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -108,4 +110,19 @@ func validatePayload(payload Payload) error {
 		return errors.New("entitlement device limit is invalid")
 	}
 	return nil
+}
+
+// DeriveFeedKey returns this organization's update-feed key: HMAC of the org
+// UID under the feed master key, base64url encoded. The update feed derives
+// the same value to check a token, so nothing has to be uploaded per customer,
+// and a key taken from one customer's server reveals neither the master key
+// nor any other customer's.
+func DeriveFeedKey(masterKeyText, orgUID string) (string, error) {
+	masterKey, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(masterKeyText))
+	if err != nil || len(masterKey) != sha256.Size {
+		return "", errors.New("feed master key is invalid")
+	}
+	mac := hmac.New(sha256.New, masterKey)
+	mac.Write([]byte(orgUID))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }

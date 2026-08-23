@@ -25,6 +25,7 @@ Veil has two authentication modes.
   `VEIL_AUTH_TOKEN` cannot access product routes in this mode.
 
 ```text
+GET  /livez
 GET  /api/health
 GET  /api/models
 POST /api/engineering/chat
@@ -155,7 +156,8 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | `VEIL_SPEECH_BASE_URL` | No | Unset | Base URL of the transcription runtime that backs dictation, such as `vllm serve Qwen/Qwen3-ASR-1.7B`. Set it together with `VEIL_SPEECH_MODEL`; either one alone refuses to start. Unset means no `/api/transcribe` route and no `speech.transcribe` feature name. |
 | `VEIL_SPEECH_MODEL` | No | Unset | Served model id the transcription runtime answers to. Never appears in `/api/models`: it transcribes audio and would fail every chat request sent to it. |
 | `VEIL_ENV_FILE` | No | `.env` | Env file to load. Use `-` to disable env-file loading. This variable must be set in the process environment because it selects the file to read. |
-| `VEIL_ADDR` | No | `127.0.0.1:8080` | Address and port on which Veil listens. Keep the default when a local reverse proxy or Cloudflare Tunnel connects over loopback. |
+| `VEIL_ADDR` | No | `127.0.0.1:8080` | Address and port on which Veil listens. Keep the default when a local reverse proxy or Cloudflare Tunnel connects over loopback. A non-loopback address is refused unless `VEIL_ALLOW_EXTERNAL_BIND` is set. |
+| `VEIL_ALLOW_EXTERNAL_BIND` | No | `false` | Acknowledges that something else terminates TLS. Veil speaks plain HTTP, so binding outside loopback without this would serve prompts and session tokens in cleartext, and startup fails instead. |
 | `VEIL_TRUSTED_PROXY_CIDRS` | No | Empty | Comma-separated addresses or CIDRs whose `X-Forwarded-For` is believed when keying identity rate limits. Leave empty unless the proxy overwrites that header; otherwise a client picks its own bucket. Console sets loopback for the supervised deployment. |
 | `VEIL_CONTEXT_LENGTH` | No | `0` | Context window in tokens for local Ollama mode. A positive value is sent as `options.num_ctx`; `0` or unset uses Ollama's default. Unused in server mode. |
 | `VEIL_MAX_OUTPUT_TOKENS` | No | `8192` | Server-owned maximum generated tokens per response. Clients may request less, never more. |
@@ -170,6 +172,8 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | `VEIL_MODEL_PARALLEL_TOOL_CALLS` | Server | `true` | Whether Veil sets `parallel_tool_calls` on vLLM requests that include tools. |
 | `VEIL_MAX_CONCURRENT_REQUESTS` | Server / Local profile | `32` / `4` | Global admission semaphore for model work. |
 | `VEIL_MAX_CONCURRENT_REQUESTS_PER_USER` | Server / Local profile | `4` / `2` | Per-user admission semaphore when company identity supplies a user. Without identity, only the global bucket applies. |
+| `VEIL_MODEL_REQUESTS_PER_MINUTE` | No | `120` | Per-identity token bucket over chat, compaction, orientation, and dictation. Admission bounds how much work runs at once; this bounds how often one client may ask. Over the limit is `429` with `Retry-After`. `0` disables. |
+| `VEIL_TELEMETRY_BUNDLES_PER_HOUR` | No | `120` | Per-identity token bucket over telemetry ingestion, so one device cannot flood the store. `0` disables. |
 | `VEIL_QUEUE_TIMEOUT` | Server / Local profile | `30s` | Maximum wait for an admission slot. Exhaustion returns `503` with `code: busy` and `Retry-After`. |
 | `VEIL_TEMPLATE_REGISTRY_PATH` | No | Empty | Path to the server-owned template registry JSON file. No template metadata is injected when unset. |
 | `VEIL_TELEMETRY_ENABLED` | No | `true` | Enables the authenticated `/api/telemetry` ingestion route. Accepted boolean values are `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`. |
@@ -179,7 +183,7 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | `VEIL_MODEL_TIMEOUT` | No | `180s` | Timeout for a model-runtime HTTP call. Accepts a Go duration such as `90s` or `2m`, or a bare number of seconds. |
 | `VEIL_REQUEST_TIMEOUT` | No | `195s` | Overall timeout applied by Veil to health, connection, and chat operations after admission. Uses the same duration format as `VEIL_MODEL_TIMEOUT`. |
 | `VEIL_STREAM_IDLE_TIMEOUT` | No | `60s` | Maximum idle gap between streamed model chunks. Separate from request and model timeouts. |
-| `VEIL_MAX_BODY_BYTES` | No | `67108864` | Positive maximum request-body size in bytes for bounded multimodal chat requests. Text and decoded image limits are enforced separately. |
+| `VEIL_MAX_BODY_BYTES` | No | `25165824` | Positive maximum request-body size in bytes for bounded multimodal chat requests. Text and decoded image limits are enforced separately. |
 
 Chat policy accepts at most 512 client messages, 256 KiB of encoded text content
 per message, and 12 base64 image parts of at most 10 MiB decoded each. Tool and
@@ -283,6 +287,15 @@ When `VEIL_TEMPLATE_REGISTRY_PATH` is set, Veil reads a server-owned JSON regist
   "routes": ["sales/chat"]
 }
 ```
+
+`GET /livez` is the only unauthenticated route. It answers `ok` whenever the
+process is accepting connections and reaches nothing else, so a load balancer or
+uptime check needs no credential. It is deliberately not `/api/health`, which
+authenticates, calls the runtime, and reports what Veil can actually serve.
+
+`GET /api/runtime/metrics` returns the admission, latency, and runtime counters
+as JSON. Adding `?format=prometheus` renders the same values as OpenMetrics text
+for a scraper.
 
 `POST /api/telemetry` accepts the desktop app's selective telemetry bundles using the same authentication class as chat. The contract includes compact product events, rated conversations, failed-tool input/response, and context thresholds; it rejects raw top-level task fields and unscoped task-event dumps. It applies `VEIL_TELEMETRY_MAX_BODY_BYTES` and persists accepted JSON bundles under `VEIL_TELEMETRY_STORE_PATH` when that path is set. `VEIL_TELEMETRY_ENABLED=false` disables ingestion by admin policy, while `VEIL_TELEMETRY_RETENTION_DAYS` controls local pruning for stored bundles.
 

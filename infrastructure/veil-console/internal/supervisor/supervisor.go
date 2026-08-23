@@ -20,6 +20,17 @@ import (
 
 var ErrBusy = errors.New("another Veil action is in progress")
 
+const (
+	// An unexpected exit is retried with a widening delay, and only while the
+	// crashes stay inside restartWindow. Past maxRestartsInWindow the process is
+	// left down: a Veil that dies on every start needs an administrator, and a
+	// tight restart loop only buries the log line that explains why.
+	restartWindow       = 5 * time.Minute
+	maxRestartsInWindow = 3
+	restartBackoffBase  = 2 * time.Second
+	restartBackoffMax   = 60 * time.Second
+)
+
 type Status struct {
 	Running bool
 	Healthy bool
@@ -62,6 +73,15 @@ type Supervisor struct {
 	// startedModels is what the live process was actually launched with, which
 	// is a different question from what the next start will use.
 	startedModels []config.ManagedModel
+	// lastConfig and lastToken are what an automatic restart replays. They are
+	// recorded on every successful start, so recovery uses the configuration
+	// that was actually running rather than whatever the store now holds.
+	lastConfig *config.Veil
+	lastToken  string
+	// stopping marks an operator-initiated stop so the exit is not mistaken for
+	// a crash. crashes holds the recent unexpected exits inside restartWindow.
+	stopping bool
+	crashes  []time.Time
 }
 
 // SetRAG records the retrieval configuration handed to the next Veil start.
@@ -204,7 +224,8 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 	s.stateMu.Lock()
 	s.cmd = cmd
 	s.startedModels = models
-	s.status = Status{Running: true, PID: cmd.Process.Pid, Message: "starting"}
+	s.lastConfig, s.lastToken = &cfg, token
+	s.status = Status{Running: true, PID: cmd.Process.Pid, Message: "Starting"}
 	s.stateMu.Unlock()
 	go s.wait(cmd)
 	healthCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -216,7 +237,7 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 	s.stateMu.Lock()
 	if s.cmd == cmd {
 		s.status.Healthy = true
-		s.status.Message = "healthy"
+		s.status.Message = "Healthy"
 	}
 	s.stateMu.Unlock()
 	return nil
@@ -225,8 +246,8 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 func (s *Supervisor) wait(cmd *exec.Cmd) {
 	err := cmd.Wait()
 	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
 	if s.cmd != cmd {
+		s.stateMu.Unlock()
 		return
 	}
 	s.cmd = nil
@@ -237,7 +258,65 @@ func (s *Supervisor) wait(cmd *exec.Cmd) {
 	if err != nil {
 		s.status.Message = "Veil exited unexpectedly"
 	} else {
-		s.status.Message = "stopped"
+		s.status.Message = "Stopped"
+	}
+	recoverable := err != nil && !s.stopping && s.lastConfig != nil
+	s.stateMu.Unlock()
+	if recoverable {
+		go s.recover()
+	}
+}
+
+// recover brings Veil back after an unexpected exit. It handles one exit: a
+// crash after a successful restart arrives here again through wait, which is
+// what makes the crash window meaningful rather than a retry counter.
+func (s *Supervisor) recover() {
+	s.stateMu.Lock()
+	now := time.Now()
+	live := s.crashes[:0]
+	for _, at := range s.crashes {
+		if now.Sub(at) < restartWindow {
+			live = append(live, at)
+		}
+	}
+	s.crashes = append(live, now)
+	attempts := len(s.crashes)
+	cfg, token := *s.lastConfig, s.lastToken
+	s.stateMu.Unlock()
+
+	if attempts > maxRestartsInWindow {
+		s.note("Veil keeps exiting. Automatic restart is paused — check the log, then start it from this page.")
+		return
+	}
+	delay := restartBackoffBase * time.Duration(1<<(attempts-1))
+	if delay > restartBackoffMax {
+		delay = restartBackoffMax
+	}
+	s.note(fmt.Sprintf("Veil exited unexpectedly. Restarting in %s.", delay.Round(time.Second)))
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	<-timer.C
+
+	if !s.actionMu.TryLock() {
+		return
+	}
+	defer s.actionMu.Unlock()
+	s.stateMu.RLock()
+	running := s.cmd != nil
+	s.stateMu.RUnlock()
+	if running {
+		return
+	}
+	if err := s.startLocked(context.Background(), cfg, token); err != nil {
+		s.note("Veil exited unexpectedly and did not restart.")
+	}
+}
+
+func (s *Supervisor) note(message string) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.cmd == nil {
+		s.status.Message = message
 	}
 }
 
@@ -256,6 +335,8 @@ func (s *Supervisor) stopLocked(ctx context.Context) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
+	s.setStopping(true)
+	defer s.setStopping(false)
 	requestProcessStop(cmd)
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
@@ -278,6 +359,12 @@ func (s *Supervisor) stopLocked(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Supervisor) setStopping(stopping bool) {
+	s.stateMu.Lock()
+	s.stopping = stopping
+	s.stateMu.Unlock()
 }
 
 func (s *Supervisor) Restart(ctx context.Context, cfg config.Veil, token string) error {
@@ -472,15 +559,18 @@ func (b *safeBuffer) String() string {
 	return string(append([]byte(nil), b.data...))
 }
 
+// String is the service state as the dashboard prints it. Every state reads as
+// a capitalized word, the same rule the per-model card follows: this is a
+// heading in the interface, not a log line.
 func (s Status) String() string {
 	if s.Healthy {
-		return fmt.Sprintf("healthy (PID %d)", s.PID)
+		return fmt.Sprintf("Healthy (PID %d)", s.PID)
 	}
 	if s.Running {
-		return fmt.Sprintf("starting (PID %d)", s.PID)
+		return fmt.Sprintf("Starting (PID %d)", s.PID)
 	}
 	if s.Message != "" {
 		return s.Message
 	}
-	return "stopped"
+	return "Stopped"
 }

@@ -5,121 +5,205 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
-  <link rel="stylesheet" href="/assets/style.css?v=10">
-  <link rel="stylesheet" href="/assets/models.css?v=5">
-  <script defer src="/assets/console.js?v=11"></script>
+  <link rel="stylesheet" href="/assets/style.css?v=13">
+  <link rel="stylesheet" href="/assets/controls.css?v=3">
+  <link rel="stylesheet" href="/assets/models.css?v=8">
+  <script defer src="/assets/console.js?v=14"></script>
 </head>
 <body>
 <main class="app-shell">
   {{template "topbar" .}}
   <div class="page">
-    <header class="page-header model-page-header">
+    <header class="page-header">
       <h1>Models</h1>
-      <a class="button" href="#add-model">Add model</a>
+      <p class="page-subtitle">The runtimes Console starts, and what Veil routes to.</p>
     </header>
 
-    {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
-    {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
-    {{if not .Models.Configured}}<p class="banner notice" role="status">Console was started without <code>--vllm-binary</code>, so no model can be started here. Registered models still reach Veil.</p>{{end}}
-    {{if .Models.PendingApply}}<p class="banner notice" role="status">Restart Veil to apply model list changes.</p>{{end}}
+    {{template "banners" .}}
 
-    {{if .Models.Rows}}
-    <div class="model-list">
-      {{range .Models.Rows}}
-      <form class="panel model-card" method="post" action="/models/{{.ID}}/update">
-        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <!--
+      Chat and dictation are different enough to be different lists: one answers
+      messages and the other answers the microphone, and a transcription runtime
+      in the chat picker fails every message sent to it. The tab is also what
+      decides the role, which is why the add form no longer asks.
+    -->
+    <nav class="tabs" aria-label="Model kind">
+      <a href="/models" {{if .Models.IsChat}}aria-current="page"{{end}}>Chat</a>
+      <a href="/models?kind=dictation" {{if .Models.IsDictation}}aria-current="page"{{end}}>Dictation</a>
+    </nav>
 
-        <div class="model-identity">
-          <input class="model-name" name="display_name" value="{{.DisplayName}}" maxlength="120" required aria-label="Display name for {{.ID}}">
-          <code>{{.ID}}{{if .IsDefault}} · default{{end}}</code>
-          <label class="model-role{{if .IsSpeech}} is-speech{{end}}">
-            <span class="visually-hidden">Role for {{.ID}}</span>
-            <select name="role">
-              <option value="chat" {{if not .IsSpeech}}selected{{end}}>Chat</option>
-              <option value="speech" {{if .IsSpeech}}selected{{end}}>Dictation</option>
-            </select>
-          </label>
-        </div>
-        <div class="model-state">
-          <span class="model-dot model-dot-{{.State}}" aria-hidden="true"></span>
-          <span class="model-state-text">{{.StateText}}</span>
-        </div>
+    <!--
+      The add form is always the first panel, in both tabs and whether or not
+      anything is registered. It used to be at the foot of the page behind a
+      button that scrolled to it, so the page moved under the reader whenever a
+      model was added or removed.
+    -->
+    <section class="panel model-form" id="add-model">
+      <div class="section-heading">
+        <h2>Add {{if .Models.IsDictation}}a dictation model{{else}}a chat model{{end}}</h2>
+      </div>
+      {{if .Models.FormError}}<p class="form-error" role="alert">{{.Models.FormError}}</p>{{end}}
+      {{if and .Models.IsDictation .Models.DictationTaken}}
+      <p class="panel-footnote no-rule">Veil takes one dictation runtime. Remove the registered one to add another.</p>
+      {{else}}
+      <form method="post" action="/models/create" data-add-model>
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <input type="hidden" name="port" value="{{.Models.SuggestedPort}}">
+        <input type="hidden" name="kind" value="{{.Models.Kind}}">
 
-        <!--
-          The command is the argument list vLLM is started with, and the single
-          source of truth: the port Veil reaches this model on is read back out
-          of it. It is executed directly, never through a shell.
-        -->
-        <label class="model-command">
-          <span class="visually-hidden">Command for {{.ID}}</span>
-          <textarea name="command" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" required>{{.Command}}</textarea>
-        </label>
+        <div class="field-grid add-model-grid">
+          <div class="field field-wide">
+            <span id="catalog-label">Model</span>
+            <div class="choice" data-choice data-catalog-choice>
+              <input type="hidden" name="catalog_key" value="{{if .Models.Form.CatalogKey}}{{.Models.Form.CatalogKey}}{{else}}{{.Models.CustomKey}}{{end}}" data-choice-input>
+              <button class="choice-trigger" type="button" aria-labelledby="catalog-label catalog-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
+                <span id="catalog-value" data-choice-label>Choose a model</span>
+                <span class="choice-chevron" aria-hidden="true"></span>
+              </button>
+              <div class="choice-menu" role="listbox" aria-labelledby="catalog-label" data-choice-menu hidden>
+                {{range .Models.Catalog}}
+                <button type="button" role="option" data-choice-value="{{.Key}}" aria-selected="{{$.Models.Form.Selected .Key}}">
+                  <span class="option-row">
+                    <span class="option-title">{{.DisplayName}}{{if .Uncensored}} <span class="option-tag">Uncensored</span>{{end}}</span>
+                    <span class="option-size">from {{.SuggestedVRAM}} GB</span>
+                  </span>
+                  <span class="option-detail">{{.Detail}}</span>
+                </button>
+                {{end}}
+                <button type="button" role="option" data-choice-value="{{.Models.CustomKey}}" aria-selected="{{.Models.Form.IsCustom}}">
+                  <span class="option-row"><span class="option-title">Custom</span></span>
+                  <span class="option-detail">Any Hugging Face reference, with the vLLM arguments written by hand.</span>
+                </button>
+              </div>
+            </div>
+          </div>
 
-        <div class="model-controls">
-          <div class="model-actions">
-            <button class="button secondary" type="submit">Save</button>
-            {{if .Running}}
-            <button class="button" type="submit" formaction="/models/{{.ID}}/restart">Restart</button>
-            <button class="button danger" type="submit" formaction="/models/{{.ID}}/stop">Stop</button>
-            {{else}}
-            <button class="button" type="submit" formaction="/models/{{.ID}}/start" {{if not $.Models.Configured}}disabled{{end}}>Start</button>
-            <button class="button danger" type="submit" formaction="/models/{{.ID}}/delete">Remove</button>
-            {{end}}
+          <div class="field" data-variant-field>
+            <span id="variant-label">Precision</span>
+            <div class="choice" data-choice data-variant-choice>
+              <input type="hidden" name="variant" value="{{.Models.Form.Variant}}" data-choice-input>
+              <button class="choice-trigger" type="button" aria-labelledby="variant-label variant-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
+                <span id="variant-value" data-choice-label></span>
+                <span class="choice-chevron" aria-hidden="true"></span>
+              </button>
+              <div class="choice-menu" role="listbox" aria-labelledby="variant-label" data-choice-menu hidden></div>
+            </div>
+          </div>
+
+          <!--
+            Context is a property of this runtime, not of the deployment: it
+            sizes the KV cache, so the number that fits depends on which weights
+            at which precision are on which card. It was a slider on Settings
+            applied to every model at once.
+          -->
+          <div class="field" data-context-field>
+            <span id="context-label">Context length</span>
+            <div class="choice" data-choice data-context-choice>
+              <input type="hidden" name="context" value="{{.Models.Form.Context}}" data-choice-input>
+              <button class="choice-trigger" type="button" aria-labelledby="context-label context-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
+                <span id="context-value" data-choice-label></span>
+                <span class="choice-chevron" aria-hidden="true"></span>
+              </button>
+              <div class="choice-menu" role="listbox" aria-labelledby="context-label" data-choice-menu hidden></div>
+            </div>
+          </div>
+
+          <div class="field" data-served-field>
+            <span>Served id</span>
+            <output class="field-readout" data-served-readout></output>
           </div>
         </div>
 
-        <!-- Always rendered, empty or not, so the card never changes height. -->
-        <p class="model-notice{{if not .Notice}} is-empty{{end}}" role="status">{{.Notice}}</p>
-
-        <div class="model-logs">
-          {{if .Expanded}}
-          <a class="text-button" href="/models">Hide output</a>
-          <pre class="model-log-tail">{{if .Logs}}{{.Logs}}{{else}}No output yet.{{end}}</pre>
-          {{else}}
-          <a class="text-button" href="/models?logs={{.ID}}">Output</a>
-          {{end}}
-        </div>
-      </form>
-      {{end}}
-    </div>
-    {{else}}
-    <p class="banner notice" role="status">No models are registered yet. Add one below.</p>
-    {{end}}
-
-    <section class="panel model-form" id="add-model">
-      <div class="section-heading">
-        <h2>Add model</h2>
-      </div>
-      {{if .Models.FormError}}<p class="form-error" role="alert">{{.Models.FormError}}</p>{{end}}
-      <form method="post" action="/models/create">
-        <input type="hidden" name="csrf" value="{{.CSRF}}">
-        <div class="field-grid">
+        <!--
+          Custom's own fields. Hidden rather than absent, so a rejected
+          submission comes back with what was typed.
+        -->
+        <div class="field-grid" data-custom-fields hidden>
           <label class="field">
             <span>Display name</span>
-            <input name="display_name" value="{{.Models.Form.DisplayName}}" maxlength="120" required>
+            <input name="display_name" value="{{.Models.Form.DisplayName}}" maxlength="120" data-custom-required>
           </label>
           <label class="field">
             <span>Served id</span>
-            <input name="id" value="{{.Models.Form.ID}}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" required>
-            <small>What clients send as the model name. It cannot be renamed later, and the command's <code>--served-model-name</code> must match it.</small>
-          </label>
-          <label class="field">
-            <span>Role</span>
-            <select name="role">
-              <option value="chat" {{if not .Models.Form.SpeechSelected}}selected{{end}}>Chat</option>
-              <option value="speech" {{if .Models.Form.SpeechSelected}}selected{{end}}>Dictation</option>
-            </select>
-            <small>Dictation serves speech-to-text for the composer's microphone instead of chat. One model at most, and it must be an ASR model such as <code>Qwen/Qwen3-ASR-1.7B</code>.</small>
-          </label>
-          <label class="field field-wide">
-            <span>Command</span>
-            <textarea name="command" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" required>{{.Models.Form.Command}}</textarea>
-            <small>Arguments for the vLLM binary. Executed directly, never through a shell. <code>--port</code> and <code>--served-model-name</code> are required; <code>fp8</code> is the 8-bit KV cache. Thinking is a chat-template default, so set it here too — <code>--default-chat-template-kwargs</code> with <code>enable_thinking</code> (Qwen3, Gemma 4) or <code>thinking</code> (Granite 3.2, DeepSeek-V3.1, Holo2), whichever this model reads.</small>
+            <input name="id" value="{{.Models.Form.ID}}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" data-custom-required>
           </label>
         </div>
-        <button class="button" type="submit">Add model</button>
+
+        <details class="disclosure compact" data-command-disclosure>
+          <summary><strong>Command</strong><span class="disclosure-mark" aria-hidden="true"></span></summary>
+          <label class="field field-wide">
+            <span class="visually-hidden">Command</span>
+            <textarea name="command" rows="8" spellcheck="false" autocapitalize="off" autocomplete="off" required data-command-box>{{.Models.Form.Command}}</textarea>
+          </label>
+        </details>
+
+        <button class="button primary" type="submit">Add model</button>
       </form>
+      {{end}}
+      {{if not .Models.Configured}}<p class="panel-footnote">Console was started without <code>--vllm-binary</code>. Models can be registered and will reach Veil, but none can be started from here.</p>{{end}}
+      <script type="application/json" data-model-catalog>{{.Models.CatalogJSON}}</script>
     </section>
+
+    {{range .Models.Rows}}
+    <form class="panel model-card" method="post" action="/models/{{.ID}}/update">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="role" value="{{.Role}}">
+      <input type="hidden" name="kind" value="{{$.Models.Kind}}">
+
+      <div class="model-identity">
+        <input class="model-name" name="display_name" value="{{.DisplayName}}" maxlength="120" required aria-label="Display name for {{.ID}}">
+        <span class="model-subline">
+          <code>{{.ID}}</code>
+          {{if .IsSpeech}}
+          <span class="model-default is-default">Dictation</span>
+          {{else if .IsDefault}}
+          <span class="model-default is-default">Default</span>
+          {{else}}
+          <button class="model-default" type="submit" formaction="/models/{{.ID}}/default" title="Answer requests that name no model">Make default</button>
+          {{end}}
+        </span>
+      </div>
+      <div class="model-state">
+        <span class="model-dot model-dot-{{.State}}" aria-hidden="true"></span>
+        <span class="model-state-text">{{.StateText}}</span>
+      </div>
+
+      {{if .Summary}}<p class="model-summary">{{.Summary}}</p>{{end}}
+
+      <!--
+        The command is the argument list vLLM is started with, and the single
+        source of truth: the port Veil reaches this model on and the context it
+        publishes are read back out of it. It is executed directly, never
+        through a shell.
+      -->
+      <details class="disclosure compact model-command">
+        <summary><strong>Command</strong><span class="disclosure-mark" aria-hidden="true"></span></summary>
+        <label>
+          <span class="visually-hidden">Command for {{.ID}}</span>
+          <textarea name="command" rows="8" spellcheck="false" autocapitalize="off" autocomplete="off" required>{{.Command}}</textarea>
+        </label>
+      </details>
+
+      <!-- Always rendered, empty or not, so the card never changes height. -->
+      <p class="model-notice{{if not .Notice}} is-empty{{end}}" role="status">{{.Notice}}</p>
+
+      <!-- Shown without asking, because a failed model raises exactly one question. -->
+      {{if .Logs}}<pre class="model-log-tail">{{.Logs}}</pre>{{end}}
+
+      <div class="model-footer">
+        <div class="model-actions">
+          <button class="button secondary" type="submit">Save</button>
+          {{if .Running}}
+          <button class="button" type="submit" formaction="/models/{{.ID}}/restart">Restart</button>
+          <button class="button danger" type="submit" formaction="/models/{{.ID}}/stop">Stop</button>
+          {{else}}
+          <button class="button" type="submit" formaction="/models/{{.ID}}/start" {{if not $.Models.Configured}}disabled title="Console was started without --vllm-binary"{{end}}>Start</button>
+          <button class="button danger" type="submit" formaction="/models/{{.ID}}/delete">Remove</button>
+          {{end}}
+        </div>
+      </div>
+    </form>
+    {{end}}
   </div>
 </main>
 </body>

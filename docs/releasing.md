@@ -27,6 +27,9 @@ few rules that keep every release installable.
   reads the channel file, downloads the installer in the background, checks its
   signature, and installs on the next quit. Settings → About shows the state,
   offers "Check now", and holds the one switch: whether to check automatically.
+- `infrastructure/downloads-worker/` is the feed itself: the only route to the
+  release bucket, and it answers only requests carrying a current update token.
+  `docs/update-feed.md` covers it.
 - `scripts/publish-release.ts` uploads. Installers and blockmaps first, the
   channel file last, so the feed never names a file that is not there.
   Published installers are immutable; the channel file never moves backwards;
@@ -45,30 +48,18 @@ other one's installer.
 
 ### 1. Cloudflare R2 (do this first — everything else can be tested against it)
 
-1. Cloudflare dashboard → **R2 Object Storage** → **Create bucket**. Name it
-   `umbratic-downloads`, location Automatic. Leave everything else default.
-2. Open the bucket → **Settings** → **Custom Domains** → **Connect Domain** →
-   `downloads.umbratic.ai`. The zone is already on Cloudflare (Pages serves the
-   site from it), so this creates the DNS record and certificate for you. Wait
-   until it shows Active.
-3. **R2 Object Storage** → **Overview** → note the **Account ID** shown on the
-   right.
-4. **Manage R2 API Tokens** → **Create API token**: name it after the machine
+1. Create the bucket, the revocation namespace, and the Worker that serves
+   them: `docs/update-feed.md`. The bucket stays private — the Worker is the
+   only route to it, and it serves only apps that carry a current update
+   token.
+2. **Manage R2 API Tokens** → **Create API token**: name it after the machine
    (`release-mac`, `release-windows`), permission **Object Read & Write**,
    *Specify bucket* → `umbratic-downloads`. Copy the Access Key ID and Secret
    Access Key — the secret is shown once. Make one token per machine so either
-   can be revoked alone.
-5. *Optional — keep the feed to the app.* The bucket is public over its domain
-   because installed apps fetch from it without credentials, but it is not
-   linked from anywhere and nothing needs to be. To stop a browser or a
-   guessed URL from downloading installers, add one WAF rule: Cloudflare
-   dashboard → the `umbratic.ai` zone → **Security → WAF → Custom rules** →
-   *Create rule*, expression
-   `(http.host eq "downloads.umbratic.ai" and not starts_with(http.user_agent, "Umbratic/"))`,
-   action **Block**. The app announces itself as `Umbratic/<version>` and is
-   the only client the feed is for. This is a fence, not a lock — anyone
-   determined can send that header — which is the right level for "not just
-   anyone": what it protects is a signed installer, not a secret.
+   can be revoked alone. Publishing uses the S3 API directly and does not go
+   through the Worker.
+3. **R2 Object Storage** → **Overview** → note the **Account ID** shown on the
+   right.
 
 ### 2. The release env file (both machines)
 

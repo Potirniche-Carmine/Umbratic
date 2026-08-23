@@ -40,6 +40,8 @@ sed \
 sed \
   -e "s|@@ORIGIN@@|$origin|g" \
   -e "s/@@VEIL_PORT@@/$veil_port/g" \
+  -e "s/@@CONSOLE_PORT@@/$console_port/g" \
+  -e "s/@@HTTPS_PORT@@/$https_port/g" \
   "$script_dir/Caddyfile.template" \
   >"$output_dir/veil-console.caddy"
 chmod 600 "$output_dir/veil-console.service" "$output_dir/veil-console.caddy"

@@ -20,7 +20,7 @@ import { app } from "electron";
 import { autoUpdater } from "electron-updater";
 import type { AppUpdateStatus } from "../shared/desktopApi";
 import { recordLocalDiagnostic } from "./diagnostics";
-import { readAutomaticAppUpdatesSetting, writeAutomaticAppUpdatesSetting } from "./storage";
+import { readAutomaticAppUpdatesSetting, readUpdateFeedTokenSetting, writeAutomaticAppUpdatesSetting } from "./storage";
 
 type UpdateState = AppUpdateStatus["state"];
 
@@ -70,9 +70,7 @@ function configureUpdater() {
     autoUpdater.channel = `latest-${process.arch}`;
   }
   autoUpdater.allowDowngrade = false;
-  // Enough for the feed to serve the right file, and nothing that would tell
-  // one machine from another.
-  autoUpdater.requestHeaders = { "User-Agent": `Umbratic/${app.getVersion()} (${process.platform}; ${process.arch})` };
+  autoUpdater.requestHeaders = requestHeaders();
   autoUpdater.logger = {
     info: () => undefined,
     debug: () => undefined,
@@ -114,13 +112,29 @@ function failureMessage(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
   if (code === "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND" || /404/.test(text)) return "No release is published for this platform yet";
   if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|net::ERR|network/i.test(text)) return "Could not reach downloads.umbratic.ai";
+  if (/403/.test(text)) return "This installation is not licensed for updates";
   if (/sign|certificate|publisher/i.test(text)) return "The downloaded release did not verify and was discarded";
   return "The update check failed";
+}
+
+/**
+ * Enough for the feed to serve the right file, and nothing that would tell one
+ * machine from another. The token is the company's, not the device's: the feed
+ * serves whoever holds a current one and learns nothing else.
+ */
+function requestHeaders(): Record<string, string> {
+  return {
+    "User-Agent": `Umbratic/${app.getVersion()} (${process.platform}; ${process.arch})`,
+    "X-Umbratic-Update-Token": readUpdateFeedTokenSetting(),
+  };
 }
 
 function runCheck(): Promise<void> {
   if (checkInFlight) return checkInFlight;
   configureUpdater();
+  // Re-read each time: a session opened since the last check will have left a
+  // newer token behind.
+  autoUpdater.requestHeaders = requestHeaders();
   checkInFlight = autoUpdater.checkForUpdates()
     .then(() => undefined)
     .catch((error: unknown) => {

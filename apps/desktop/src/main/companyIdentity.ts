@@ -9,6 +9,7 @@ import {
   companyConnectionStatus,
   readCompanyDeviceCredential,
   writeCompanyDeviceCredential,
+  writeUpdateFeedTokenSetting,
 } from "./storage";
 import type { CompanyDeviceCredential } from "./companyCredentialStorage";
 
@@ -155,6 +156,11 @@ export async function ensureCompanySession(transport: TransportOptions = {}): Pr
   const token = typeof session.session_token === "string" ? session.session_token : "";
   const orgName = typeof session.org_name === "string" ? session.org_name.trim() : "";
   const expiresAt = typeof session.expires_at === "string" ? Date.parse(session.expires_at) : Number.NaN;
+  // Veil mints this alongside the session; the update feed accepts it for
+  // thirty days. Collecting it here is the whole of the app's part in it —
+  // nothing asks the user for a key, and a company that stops running Veil
+  // simply stops receiving new ones.
+  if (typeof session.update_token === "string") writeUpdateFeedTokenSetting(session.update_token);
   if (!token.startsWith("umbs_") || !orgName || !Number.isFinite(expiresAt)) {
     throw new Error("Veil returned an invalid company session.");
   }

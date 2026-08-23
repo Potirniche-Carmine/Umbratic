@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"umbratic-veil/internal/entitlement"
+	"umbratic-veil/internal/updatefeed"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 	ChallengeTTL             = 2 * time.Minute
 	SessionTTL               = 15 * time.Minute
 	lastSeenWriteInterval    = 5 * time.Minute
+	pruneInterval            = 1 * time.Minute
 	maxActiveChallenges      = 4096
 	maxActiveSessions        = 65536
 )
@@ -94,13 +96,14 @@ type persisted struct {
 }
 
 type Store struct {
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	path        string
 	entitlement entitlement.Payload
 	now         func() time.Time
 	data        persisted
 	challenges  map[string]Challenge
 	sessions    map[string]Session
+	lastPrune   time.Time
 }
 
 type EnrollmentResult struct {
@@ -120,6 +123,9 @@ type SessionResult struct {
 	Token     string    `json:"session_token"`
 	ExpiresAt time.Time `json:"expires_at"`
 	OrgName   string    `json:"org_name"`
+	// UpdateToken lets this device download app releases from the update feed
+	// until it opens its next session. Empty on a build with no customer key.
+	UpdateToken string `json:"update_token,omitempty"`
 }
 
 type CodeResult struct {
@@ -496,21 +502,28 @@ func (s *Store) NewSession(challengeUID, signatureText string) (SessionResult, e
 	plain := "umbs_" + randomText(32)
 	session := Session{Hash: hashSecret(plain), DeviceUID: device.UID, CreatedAt: now, ExpiresAt: now.Add(SessionTTL)}
 	s.sessions[session.Hash] = session
-	return SessionResult{Token: plain, ExpiresAt: session.ExpiresAt, OrgName: s.data.OrgName}, nil
+	return SessionResult{
+		Token:       plain,
+		ExpiresAt:   session.ExpiresAt,
+		OrgName:     s.data.OrgName,
+		UpdateToken: updatefeed.Token(s.entitlement.OrgUID, now),
+	}, nil
 }
 
+// Authenticate resolves a session token to its device. It runs on every
+// product request, so it takes only a read lock and never sweeps: expired
+// entries are recognised by their deadline here and reclaimed by maybePrune.
 func (s *Store) Authenticate(token string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := s.now().UTC()
-	s.pruneEphemeralLocked(now)
+	s.maybePrune(now)
 	hash := hashSecret(token)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	session, ok := s.sessions[hash]
 	if !ok {
 		return "", failure("session_invalid", "The session is invalid.")
 	}
 	if !now.Before(session.ExpiresAt) {
-		delete(s.sessions, hash)
 		return "", failure("session_expired", "The session has expired.")
 	}
 	if err := s.authorizeDeviceLocked(session.DeviceUID); err != nil {
@@ -521,8 +534,8 @@ func (s *Store) Authenticate(token string) (string, error) {
 
 // UserUIDForDevice returns the owning user for an enrolled device.
 func (s *Store) UserUIDForDevice(deviceUID string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if err := s.authorizeDeviceLocked(deviceUID); err != nil {
 		return "", err
 	}
@@ -530,15 +543,27 @@ func (s *Store) UserUIDForDevice(deviceUID string) (string, error) {
 	return device.UserUID, nil
 }
 
+// Touch records device activity. Writes are damped to lastSeenWriteInterval,
+// and the damping test runs under a read lock so the common no-op path does
+// not serialise concurrent requests behind the write lock.
 func (s *Store) Touch(deviceUID string) error {
+	now := s.now().UTC().Truncate(time.Second)
+	s.mu.RLock()
+	err := s.authorizeDeviceLocked(deviceUID)
+	fresh := err == nil && recentlySeen(deviceIn(&s.data, deviceUID), now)
+	s.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+	if fresh {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.authorizeDeviceLocked(deviceUID); err != nil {
 		return err
 	}
-	now := s.now().UTC().Truncate(time.Second)
-	currentDevice := deviceIn(&s.data, deviceUID)
-	if currentDevice.LastSeenAt != nil && now.Sub(*currentDevice.LastSeenAt) < lastSeenWriteInterval {
+	if recentlySeen(deviceIn(&s.data, deviceUID), now) {
 		return nil
 	}
 	next := clonePersisted(s.data)
@@ -559,8 +584,8 @@ func (s *Store) Logout(token string) error {
 }
 
 func (s *Store) Snapshot() Snapshot {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	now := s.now().UTC().Truncate(time.Second)
 	snapshot := Snapshot{
 		OrgUID: s.entitlement.OrgUID, OrgName: s.data.OrgName,
@@ -699,7 +724,29 @@ func (s *Store) removeEphemeralForUserLocked(userUID string) {
 	}
 }
 
+func recentlySeen(device *Device, now time.Time) bool {
+	return device != nil && device.LastSeenAt != nil && now.Sub(*device.LastSeenAt) < lastSeenWriteInterval
+}
+
+// maybePrune sweeps expired challenges and sessions at most once per
+// pruneInterval, keeping the sweep off the per-request path.
+func (s *Store) maybePrune(now time.Time) {
+	s.mu.RLock()
+	due := now.Sub(s.lastPrune) >= pruneInterval
+	s.mu.RUnlock()
+	if !due {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if now.Sub(s.lastPrune) < pruneInterval {
+		return
+	}
+	s.pruneEphemeralLocked(now)
+}
+
 func (s *Store) pruneEphemeralLocked(now time.Time) {
+	s.lastPrune = now
 	for uid, challenge := range s.challenges {
 		if !now.Before(challenge.ExpiresAt) {
 			delete(s.challenges, uid)

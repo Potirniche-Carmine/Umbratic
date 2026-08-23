@@ -31,9 +31,9 @@ function fakeUpdater() {
   return updater;
 }
 
-function load({ packaged, automatic = true }) {
+function load({ packaged, automatic = true, updateFeedToken = "org_test.1787296036.signature" }) {
   const updater = fakeUpdater();
-  const settings = { automatic };
+  const settings = { automatic, updateFeedToken };
   const diagnostics = [];
   const module = loadTypeScriptModule(modulePath, {
     cache: new Map(),
@@ -42,6 +42,7 @@ function load({ packaged, automatic = true }) {
       "electron-updater": { autoUpdater: updater },
       "./storage": {
         readAutomaticAppUpdatesSetting: () => settings.automatic,
+        readUpdateFeedTokenSetting: () => settings.updateFeedToken,
         writeAutomaticAppUpdatesSetting: (value) => {
           settings.automatic = value !== false;
           return settings.automatic;
@@ -143,4 +144,25 @@ test("turning automatic checks off is stored and stops the background rhythm", (
   assert.equal(module.setAutomaticAppUpdates("yes").automatic, false);
   assert.equal(module.setAutomaticAppUpdates(true).automatic, true);
   module.stopAppUpdates();
+});
+
+test("every check carries the update token the company server last minted", async () => {
+  const { module, updater, settings } = load({ packaged: true });
+  await module.checkForAppUpdate();
+  assert.equal(updater.requestHeaders["X-Umbratic-Update-Token"], "org_test.1787296036.signature");
+  assert.match(updater.requestHeaders["User-Agent"], /^Umbratic\/0\.0\.3 /);
+
+  settings.updateFeedToken = "org_test.1787300000.newer";
+  await module.checkForAppUpdate();
+  assert.equal(updater.requestHeaders["X-Umbratic-Update-Token"], "org_test.1787300000.newer");
+});
+
+test("a feed that refuses this installation says so", async () => {
+  const { module, updater } = load({ packaged: true });
+  updater.nextCheck = () => {
+    updater.emit("error", new Error("HttpError: 403 Forbidden"));
+    return Promise.reject(new Error("HttpError: 403 Forbidden"));
+  };
+  const status = await module.checkForAppUpdate();
+  assert.deepEqual(plain(status.state), { phase: "failed", message: "This installation is not licensed for updates" });
 });

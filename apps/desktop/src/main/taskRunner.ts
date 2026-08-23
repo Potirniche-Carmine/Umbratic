@@ -297,6 +297,17 @@ export async function runRunnerTask(
       onDelegated: () => {
         delegatedToWorktree = true;
       },
+      // Veil holds sessions in memory, so a server that restarts mid-run
+      // refuses a token that was valid a moment ago. The device key is still
+      // here, so signing a fresh challenge costs one round trip and the runner
+      // picks the new token up on its next attempt. A failure here is left to
+      // the runner's own retry budget rather than ending the run early: the
+      // server may simply still be coming back up.
+      onSessionRejected: () => {
+        void renewCompanySession(companyTransportOptions())
+          .then((token) => setRunnerProviderSession(run as RunnerProcess, token))
+          .catch(() => {});
+      },
       // The engines are this desktop's, so a remote task's files travel here
       // and back rather than the engine travelling to the host.
       onArtifact: async (job) => {

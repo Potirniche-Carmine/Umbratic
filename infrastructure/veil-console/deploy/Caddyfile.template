@@ -1,14 +1,49 @@
+# Rendered into /etc/caddy/conf.d/ and imported by the main Caddyfile, so this
+# file holds site configuration only — global options must stay in the main
+# Caddyfile or Caddy refuses to load.
+
 @@ORIGIN@@ {
-    @control path /api/control /api/control/*
+	@control path /api/control /api/control/*
 	respond @control 404
 
 	reverse_proxy 127.0.0.1:@@VEIL_PORT@@ {
 		# Overwrite rather than append, so a client cannot prepend a forged hop
 		# and pick its own rate-limit bucket.
 		header_up X-Forwarded-For {remote_host}
+
+		# Chat responses are SSE. Without this Caddy buffers them and every
+		# token arrives at once, at the end.
+		flush_interval -1
+
+		transport http {
+			# A cold model can take minutes to produce its first token, so the
+			# response-header wait must outlast a load, and there is deliberately
+			# no write deadline that could cut a healthy long answer.
+			response_header_timeout 5m
+			expect_continue_timeout 5s
+		}
+	}
+
+	# Veil enforces VEIL_MAX_BODY_BYTES itself. This refuses an oversized upload
+	# at the edge, before it has cost an admission slot or any memory in Veil.
+	request_body {
+		max_size 24MB
 	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
 	}
 }
+
+# The installer does not touch the firewall, by design. Veil bounds how much
+# work runs at once and how often one identity may ask for it, but it cannot see
+# who is holding sockets open from behind the proxy — that is the firewall's
+# job. This port should reach only the networks that run the desktop app:
+#
+#   ufw allow from <vpn-or-office-cidr> to any port @@HTTPS_PORT@@ proto tcp
+#
+# and @@CONSOLE_PORT@@ (Console), @@VEIL_PORT@@ (Veil), and the vLLM ports must
+# never be reachable off-host.

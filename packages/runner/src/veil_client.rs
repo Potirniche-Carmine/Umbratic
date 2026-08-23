@@ -12,8 +12,8 @@ use crate::{
     veil_request::chat_request_body,
     veil_retry::{
         MAX_RETRIES, VeilAttemptError, VeilAttemptInput, committed_output, emit_reconnected,
-        emit_reconnecting, reconnect_delay_ms, retry_after_from, retry_is_quiet,
-        retryable_veil_failure, sleep_unless_aborted,
+        emit_reconnecting, emit_session_rejected, reconnect_delay_ms, retry_after_from,
+        retry_is_quiet, retryable_veil_failure, session_rejected, sleep_unless_aborted,
     },
     veil_tls::{expected_pin, pinned_tls_config, resolve_server_name},
 };
@@ -160,9 +160,18 @@ fn shared_client(provider: &ProviderConfig) -> Result<Client, String> {
     }
 }
 
+/// How long a connection attempt may take before it is treated as unreachable.
+/// This bounds only the TCP and TLS handshake: a blackholed address behind a
+/// dropped VPN would otherwise sit on the operating system's own connect
+/// timeout, which is minutes. There is deliberately no overall request timeout
+/// — a chat response is a long-lived stream, and liveness inside it is Veil's
+/// stream idle timeout plus this client's own abort polling.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 fn client_for(provider: &ProviderConfig) -> Result<Client, String> {
     let mut builder = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(CONNECT_TIMEOUT)
         .min_tls_version(Version::TLS_1_2)
         .tls_info(true);
     if let Some(pin) = provider
@@ -718,6 +727,10 @@ async fn attempt_veil_chat(
             "model request failed: {}",
             veil_failure_message(Some(status.as_u16()), payload.as_ref())
         );
+        if session_rejected(status.as_u16(), payload.as_ref()) {
+            emit_session_rejected(session, sink);
+            return Err(VeilAttemptError::retryable(message));
+        }
         return Err(
             if retryable_veil_failure(status.as_u16(), payload.as_ref()) {
                 VeilAttemptError::retryable(message).after(retry_after)

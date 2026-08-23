@@ -62,6 +62,13 @@ export type RunnerEventAdapterOptions = {
   onFailure(message: string, details?: RunnerFailureDetails): void;
   onInvalid(input: { message: string; code: string; type?: string }): void;
   onQueueUpdated?(event: Extract<RunnerEvent, { type: "run.queue.updated" }>): void;
+  /**
+   * The company server refused the session token. The runner is waiting out a
+   * backoff and will read whatever token is in place when it retries, so this
+   * is main's cue to sign a fresh one. Nothing reaches the renderer: a session
+   * renewed inside a retry is not something the user has to see.
+   */
+  onSessionRejected?(): void;
   /** Runs one document job. Absent when this build has no engine. */
   onArtifact?(job: ArtifactJob): Promise<void>;
   /** Answers a job the adapter itself failed before it reached the engine. */
@@ -192,6 +199,9 @@ export class RunnerEventAdapter {
           attempt: event.attempt,
           at: eventAt(event),
         });
+        return;
+      case "provider.session_rejected":
+        this.options.onSessionRejected?.();
         return;
       case "context.compaction":
         // A started phase carries no outcome, and a finished one without a
