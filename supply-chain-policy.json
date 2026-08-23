@@ -16,6 +16,16 @@
       "reason": "Permanent deprecation notice with no fix, reported under Module Results only. The single import from this module is golang.org/x/crypto/argon2 (veil-console internal/auth/auth.go); go list -deps confirms only argon2 and blake2b compile in. Go 1.26 ships no Argon2 in the standard library, so replacing the password hash to silence an unreachable advisory would be a net security loss."
     }
   ],
+  "acceptedNpmReleaseAgeExceptions": [
+    {
+      "package": "@xmldom/xmldom",
+      "version": "0.9.12",
+      "publishedAt": "2026-08-21",
+      "acceptedOn": "2026-08-23",
+      "reason": "0.9.10 is affected by GHSA-965w-775f-mr7g (High, CVSS 8.7): parsing a deeply or repeatedly namespaced document consumes quadratic memory, a denial of service reachable from DOMParser.parseFromString with default options. The DOCX and PPTX readers run xmldom over OOXML parts unzipped from files the user supplies, so the advisory sits directly on an untrusted-input path. 0.9.12 also closes twelve further advisories in the same set. 0.9.11 is still affected and is not a fix. Installing at two days old is a deliberate trade of the 14-day cooldown against a reachable High; re-check on the next dependency sweep once the version has aged past 14 days.",
+      "installCommand": "npm install --ignore-scripts --min-release-age=0"
+    }
+  ],
   "reviewedNpmOverrides": {
     "@electron/asar": "4.2.1",
     "@electron/get": {
