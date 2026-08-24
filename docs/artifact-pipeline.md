@@ -109,7 +109,7 @@ surface is surgical: page ops only.
 | PDF | `pdfmake` 0.3.11, bundled Roboto | `packages/pdf` for text; `pdfjs-dist` for pages, forms, metadata | `@cantoo/pdf-lib` 2.8.3: page ops, forms, metadata. No body-text rewrite | JS worker |
 | XLSX | `rust_xlsxwriter` 0.98 | `calamine` 0.36 + umya | `umya-spreadsheet` 3.0.1 (keeps charts/CF/DV) + `formualizer` 0.8 recalc | Rust sidecar |
 
-JS: `pptxgenjs`, `docx`, `@xmldom/xmldom` 0.9.11, `jszip` 3.10.1, `pdfmake`,
+JS: `pptxgenjs`, `docx`, `@xmldom/xmldom` 0.9.12, `jszip` 3.10.1, `pdfmake`,
 `@cantoo/pdf-lib`; already present `pdfjs-dist`, `@napi-rs/canvas`. MIT/Apache,
 exact pins, no install scripts. One override: `image-size` → 2.x under
 pptxgenjs (DoS in 1.x). Fonts: Carlito, Caladea, Liberation (OFL, ~2 MB) for

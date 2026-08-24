@@ -29,7 +29,7 @@
   "dependencies": {
     "@cantoo/pdf-lib": "2.8.1",
     "@napi-rs/canvas": "1.0.6",
-    "@xmldom/xmldom": "0.9.10",
+    "@xmldom/xmldom": "0.9.12",
     "electron-updater": "6.8.9",
     "fontkit": "2.0.4",
     "jszip": "3.10.1",
@@ -45,7 +45,7 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
-    "electron": "43.2.0",
+    "electron": "43.3.0",
     "electron-builder": "26.15.3",
     "typescript": "5.9.3",
     "vite": "8.2.0"
