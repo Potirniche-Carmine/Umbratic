@@ -15,6 +15,7 @@
  */
 
 import type { DocumentReviewBlock, DocumentReviewSnapshot } from "./documentReview";
+import { isRecord } from "./records";
 
 export const artifactFormats = ["pptx", "docx", "xlsx", "pdf"] as const;
 export type ArtifactFormat = (typeof artifactFormats)[number];
@@ -48,10 +49,6 @@ export function artifactFormatOf(value: string): ArtifactFormat | null {
 export const artifactPreviewBlockLimit = 400;
 
 type Outline = Record<string, unknown>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";

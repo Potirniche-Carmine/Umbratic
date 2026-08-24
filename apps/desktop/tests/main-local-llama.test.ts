@@ -8,6 +8,7 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
 const localLlama = loadTypeScriptModule(new URL("../src/main/localLlama.ts", import.meta.url));
 const llamaServerSource = fs.readFileSync(new URL("../src/main/llamaServer.ts", import.meta.url), "utf8");
+const childShutdownSource = fs.readFileSync(new URL("../src/main/childShutdown.ts", import.meta.url), "utf8");
 
 test("the chat sidecar is launched with the weights, the whole context, and one slot", () => {
   const args = localLlama.localLlamaArgs({ modelFile: "/models/gemma4-e4b.gguf", modelId: "gemma4-e4b", contextLength: 64000, mtp: null });
@@ -90,7 +91,7 @@ test("a sidecar that will not stay up is backed off rather than respawned in a l
   assert.match(llamaServerSource, /respawnBaseDelayMs = 1_000/);
   assert.match(llamaServerSource, /respawnMaxDelayMs = 30_000/);
   assert.match(llamaServerSource, /Math\.min\(respawnBaseDelayMs \* 2 \*\* \(failures - 1\), respawnMaxDelayMs\)/);
-  assert.match(llamaServerSource, /spawn\("taskkill", \["\/pid", String\(child\.pid\), "\/t", "\/f"\]/);
+  assert.match(childShutdownSource, /spawn\("taskkill", \["\/pid", String\(child\.pid\), "\/t", "\/f"\]/);
 });
 
 test("the sidecar's own output stays in diagnostics, never in a renderer-visible message", () => {
@@ -99,7 +100,7 @@ test("the sidecar's own output stays in diagnostics, never in a renderer-visible
   // The exit code rides along, and a start killed by a newer settings change
   // is not reported as a failure at all.
   assert.match(llamaServerSource, /exitCode: exitDetail\.code/);
-  assert.match(llamaServerSource, /const superseded = stoppingChildren\.has\(child\)/);
+  assert.match(llamaServerSource, /const superseded = stopRequested\(child\)/);
   // Every message this module throws is assembled from readiness state alone.
   // The runtime's own output names file paths and arguments, so it is never
   // interpolated into anything a person will be shown.

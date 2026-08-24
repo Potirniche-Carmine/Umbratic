@@ -2,9 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
+export { isRecord } from "../shared/records";
 
 export function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -62,6 +60,12 @@ export function slugify(value: string): string {
 
 export function shortHash(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+/** A comparison key for an absolute path: case-folded where the filesystem is. */
+export function pathKey(pathValue: string): string {
+  const resolved = path.resolve(pathValue);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 export function normalizeRelativePath(value: string): string {

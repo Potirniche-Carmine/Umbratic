@@ -1,6 +1,4 @@
-import type { BackendUiEvent, ReviewFile, TaskRecord } from "./types";
-import { normalizeRelativePath } from "./utils";
-import { isDocumentReviewSidecarPath } from "../shared/documentReview";
+import type { BackendUiEvent, ReviewFile } from "./types";
 import {
   appendTaskEvent as appendSharedTaskEvent,
   appendTaskEvents as appendSharedTaskEvents,
@@ -48,27 +46,8 @@ export function mergeTaskEvents(...groups: BackendUiEvent[][]): BackendUiEvent[]
   return compactTaskEvents(merged, 500);
 }
 
-export function hiddenRendererReviewPaths(task: TaskRecord): Set<string> {
-  const hidden = new Set<string>();
-  for (const file of task.reviewFiles ?? []) {
-    const relativePath = normalizeRelativePath(file.path);
-    if (isDocumentReviewSidecarPath(relativePath)) hidden.add(relativePath);
-  }
-  return hidden;
-}
-
-export function filterReviewPaths(files: readonly string[], ignoredPaths: ReadonlySet<string>): string[] {
-  if (ignoredPaths.size === 0) return [...files];
-  return files.filter((file) => !ignoredPaths.has(normalizeRelativePath(file)));
-}
-
-function filterReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlySet<string>): ReviewFile[] {
-  if (ignoredPaths.size === 0) return [...files];
-  return files.filter((file) => !ignoredPaths.has(normalizeRelativePath(file.path)));
-}
-
-export function rendererReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlySet<string>): ReviewFile[] {
-  return filterReviewFiles(files, ignoredPaths).map((file) => file.tooLarge
+export function rendererReviewFiles(files: readonly ReviewFile[]): ReviewFile[] {
+  return files.map((file) => file.tooLarge
     ? { ...file, patch: "", hunks: [] }
     : file);
 }

@@ -138,7 +138,7 @@ test("feedback dialog and prompt controls do not allow horizontal growth", () =>
   // And the controls in it are borderless, so nothing inside the box outlines
   // itself against the box's own outline.
   const railControlsRule = composerCss.match(
-    /\.promptActionRail \.permissionControl \.permissionTrigger,\n\.promptActionRail \.modelControl \.modelTrigger,\n\.promptActionRail \.dictationControl \{[^}]+\}/s,
+    /\.promptActionRail \.permissionControl \.permissionTrigger,\r?\n\.promptActionRail \.modelControl \.modelTrigger,\r?\n\.promptActionRail \.dictationControl \{[^}]+\}/s,
   )?.[0] ?? "";
   assert.match(railControlsRule, /border:\s*0/);
   assert.match(railControlsRule, /background:\s*transparent/);

@@ -679,7 +679,7 @@ export type DesktopApi = {
   refreshWorkspaceReview(input: {
     repositoryPath: string;
   }): Promise<{ reviewFiles: ReviewFile[]; baselineOid: string }>;
-  readDocumentReview(input: {
+  readArtifactPreview(input: {
     taskId: string;
     documentPath: string;
   }): Promise<

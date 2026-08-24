@@ -47,10 +47,7 @@ import { execFileOutput } from "./processCommands";
 import { RunnerEventAdapter } from "./runnerEventAdapter";
 import type { ChatAttachment, CommandClass, RunnerProcess, PermissionRequest, TaskRecord } from "./types";
 import { isRecord, slugify } from "./utils";
-import {
-  hiddenRendererReviewPaths,
-  rendererReviewFiles,
-} from "./taskReviewPresentation";
+import { rendererReviewFiles } from "./taskReviewPresentation";
 
 
 /// Removes and returns a queued message the runner just released. A steer that
@@ -509,7 +506,7 @@ export async function runRunnerTask(
       type: "review.ready",
       taskId: task.id,
       changedFiles: task.changedFiles,
-      reviewFiles: rendererReviewFiles(orderedReviewFiles, hiddenRendererReviewPaths(task)),
+      reviewFiles: rendererReviewFiles(orderedReviewFiles),
       latestTest: task.latestTest,
     });
     run.abortController.abort();

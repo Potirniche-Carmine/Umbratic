@@ -1,7 +1,7 @@
 import { Copy, ThumbsDown, ThumbsUp } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { consumeHeldAnswerRect } from "./answerLift";
+import { consumeHeldAnswerRect, prefersReducedMotion } from "./answerLift";
 import type { ComposerTimelineItem } from "./rendererTypes";
 import type { ResponseRating } from "../shared/responseFeedback";
 
@@ -23,10 +23,6 @@ type AssistantMessageProps = {
   /** True when this text just left the Working block and is becoming the answer. */
   lifted?: boolean;
 };
-
-function prefersReducedMotion(): boolean {
-  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
 
 function liftFromWorkingBlock(node: HTMLElement | null) {
   if (!node || prefersReducedMotion()) return;

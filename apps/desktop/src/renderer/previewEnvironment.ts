@@ -37,12 +37,11 @@ import {
 import { previewDictation } from "./previewDictation";
 import { previewRemoteApi } from "./previewRemoteFixtures";
 import { normalizeAttachment } from "./chatListPresentation";
+import { normalizeEndpointSettings } from "./endpointSettings";
+import { defaultHarnessProfileId, isHarnessProfileId } from "./harnessProfile";
 import {
-  defaultHarnessProfileId,
   defaultIdeChoices,
   getPreviewPermissionMode,
-  isHarnessProfileId,
-  normalizeEndpointSettings,
   publicPreviewEndpointSettings,
   readPreviewChats,
   readPreviewContextLength,
@@ -225,7 +224,7 @@ let previewLocalMtp = true;
     };
   },
   refreshWorkspaceReview: async () => ({ reviewFiles: composerTestWholeDiffFiles, baselineOid: "HEAD" }),
-  readDocumentReview: async (input) => input.documentPath === composerTestDocumentPath
+  readArtifactPreview: async (input) => input.documentPath === composerTestDocumentPath
     ? { ok: true, preview: composerTestDocumentPreview }
     : { ok: false, code: "not_available", message: "This document does not include a review preview." },
   searchFiles: async (input) => {

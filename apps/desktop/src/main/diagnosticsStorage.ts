@@ -1,4 +1,5 @@
-import { isRecord, parsePayload, withAppDatabase } from "./storageDatabase";
+import { parsePayload, withAppDatabase } from "./storageDatabase";
+import { isRecord } from "./utils";
 import type { DiagnosticRow, DiagnosticStatsRow, ProductTelemetryRow } from "./storageDatabase";
 import type {
   LocalDiagnosticInfo,

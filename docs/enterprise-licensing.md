@@ -17,7 +17,7 @@ Administrator browser
 Desktop application
   -> restricted HTTPS Caddy :8432
   -> Veil 127.0.0.1:8080
-  -> Ollama 127.0.0.1:11434 or vLLM 127.0.0.1:8000
+  -> managed vLLM processes on loopback ports
 ```
 
 Caddy returns `404` for `/api/control` and all paths below it. Only Console can
@@ -31,8 +31,7 @@ Prepare these items:
 - SSH access to the server.
 - A DNS name for Veil, such as `veil.example.com`.
 - Caddy from its supported Ubuntu package.
-- Ollama or vLLM on the server or another private address.
-- The exact model ID that the runtime reports.
+- vLLM installed on the server, so Console can launch each managed model.
 - A company VPN or a list of approved desktop IP addresses.
 - A protected release-signing computer with the repository, Node.js, npm, Go,
   OpenSSL, and standard Linux tools. Ubuntu or Ubuntu WSL is supported.
@@ -49,8 +48,7 @@ Use these default rules:
 | `22/TCP` | SSH and the Console tunnel | Allow only administrator VPN or approved administrator IP addresses |
 | `8177/TCP` | Veil Console | Do not allow; loopback only |
 | `8080/TCP` | Raw Veil | Do not allow; loopback only |
-| `11434/TCP` | Ollama | Do not allow unless a private runtime network requires it |
-| `8000/TCP` | vLLM | Do not allow unless a private runtime network requires it |
+| vLLM model ports | Managed model runtimes | Do not allow; loopback only |
 
 Ports `80` and `443` can be necessary when Caddy gets or renews a public TLS
 certificate. Allow them only as required for certificate validation. A DNS
@@ -115,10 +113,9 @@ Before installation:
 
 1. Create the DNS record for the Veil domain.
 2. Install Caddy.
-3. Install and start Ollama or vLLM.
-4. Download the selected model.
-5. Apply the network rules in this guide.
-6. Copy the release zip to `/tmp` on the server.
+3. Install vLLM.
+4. Apply the network rules in this guide.
+5. Copy the release zip to `/tmp` on the server.
 
 Keep the model runtime on loopback when it runs on the same server.
 
@@ -187,19 +184,22 @@ http://127.0.0.1:8177
 
 ## 6. Configure the model runtime
 
+Point Console at vLLM by adding `--vllm-binary /path/to/vllm` to the
+`veil-console` systemd unit's `ExecStart` line, then restart the service.
+vLLM downloads each model's weights itself on first start.
+
 In Console:
 
-1. Select `Ollama` or `vLLM`.
-2. Enter the private runtime URL.
-3. Enter the exact model ID.
-4. Select **Test connection**.
-5. Select **Apply and restart**.
-6. Confirm that the Overview page shows Veil as running.
+1. Open **Models** and add a model from the catalog, or use **Custom** for a
+   reviewed repository the catalog does not list.
+2. Select **Start** on the model's card and wait for it to report running.
+3. Make it the default model from its card.
+4. Open **Settings**, review the serving limits, and select **Apply and
+   restart**.
+5. Confirm that the Overview page shows Veil as running.
 
-The usual runtime URLs are:
-
-- Ollama: `http://127.0.0.1:11434`
-- vLLM: `http://127.0.0.1:8000`
+Each managed model is its own vLLM process on its own loopback port, with its
+own weights and KV cache in GPU memory.
 
 Veil and Console do not accept a model-provider API key.
 

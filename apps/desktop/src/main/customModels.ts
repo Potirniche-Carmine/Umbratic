@@ -16,6 +16,7 @@ import * as https from "node:https";
 
 import { modelCatalog, type CatalogModel, type CatalogQuant } from "./modelCatalog";
 import { readStoredCustomModels, writeStoredCustomModels } from "./settingsStorage";
+import { isRecord } from "./utils";
 
 const repoPattern = /^[A-Za-z0-9][\w.-]{0,95}\/[A-Za-z0-9][\w.-]{0,127}$/;
 const revisionPattern = /^[0-9a-f]{40}$/;
@@ -105,10 +106,6 @@ const defaultFetchJson: FetchJson = (url) =>
     };
     visit(url, 0);
   });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function normalizeQuants(value: unknown): CatalogQuant[] | null {
   if (!Array.isArray(value) || value.length === 0) return null;

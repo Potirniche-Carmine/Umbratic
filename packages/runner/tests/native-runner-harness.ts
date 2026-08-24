@@ -9,19 +9,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startProvider } from "./native-runner-provider.ts";
+export { requestBody, sse } from "./native-runner-provider.ts";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const binary = path.join(repositoryRoot, "target", "debug", process.platform === "win32" ? "umbratic-runner.exe" : "umbratic-runner");
-
-export function sse(value: unknown) {
-  return `data: ${JSON.stringify(value)}\n\n`;
-}
-
-export async function requestBody(request: http.IncomingMessage) {
-  let body = "";
-  for await (const chunk of request) body += chunk.toString("utf8");
-  return body ? JSON.parse(body) : {};
-}
 
 export const runnerPassword = "native-test-secret";
 

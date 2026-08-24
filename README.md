@@ -1,6 +1,6 @@
 # Umbratic
 
-Umbratic is a private AI workbench for teams running local or company-managed model infrastructure. The desktop app talks to a local runner for workspace tools, and the runner talks to Veil, the authenticated model boundary in front of an admin-configured Ollama or vLLM runtime.
+Umbratic is a private AI workbench for teams running local or company-managed model infrastructure. The desktop app talks to a local runner for workspace tools, and the runner talks to Veil, the authenticated model boundary in front of the model runtime: an app-managed llama.cpp sidecar in local mode, or Console-managed vLLM processes in server mode.
 
 Umbratic is not a public connector platform. The supported harness surface is intentionally small: local workspace tools, local skills, Veil-owned prompts, worktree review, approval flows, and redacted operational telemetry retained on company-managed servers.
 

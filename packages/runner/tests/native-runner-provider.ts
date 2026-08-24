@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 
-function sse(value: unknown) {
+export function sse(value: unknown) {
   return `data: ${JSON.stringify(value)}\n\n`;
 }
 
-async function requestBody(request: http.IncomingMessage) {
+export async function requestBody(request: http.IncomingMessage) {
   let body = "";
   for await (const chunk of request) body += chunk.toString("utf8");
   return body ? JSON.parse(body) : {};

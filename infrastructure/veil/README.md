@@ -1,6 +1,6 @@
 # Umbratic Veil
 
-Umbratic Veil is the model boundary for Umbratic. The desktop app calls Veil, and Veil owns auth, prompt injection, route policy, model selection, health checks, and the final call to a private Ollama or vLLM runtime.
+Umbratic Veil is the model boundary for Umbratic. The desktop app calls Veil, and Veil owns auth, prompt injection, route policy, model selection, health checks, and the final call to a private OpenAI-compatible runtime: the app-managed llama.cpp `llama-server` in local mode, vLLM in server mode.
 
 ## Structure
 
@@ -103,13 +103,11 @@ shown — reasoning content stays stripped either way.
   where it matters. `off` also clears `reasoning_effort` and the thinking
   budget, so the request does not ask the model not to think and then tell it
   how hard to think.
-- Ollama receives `think`, and only when `api/show` confirms the model carries
-  the `thinking` capability: some builds fail the whole request otherwise. A
-  failed probe counts as unsupported.
+- llama.cpp receives the same `chat_template_kwargs.enable_thinking`, which is
+  where its Jinja chat templates read the switch from.
 
 For KV cache precision, vLLM's 8-bit option is `--kv-cache-dtype fp8` — there is
-no literal `q8`. A local Ollama administrator sets `OLLAMA_KV_CACHE_TYPE=q8_0`
-in the runtime's own environment; Veil does not manage it.
+no literal `q8`. Veil does not manage runtime cache precision.
 
 Veil accepts no provider `--api-key`, in this configuration or any other.
 
@@ -137,7 +135,7 @@ VEIL_MODEL=llama3
 `VEIL_AUTH_TOKEN` authenticates a local or development client. In company identity
 mode it is an internal process credential and cannot access product routes.
 `VEIL_MODE` selects the trusted provider adapter once at startup: `server` for vLLM
-or `local` for Ollama. `VEIL_PROVIDER_BASE_URL` is the private runtime address that
+or `local` for the desktop's llama-server sidecar. `VEIL_PROVIDER_BASE_URL` is the private runtime address that
 Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 
 ### Complete environment reference
@@ -145,7 +143,7 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `VEIL_AUTH_TOKEN` | Yes | None | Local/development bearer token. In company identity mode, Console supplies a separate internal value that cannot access product routes. |
-| `VEIL_MODE` | Yes | None | Trusted runtime mode. `server` uses fixed vLLM endpoints. `local` uses fixed Ollama endpoints. |
+| `VEIL_MODE` | Yes | None | Trusted runtime mode. Both speak the OpenAI-compatible chat API; the mode decides which sampling profile and reasoning behavior apply: `server` for vLLM, `local` for llama-server. |
 | `VEIL_COMPANY_IDENTITY_MODE` | No | `false` | Enables signed entitlement, user, device, and session access control. |
 | `VEIL_CONTROL_TOKEN` | In company mode | None | Console-only control credential. It must differ from `VEIL_AUTH_TOKEN`. |
 | `VEIL_ENTITLEMENT_PATH` | In company mode | None | Signed customer entitlement file. Veil fails closed if verification fails. |
@@ -159,7 +157,7 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | `VEIL_ADDR` | No | `127.0.0.1:8080` | Address and port on which Veil listens. Keep the default when a local reverse proxy or Cloudflare Tunnel connects over loopback. A non-loopback address is refused unless `VEIL_ALLOW_EXTERNAL_BIND` is set. |
 | `VEIL_ALLOW_EXTERNAL_BIND` | No | `false` | Acknowledges that something else terminates TLS. Veil speaks plain HTTP, so binding outside loopback without this would serve prompts and session tokens in cleartext, and startup fails instead. |
 | `VEIL_TRUSTED_PROXY_CIDRS` | No | Empty | Comma-separated addresses or CIDRs whose `X-Forwarded-For` is believed when keying identity rate limits. Leave empty unless the proxy overwrites that header; otherwise a client picks its own bucket. Console sets loopback for the supervised deployment. |
-| `VEIL_CONTEXT_LENGTH` | No | `0` | Context window in tokens for local Ollama mode. A positive value is sent as `options.num_ctx`; `0` or unset uses Ollama's default. Unused in server mode. |
+| `VEIL_CONTEXT_LENGTH` | No | `0` | Context window in tokens for local mode, reported on `/api/models` when the runtime does not report one. The desktop starts llama-server with the same size, so the two always agree. Unused in server mode. |
 | `VEIL_MAX_OUTPUT_TOKENS` | No | `8192` | Server-owned maximum generated tokens per response. Clients may request less, never more. |
 | `VEIL_TEMPERATURE` | No | `0.2` | Sampling temperature from `0.0` to `2.0`. |
 | `VEIL_TOP_P` | No | `0.95` | Nucleus sampling from greater than `0.0` to `1.0`. |
@@ -193,37 +191,34 @@ bounded by `VEIL_MAX_BODY_BYTES`. Clients cannot write system text or name the
 model, and generation settings, `tool_choice`, and `parallel_tool_calls` are
 Veil's to decide: a client that sends them is ignored, not obeyed.
 
-### Local mode (Ollama)
+### Local mode (llama.cpp)
 
-Start Ollama, make sure the configured model is installed, and use an env file like:
+The desktop app owns this mode end to end: it starts a bundled `llama-server`
+for the downloaded model, mints a per-run API key, and starts Veil pointed at
+it. To run the same shape by hand, start a `llama-server` and use an env file
+like:
 
 ```sh
 VEIL_ADDR=127.0.0.1:8080
 VEIL_AUTH_TOKEN=replace-with-a-long-random-token
 
 VEIL_MODE=local
-VEIL_PROVIDER_BASE_URL=http://127.0.0.1:11434
-VEIL_MODEL=llama3.2
+VEIL_PROVIDER_BASE_URL=http://127.0.0.1:43999
+VEIL_PROVIDER_API_KEY=the-llama-server-api-key
+VEIL_MODEL=the-served-model-id
 VEIL_CONTEXT_LENGTH=64000
 VEIL_MAX_OUTPUT_TOKENS=8192
 ```
 
-For example, install the model before starting Veil:
+The context length is decided where the KV cache lives: llama-server is started
+with `--ctx-size`, and `VEIL_CONTEXT_LENGTH` tells Veil the same number so its
+accounting and `/api/models` agree. Veil applies a small local generation
+profile — the sampling the model card recommends for the chosen reasoning
+effort — on every chat request.
 
-```sh
-ollama pull llama3.2
-```
-
-When `VEIL_CONTEXT_LENGTH` is positive, Veil sends it to Ollama as `num_ctx` when
-activating the model and on every chat request. Changing it requires a Veil restart;
-Ollama may reload the model with a differently sized KV cache on the next connection
-or request. Larger values require more memory and cannot exceed the model/runtime's
-supported context. Leave it unset or set it to `0` to use Ollama's default.
-Veil applies a small fixed local generation profile and sends the effective output
-allowance as `num_predict` on every chat request.
-
-Veil uses Ollama's `/api/chat`, `/api/tags`, and `/api/show` endpoints. The
-Ollama port should remain private; expose Veil, not Ollama.
+Veil speaks the OpenAI-compatible `v1/chat/completions` and `v1/models`
+endpoints in both modes. The runtime port should remain private; expose Veil,
+not the runtime.
 
 ### Server mode (vLLM)
 
@@ -301,9 +296,9 @@ for a scraper.
 
 ## Network
 
-Use Cloudflare Tunnel to expose Veil to Umbratic when Veil runs on a private server. The tunnel should point to Veil, for example `http://127.0.0.1:8080`, and the Ollama or vLLM runtime should stay private behind Veil.
+Use Cloudflare Tunnel to expose Veil to Umbratic when Veil runs on a private server. The tunnel should point to Veil, for example `http://127.0.0.1:8080`, and the model runtime should stay private behind Veil.
 
-Do not expose Ollama or vLLM directly. In company identity mode, Umbratic needs
+Do not expose the model runtime directly. In company identity mode, Umbratic needs
 only the Veil URL and a one-time Enrollment code. The desktop does not keep the
 Enrollment code after enrollment.
 
@@ -328,7 +323,7 @@ uses an app-generated transient credential, and starts with telemetry ingestion
 disabled. Override local runtime values for one run through the environment:
 
 ```sh
-UMBRATIC_LOCAL_MODEL_ID=llama3.2 npm run desktop:dev
+UMBRATIC_LOCAL_MODEL_ID=gemma4-e4b npm run desktop:dev
 ```
 
 ## Test
@@ -345,13 +340,9 @@ go fmt ./...
 
 ## Umbratic Desktop Settings
 
-Local mode configures the model runtime rather than Veil itself:
-
-```text
-Runtime:      Ollama or vLLM
-Runtime URL:  http://127.0.0.1:11434
-Model:        llama3.2
-```
+Local mode has no runtime settings to type: the user downloads a model from the
+reviewed catalog and picks it. The app owns the llama-server and Veil processes
+behind that choice.
 
 Packaged Umbratic includes the Veil executable and starts it on demand. Company
 server mode instead points Umbratic at an existing customer Veil deployment:

@@ -15,7 +15,7 @@ Do not merge Console code into Veil. Console can change Veil only through its fi
   This means whoever holds an admin session picks the flags, including dangerous ones — `--trust-remote-code` runs code from the model repository. Accepted for a loopback surface operated by someone who already controls the machine. Do not extend it: no shell, no second binary, no environment editor.
 - Store passwords as versioned Argon2id verifiers. Store session and setup tokens only as hashes.
 - Put non-secret state in SQLite. Put only the Veil token and CSRF signing key in the restricted secret file.
-- Support only local Ollama or local vLLM runtimes without provider authentication.
+- Support only the local vLLM runtimes Console launches itself, without provider authentication.
 - Keep secrets out of URLs, logs, audit rows, database configuration rows, templates, and errors. A new Veil token can appear once in a no-store authenticated response.
 - Validate Host, Origin, CSRF, method, content type, and body size for every state change.
 - Veil lifecycle and settings changes re-confirm the owner password and rotate the session. Model management deliberately does not: it is session plus CSRF, because asking three times per card bought nothing on a locked local deployment.

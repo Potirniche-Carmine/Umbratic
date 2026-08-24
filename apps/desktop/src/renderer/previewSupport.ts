@@ -3,11 +3,12 @@ import {
   normalizeContextLength,
 } from "../shared/contextWindow";
 import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
+import { defaultModelEndpointSettings, normalizeEndpointSettings } from "./endpointSettings";
+import { defaultHarnessProfileId, isHarnessProfileId } from "./harnessProfile";
 import type {
   ChatRecord,
   HarnessProfileId,
   IdeInfo,
-  ModelEndpointMode,
   PermissionMode,
   PublicModelEndpointSettings,
   ReasoningEffort,
@@ -24,18 +25,6 @@ const previewHarnessProfileKey = "umbratic-preview-harness-profile";
 const previewContextLengthKey = "umbratic-preview-context-length";
 const previewReasoningEffortKey = "umbratic-preview-reasoning-effort";
 const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
-export const defaultHarnessProfileId: HarnessProfileId = "engineering";
-const defaultModelEndpointSettings: ModelEndpointSettings = {
-  mode: "local",
-  baseUrl: "http://127.0.0.1:11434",
-  modelId: "",
-  secret: "",
-  secretConfigured: false,
-  headers: [
-    { name: "", value: "", valueConfigured: false },
-    { name: "", value: "", valueConfigured: false },
-  ],
-};
 export const defaultIdeChoices: IdeInfo[] = [
   { id: "code", label: "VS Code", icon: "vscode" },
   { id: "visualstudio", label: "Visual Studio", icon: "visualstudio" },
@@ -97,10 +86,6 @@ export function writePreviewNotes(content: string): UserNotes {
   return notes;
 }
 
-export function isHarnessProfileId(value: unknown): value is HarnessProfileId {
-  return value === "marketing" || value === "sales" || value === "engineering";
-}
-
 export function readPreviewHarnessProfile(): HarnessProfileId {
   const profileId = window.localStorage.getItem(previewHarnessProfileKey);
   return isHarnessProfileId(profileId)
@@ -145,59 +130,6 @@ export function writePreviewContextLength(contextLength: number): void {
   );
 }
 
-function normalizeEndpointHeaders(
-  value: unknown,
-): Array<{ name: string; value: string; valueConfigured: boolean }> {
-  const rows = Array.isArray(value) ? value : [];
-  const headers = rows.slice(0, 2).map((row) => {
-    if (!row || typeof row !== "object" || Array.isArray(row)) {
-      return { name: "", value: "", valueConfigured: false };
-    }
-    const record = row as Record<string, unknown>;
-    return {
-      name: typeof record.name === "string" ? record.name : "",
-      value: typeof record.value === "string" ? record.value : "",
-      valueConfigured: record.valueConfigured === true,
-    };
-  });
-  while (headers.length < 2) {
-    headers.push({ name: "", value: "", valueConfigured: false });
-  }
-  return headers;
-}
-
-function defaultEndpointBaseUrlForMode(mode: ModelEndpointMode): string {
-  return mode === "local"
-    ? "http://127.0.0.1:11434"
-    : "https://your-veil-server.example";
-}
-
-export function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { ...defaultModelEndpointSettings };
-  }
-  const settings = value as Partial<ModelEndpointSettings>;
-  const mode =
-    settings.mode === "local" || settings.mode === "server"
-      ? settings.mode
-      : defaultModelEndpointSettings.mode;
-  return {
-    mode,
-    baseUrl:
-      typeof settings.baseUrl === "string"
-        ? settings.baseUrl
-        : defaultEndpointBaseUrlForMode(mode),
-    modelId:
-      typeof settings.modelId === "string"
-        ? settings.modelId
-        : mode === "local"
-          ? ""
-          : "veil-managed",
-    secret: typeof settings.secret === "string" ? settings.secret : "",
-    secretConfigured: settings.secretConfigured === true,
-    headers: normalizeEndpointHeaders(settings.headers),
-  };
-}
 
 export function readPreviewEndpointSettings(): ModelEndpointSettings {
   try {

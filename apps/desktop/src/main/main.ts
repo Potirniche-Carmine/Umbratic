@@ -89,12 +89,12 @@ import {
   saveSkillSettings as saveSkillSettingsService,
 } from "./skills";
 import type { PermissionMode, TaskInfo } from "./types";
-import { isRecord, requiredString } from "./utils";
+import { isRecord, normalizeRelativePath, requiredString } from "./utils";
 import {
   registerDesktopIpcHandlers,
   type DesktopIpcHandlers,
 } from "./ipcRegistry";
-import { readTaskDocumentReview } from "./documentReview";
+import { readArtifactPreview } from "./artifactReview";
 import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
 import * as appPaths from "./appPaths";
 import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
@@ -171,10 +171,17 @@ function publicTaskById(input: unknown): TaskInfo | null {
   return task ? publicTask(task) : null;
 }
 
-function readDocumentReview(input: unknown) {
-  if (!isRecord(input)) throw new Error("Invalid document review input.");
+async function readReviewArtifactPreview(input: unknown) {
+  if (!isRecord(input)) throw new Error("Invalid artifact preview input.");
   const task = getTask(requiredString(input.taskId, "taskId"));
-  return readTaskDocumentReview(task, requiredString(input.documentPath, "documentPath"));
+  const documentPath = requiredString(input.documentPath, "documentPath");
+  // Only files in the task's review list can be previewed; the review is
+  // what the renderer is looking at, and the preview should not read wider.
+  const normalized = normalizeRelativePath(documentPath);
+  if (!task.reviewFiles.some((file) => normalizeRelativePath(file.path) === normalized)) {
+    return { ok: false as const, code: "not_available" as const, message: "No preview is available for this file." };
+  }
+  return readArtifactPreview(task, documentPath);
 }
 
 function setPermissionMode(input: unknown): PermissionMode {
@@ -372,7 +379,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     restoreTaskCheckpoint: (input) => restoreCheckpoint(input),
     refreshTaskReview: (input) => refreshTaskReview(input),
     refreshWorkspaceReview: (input) => refreshWorkspaceReview(input),
-    readDocumentReview: (input) => readDocumentReview(input),
+    readArtifactPreview: (input) => readReviewArtifactPreview(input),
     searchFiles: (input) => searchRepositoryFiles(input),
     pickRepository: () => pickRepository(),
     pickAttachmentFiles: (input) => pickAttachmentFiles(input),
