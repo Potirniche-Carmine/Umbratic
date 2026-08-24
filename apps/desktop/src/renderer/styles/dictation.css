@@ -222,6 +222,13 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  /* Grid items floor at their own min-content width unless told otherwise, so
+     a device named "Microphone (3- Logitech PRO X Wireless Gaming Headset)"
+     pushed itself straight through the menu's right edge instead of
+     ellipsising inside it — the menu's max-width could not hold a row that
+     refused to shrink. Windows shows it first: its device names are the long
+     ones. */
+  min-width: 0;
   min-height: 30px;
   padding: 5px 8px;
   border: 0;

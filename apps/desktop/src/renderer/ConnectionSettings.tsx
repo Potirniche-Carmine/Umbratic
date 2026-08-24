@@ -610,7 +610,6 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
       <div className="settingsPanelHead connectionPanelHead">
         <div>
           <h3>Connection</h3>
-          <p>Use Local or connect this device to a company server.</p>
         </div>
         <div className="connectionCompactStatus">
           <span
@@ -641,7 +640,6 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
       </div>
 
       <div className="settingsGroup">
-        <h4>Run mode</h4>
         <div className="connectionModeGrid" aria-label="Model connection type">
           <button
             className={draft.mode === "local" ? "isActive" : ""}
@@ -669,7 +667,6 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
       </div>
 
       <div className="settingsGroup">
-        <h4>{draft.mode === "local" ? "Local collection" : "Company server"}</h4>
         {draft.mode === "local" ? (
           <>
             <LocalModelMenu

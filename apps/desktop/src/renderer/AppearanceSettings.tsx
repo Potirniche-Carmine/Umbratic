@@ -51,7 +51,6 @@ export function AppearanceSettingsPanel({
       </div>
 
       <div className="settingsGroup">
-        <h4>Theme</h4>
         <div className="appearanceOptionGrid">
           {themeOptions.map((option) => (
             <button
@@ -69,7 +68,6 @@ export function AppearanceSettingsPanel({
       </div>
 
       <div className="settingsGroup">
-        <h4>Fonts</h4>
         <Combobox
           label="Interface"
           items={uiFontOptions.map((font) => ({ id: font, label: font }))}

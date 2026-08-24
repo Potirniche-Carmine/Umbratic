@@ -167,11 +167,6 @@ const chatOnlyRole: ModelRole = {
   detail: "Good for questions and drafting. Tool calling is inconsistent, so not for agentic runs.",
 };
 
-const uncensoredChatRole: ModelRole = {
-  label: "Security chat",
-  detail: "Answers security questions the safety-trained builds decline. Tool calling is inconsistent.",
-};
-
 /**
  * Gemma 4's recommended sampling. One set for every use case — its card gives
  * the same numbers whether or not the model is thinking, so both slots below
@@ -191,20 +186,6 @@ const gemmaReasoning = {
   reasoning: true,
   reasoningEfforts: ["off", "on"] as const,
   sampling: { thinking: gemmaSampling, instruct: gemmaSampling },
-};
-
-/**
- * Gemma 4 12B's multi-token-prediction head. Google ships it as a separate
- * drafter rather than inside the weights, so each 12B quantization lists it
- * alongside the GGUF: one download brings both. The E-series are
- * mixture-of-experts and we do not draft from them, so they do not carry a
- * head. This is the Q8_0 build at the repository root, the one the card's
- * own examples load.
- */
-const gemma12BHead: CatalogFile = {
-  name: "mtp-gemma-4-12b-it.gguf",
-  bytes: 465_109_248,
-  sha256: "145db9094bc0f85f1701e255a2ed216dcc9800fc8bc8631ad00905b456bd451b",
 };
 
 /**
@@ -300,56 +281,11 @@ export const modelCatalog: readonly CatalogModel[] = [
         }],
       },
     ],
-    minRamGB: 12,
+    // Its Q4_K_M is 5.0 GB, which leaves room for the context on an 8 GB card
+    // rather than needing 12. Asking for 12 marked it a tight fit on hardware
+    // it runs on perfectly well, which is the machine most likely to want it.
+    minRamGB: 8,
     role: chatOnlyRole,
-    ...gemmaReasoning,
-  },
-  {
-    id: "gemma4-12b",
-    kind: "chat",
-    displayName: "Gemma 4 12B",
-    hfRepo: "unsloth/gemma-4-12b-it-GGUF",
-    hfRevision: "fc034cfff751157913579611efad8462ac1be606",
-    quants: [
-      {
-        quant: "Q4_K_M",
-        files: [{
-          name: "gemma-4-12b-it-Q4_K_M.gguf",
-          bytes: 7_121_861_440,
-          sha256: "0a270ec9fe6b34f4a0d33992b6135117b484ebc4766ab76b51d4ae8c457e4c42",
-        }, gemma12BHead],
-      },
-      {
-        quant: "Q5_K_M",
-        files: [{
-          name: "gemma-4-12b-it-Q5_K_M.gguf",
-          bytes: 8_413_576_000,
-          sha256: "32c554c7d1338a23837ae39b3db482213a4a642f96df3b2619f516a2375d16cd",
-        }, gemma12BHead],
-      },
-      {
-        quant: "Q6_K",
-        files: [{
-          name: "gemma-4-12b-it-Q6_K.gguf",
-          bytes: 9_786_022_720,
-          sha256: "6f394336500bb5409bd68c31aa9d75097b5e6104f6cf30c82a09a7b64df41faf",
-        }, gemma12BHead],
-      },
-      {
-        quant: "Q8_0",
-        files: [{
-          name: "gemma-4-12b-it-Q8_0.gguf",
-          bytes: 12_669_647_680,
-          sha256: "f20e7ff1be28c283eeeb18fc895733791c56a5851d5cd3fe9691b7f7d12afa72",
-        }, gemma12BHead],
-      },
-    ],
-    minRamGB: 16,
-    mtp: true,
-    role: {
-      label: "Light agentic",
-      detail: "Steadier tool calling than the E-series, and still light. Fine for short agentic runs.",
-    },
     ...gemmaReasoning,
   },
   {
@@ -483,58 +419,13 @@ export const modelCatalog: readonly CatalogModel[] = [
     },
   },
   {
-    id: "gemma4-e4b-uncensored",
-    kind: "chat",
-    displayName: "Gemma 4 E4B Uncensored",
-    hfRepo: "HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive",
-    hfRevision: "45b6a334b4bcd1d7f37179df58b3b1d66a184e5d",
-    // The upper rungs are this repository's own K_P builds; it does not publish
-    // a plain Q6_K or Q8_0. No MTP: the GGUFs carry no head and the repository
-    // ships no drafter, and Google's E4B drafter was trained against the
-    // safety-trained weights, not this rebuild.
-    quants: [
-      {
-        quant: "Q4_K_M",
-        files: [{
-          name: "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
-          bytes: 5_335_285_728,
-          sha256: "d0027dd3a9128d9323e9f282c8bf010a8526c46477584535991dc1a869b56e96",
-        }],
-      },
-      {
-        quant: "Q5_K_M",
-        files: [{
-          name: "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q5_K_M.gguf",
-          bytes: 5_762_908_128,
-          sha256: "c96f1afc2af92bb27b1d5057fd91c8f6e41e9a72f9f32faa389e1601a6963ee6",
-        }],
-      },
-      {
-        quant: "Q6_K_P",
-        files: [{
-          name: "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf",
-          bytes: 6_249_794_528,
-          sha256: "f28b0ae262158af10d847c3f01bfdb943161dd31320f3aed20775ee2ad6c67a6",
-        }],
-      },
-      {
-        quant: "Q8_K_P",
-        files: [{
-          name: "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q8_K_P.gguf",
-          bytes: 8_133_226_464,
-          sha256: "a4c4177f9fd7e3f56522675afb742f079a53f9226195b7db5e9888c872f053da",
-        }],
-      },
-    ],
-    minRamGB: 12,
-    role: uncensoredChatRole,
-    ...gemmaReasoning,
-    uncensored: true,
-  },
-  {
+    // The id is the folder these weights already live in on disk, so it keeps
+    // the build's own name. "Obliterated" is what the upstream rebuild is
+    // called, not something a reader of this list has to know; the name shown
+    // says what the model is.
     id: "qwen38-27b-obliterated",
     kind: "chat",
-    displayName: "Qwen3.8 27B Obliterated",
+    displayName: "Qwen3.8 27B Uncensored",
     hfRepo: "OBLITERATUS/Qwen3.8-27B-OBLITERATED",
     hfRevision: "e335d239dbdfae590687e24b800e81a18d070ebe",
     // One repository holding both the safetensors and its own GGUF builds,

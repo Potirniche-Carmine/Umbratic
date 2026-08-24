@@ -370,9 +370,11 @@ export function LocalModelMenu({
       <RemoveModelButton modelName={model.displayName} onRemove={() => onRemove(model.id)} />
     ) : null;
     // Facts about the model sit next to its name as quiet marks, not as pills.
-    // A row wearing three outlined pills reads as a row shouting three times,
-    // and none of these is a suggestion — only "Recommended" is, so it is the
-    // only one that keeps a pill.
+    // Only what changes the choice: where the weights came from, and that a
+    // build has had its safety training removed. "MTP" was here too and is
+    // gone — it named an implementation detail of how the model decodes, which
+    // is the toggle's business below the list, not a thing to weigh when
+    // picking between two models.
     const traits = (
       <>
         {model.discovered ? (
@@ -381,11 +383,6 @@ export function LocalModelMenu({
           </span>
         ) : null}
         {model.uncensored ? <span className="localModelTrait">Uncensored</span> : null}
-        {model.mtp ? (
-          <span className="localModelTrait" title="Drafts several tokens per step when MTP is on">
-            MTP
-          </span>
-        ) : null}
         {/* The suggestion is spent once it has been taken: the selected row
             already carries a tick and, while it is resident, an Unload button,
             and the pill was the thing squeezing its name into an ellipsis. */}
@@ -811,7 +808,6 @@ export function LocalMtpToggle({
     <div className="localMtpRow">
       <div className="localMtpText">
         <strong>Faster decoding (MTP)</strong>
-        <span>Drafts several tokens per step on dense models. Turn off if replies get slower.</span>
       </div>
       <button
         type="button"
@@ -849,7 +845,6 @@ export function LocalModelFolder({ api }: { api: DesktopApi }) {
         <FolderOpen size={13} />
         <span>Open models folder</span>
       </button>
-      <span className="localModelNote">Downloaded models can be deleted here to free space.</span>
       {message ? <p className="settingsMessage">{message}</p> : null}
     </div>
   );

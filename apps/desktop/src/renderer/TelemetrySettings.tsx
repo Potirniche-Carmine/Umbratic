@@ -45,7 +45,6 @@ export function TelemetrySettingsPanel({
       </div>
 
       <div className="settingsGroup">
-        <h4>Local logs</h4>
         <div className="localLogsControl">
           <strong>{localLogSize}</strong>
           <div>

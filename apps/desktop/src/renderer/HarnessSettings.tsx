@@ -41,7 +41,6 @@ export function HarnessSettingsPanel({
       </div>
 
       <div className="settingsGroup">
-        <h4>Profile</h4>
         <div className="harnessOptionGrid">
           {harnessProfiles.map((profile) => (
             <button
@@ -64,7 +63,6 @@ export function HarnessSettingsPanel({
       <div className={`settingsGroup contextLengthGroup ${endpointMode === "server" ? "isDisabled" : ""}`}>
         <div className="contextLengthHead">
           <div>
-            <h4>Model context</h4>
             <p>Choose the context window the local model uses.</p>
           </div>
         </div>
@@ -100,11 +98,14 @@ export function HarnessSettingsPanel({
             ))}
           </div>
         </div>
-        <p className="contextLengthHint">
-          {endpointMode === "server"
-            ? "Context length is managed by your Veil server. Switch to Local to configure it here."
-            : "64K is the default. Veil verifies the effective model limit when each new chat starts; larger windows use more memory."}
-        </p>
+        {/* The server case still needs its line: the slider is disabled and
+            nothing else on screen says why. The local case explained what the
+            slider already shows. */}
+        {endpointMode === "server" ? (
+          <p className="contextLengthHint">
+            Context length is managed by your Veil server. Switch to Local to configure it here.
+          </p>
+        ) : null}
       </div>
 
       <div className="settingsActions harnessSettingsActions">

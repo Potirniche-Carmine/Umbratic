@@ -75,7 +75,6 @@ export function AboutSettingsPanel({ api }: { api: DesktopApi }) {
       </div>
 
       <div className="settingsGroup">
-        <h4>This build</h4>
         <div className="aboutRow">
           <div className="aboutRowText">
             <strong>
@@ -105,7 +104,6 @@ export function AboutSettingsPanel({ api }: { api: DesktopApi }) {
       </div>
 
       <div className="settingsGroup">
-        <h4>Automatic checks</h4>
         <div className="aboutRow">
           <div className="aboutRowText">
             <strong>Check for updates automatically</strong>

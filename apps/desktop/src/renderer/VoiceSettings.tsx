@@ -83,7 +83,6 @@ export function VoiceSettings({
       </div>
 
       <div className="settingsGroup">
-        <h4>Dictation model</h4>
         {serverMode ? (
           <p className="settingsMessage">
             {speechAdvertised

@@ -84,10 +84,6 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
     label: "Chat",
     detail: "Good for questions and drafting. Tool calling is inconsistent, so not for agentic runs.",
   };
-  const securityChatRole = {
-    label: "Security chat",
-    detail: "Answers security questions the safety-trained builds decline. Tool calling is inconsistent.",
-  };
   // Downloaded first, matching the main process's ordering.
   return [
     row("gemma4-e2b", "Gemma 4 E2B", 3_106_738_272, 8, { downloaded: true, role: chatRole }),
@@ -96,14 +92,7 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
     // A GGUF somebody put in the models folder themselves: here, runnable, and
     // nothing this collection has read a card for.
     row("local-qwen3-coder-30b", "Qwen3 Coder 30B", 18_600_000_000, 28, { downloaded: true, discovered: true }),
-    row("gemma4-e4b", "Gemma 4 E4B", 4_977_171_584, 12, { role: chatRole }),
-    row("gemma4-12b", "Gemma 4 12B", 7_586_970_688, 16, {
-      mtp: true,
-      role: {
-        label: "Light agentic",
-        detail: "Steadier tool calling than the E-series, and still light. Fine for short agentic runs.",
-      },
-    }),
+    row("gemma4-e4b", "Gemma 4 E4B", 4_977_171_584, 8, { role: chatRole }),
     row("ornith-1.5-35b-a3b", "Ornith 1.5 35B A3B", 21_713_462_848, 32, {
       role: {
         label: "Agentic coding",
@@ -119,8 +108,7 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
         detail: "Reliable tool calling over long multi-step runs. The one to pick for agentic work.",
       },
     }),
-    row("gemma4-e4b-uncensored", "Gemma 4 E4B Uncensored", 5_335_285_728, 12, { uncensored: true, role: securityChatRole }),
-    row("qwen38-27b-obliterated", "Qwen3.8 27B Obliterated", 16_810_714_400, 32, {
+    row("qwen38-27b-obliterated", "Qwen3.8 27B Uncensored", 16_810_714_400, 32, {
       uncensored: true,
       mtp: true,
       role: {

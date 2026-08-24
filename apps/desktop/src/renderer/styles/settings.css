@@ -176,13 +176,19 @@
     color-mix(in srgb, var(--surface) 38%, transparent);
 }
 
+/* A heading, not an eyebrow. The small-caps kicker was chrome on a page that
+   is already a stack of separated cards: it labelled groups whose contents
+   said the same thing louder, and it made the few headings that do carry
+   meaning — which of two telemetry lists is the private one, which shortcut
+   group this is — read as decoration too. Those are kept, in sentence case at
+   reading size; the redundant ones are gone. */
 .settingsGroup h4 {
   margin: 0 0 2px;
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .telemetryPrivacyNotice {
@@ -502,12 +508,13 @@
   gap: 6px;
 }
 
+/* Field labels read as labels rather than as kickers, for the same reason. */
 .settingsField > span {
   color: var(--faint);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .settingsField input,
