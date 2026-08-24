@@ -242,27 +242,8 @@
   padding: 0 0 0 18px;
   /* One rise on mount, never per token: the element persists across streaming
      re-renders, so the animation runs exactly once, when the message first
-     appears. Direct answers use this. A lift from Working skips it — that
-     text is already on the page, and the restyle below is the hand-off. */
+     appears — the answer's first token, whether or not work came before it. */
   animation: assistantMessageIn 280ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
-}
-
-/* The same words, promoted: skip the entrance pop, restyle from narration
-   colour to answer colour, and let the rail fade in. Transform to the in-flow
-   slot is applied in layout so the paragraph does not drop then rise. */
-.timeline > .timelineMessage.assistantMessage.isLifted {
-  content-visibility: visible;
-  animation: none;
-}
-
-.timelineMessage.assistantMessage.isLifted::before {
-  animation: answerLiftRail 480ms cubic-bezier(0.22, 1, 0.32, 1) both;
-}
-
-.timelineMessage.assistantMessage.isLifted .markdownContent,
-.timelineMessage.assistantMessage.isLifted .markdownContent p,
-.timelineMessage.assistantMessage.isLifted .markdownContent li {
-  animation: answerLiftRestyle 480ms cubic-bezier(0.22, 1, 0.32, 1) both;
 }
 
 .timelineActivity + .timelineMessage.assistantMessage {
@@ -461,8 +442,8 @@
   transition: opacity 130ms ease-out 45ms;
 }
 
-/* After the answer has lifted out, tuck the log away slowly so the reply
-   rides up with the closing body rather than jumping. */
+/* A finished block tucks away slowly so the answer streaming beneath it rides
+   up with the closing body rather than jumping. */
 .timelineActivity.isFinished .activityBody:not(.open) {
   transition: grid-template-rows 520ms cubic-bezier(0.22, 1, 0.32, 1);
 }

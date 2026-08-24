@@ -2,7 +2,6 @@ import { ChevronDown, ChevronRight, Sparkles, SquareTerminal } from "lucide-reac
 import type { Dispatch, MutableRefObject, PointerEvent, SetStateAction, TouchEvent, UIEvent, WheelEvent } from "react";
 import type { SkillInfo } from "../shared/desktopApi";
 import { activityHasNarration, activityHasTools, activitySummary } from "./activityTiming";
-import { rememberHeldAnswerRect } from "./answerLift";
 import {
   activityToolLabel,
   commandHasVisibleDetails,
@@ -118,9 +117,8 @@ export function WorkingBlock({
                 case "reasoning":
                   return (
                     <section
-                      className={`activityLogEntry reasoningLog ${segment.kind === "thinking" ? "isThinking" : ""} ${segment.held ? "isHeldAnswer" : ""} ${segment.finished ? "" : "isStreaming"}`}
+                      className={`activityLogEntry reasoningLog ${segment.kind === "thinking" ? "isThinking" : ""} ${segment.finished ? "" : "isStreaming"}`}
                       key={segment.id}
-                      ref={segment.held ? rememberHeldAnswerRect : undefined}
                     >
                       {segment.kind === "thinking" ? <span className="activityThinkingLabel">Thinking</span> : null}
                       <WorkMarkdownContent content={segment.text.trim()} streaming={!item.finished && !segment.finished} />

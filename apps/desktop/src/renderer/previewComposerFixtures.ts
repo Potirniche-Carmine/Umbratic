@@ -114,8 +114,9 @@ const composerTestStageEvents: BackendUiEvent[] = composerTestStage ? [
     { type: "command.started" as const, taskId: "composer-test", id: "stage-curl", command: "curl -s localhost:3000/health", cwd: "/workspace/Umbratic", kind: "bash" as const, commandClass: "network" as const, at: new Date(Date.now() - 5_000).toISOString() },
     { type: "command.output" as const, taskId: "composer-test", id: "stage-curl", stream: "stdout" as const, text: "{\"status\":\"ok\"}\n", at: new Date(Date.now() - 4_000).toISOString() },
     { type: "command.finished" as const, taskId: "composer-test", id: "stage-curl", exitCode: 0, at: new Date(Date.now() - 3_000).toISOString() },
-    // No `assistant.done`: the answer is still arriving, so it stays inside
-    // the open Working block with a caret, and the message actions stay off it.
+    // No `assistant.done`: the answer is still arriving, so it streams as a
+    // message below the finished Working block with a caret, and the message
+    // actions stay off it.
     { type: "assistant.delta" as const, taskId: "composer-test", text: "The endpoint is live at `/health` and returns `{\"status\":\"ok\"}`.\n\nIt is registered before the auth middleware, so an uptime check can reach it without a", at: new Date(Date.now() - 1_000).toISOString() },
   ] : []),
 ] : [];

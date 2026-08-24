@@ -194,7 +194,7 @@ import {
   AssistantAnswerContent,
   MarkdownContent,
 } from "./markdownContent";
-import { useAnswerLift } from "./answerLift";
+import { useActivityTuckDelay } from "./activityTuck";
 import { WorkingBlock } from "./workingBlock";
 import { filterSkillsBySource, skillPreviewMarkdown } from "./skillDisplay";
 import { reviewCloseSpring, reviewOpenSpring, reviewSpringStep, type ReviewSpring } from "./reviewSpring";
@@ -680,7 +680,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const composerItemSoftLimit = 120;
     return items.length <= composerItemSoftLimit ? items : items.slice(-composerItemSoftLimit);
   }, [task?.prompt, task?.state, visibleEvents]);
-  const { liftedAssistantId, keepFinishedOpen } = useAnswerLift(composerItems);
+  const keepFinishedOpen = useActivityTuckDelay(composerItems);
   const lastAssistantItemId = [...composerItems].reverse().find((item) => item.type === "assistant")?.id;
   const reviewReadyForDisplay =
     task?.state === "review_ready"
@@ -993,7 +993,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         composerItems,
         task?.id,
         autoOpenedActivityIdsRef.current,
-        Boolean(keepFinishedOpen),
+        keepFinishedOpen,
       );
       autoOpenedActivityIdsRef.current = next.autoOpenedKeys;
       for (const id of next.newlyOpenedIds) {
@@ -3948,7 +3948,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         settled={!isGenerating || item.id !== lastAssistantItemId}
                         rating={responseFeedback.get(item.id)}
                         copyText={item.text}
-                        lifted={item.id === liftedAssistantId}
                         onCopy={(text) => void copyText(text)}
                         onRate={openResponseFeedbackDialog}
                         documents={

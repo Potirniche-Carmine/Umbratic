@@ -42,7 +42,7 @@ export type AppearanceSettings = {
 export type PermissionRequest = TaskPermissionRequest;
 
 export type ComposerActivitySegment =
-  | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean; kind?: "thinking"; held?: boolean }
+  | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean; kind?: "thinking" }
   | {
       type: "skill";
       id: string;
@@ -83,9 +83,9 @@ export type ComposerTimelineItem =
     }
   // `final` marks the prose nothing follows: the turn's answer. Everything
   // earlier — the opening sentence, narration between rounds of work — is
-  // progress, and reads that way. After tools, live prose is held inside
-  // Working until the turn ends; it is marked `final` only once it has been
-  // promoted out, so it never restyles back into narration.
+  // progress, and reads that way. Live prose streams as the answer from its
+  // first token; if more work opens beneath it, the reducer folds it into the
+  // Working block as narration instead.
   | { type: "assistant"; id: string; text: string; streaming?: boolean; final?: boolean };
 
 export type SkillSourceFilter = "local" | "system";

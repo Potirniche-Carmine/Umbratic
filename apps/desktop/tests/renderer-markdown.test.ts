@@ -544,13 +544,14 @@ test("only the prose nothing follows is the turn's answer", () => {
   assert.deepEqual(settled.map((item) => item.type), ["user", "activity", "assistant"]);
   assert.equal(settled[1].segments[0].text, "I will explore the project layout.");
 
-  // After tools, live prose is held inside Working until the turn ends. It is
-  // not the answer yet — the next event might be another tool.
+  // After tools, live prose streams as the answer from its first token — the
+  // same page the settled derivation produces, so the end of the stream moves
+  // nothing.
   const midStream = JSON.parse(JSON.stringify(composerTimelineFromEvents(turn, undefined, "running")));
-  assert.deepEqual(midStream.map((item) => item.type), ["user", "activity"]);
-  assert.equal(midStream[1].segments.at(-1).text, "This is a website project.");
-  assert.equal(midStream[1].segments.at(-1).held, true);
-  assert.equal(midStream.filter((item) => item.type === "assistant").length, 0);
+  assert.deepEqual(midStream.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.equal(midStream[2].text, "This is a website project.");
+  assert.equal(midStream[2].streaming, true);
+  assert.equal(midStream[2].final, true);
 
   // And a turn that answers without doing any work has an answer, not an
   // opening sentence.

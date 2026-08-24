@@ -310,16 +310,35 @@ export function MarkdownContent({
   onReviewFileClick,
   reviewFiles,
   trailingInline,
-}: { content: string; trailingInline?: React.ReactNode } & ReviewReferenceOptions) {
+  streaming = false,
+  caretClassName,
+}: {
+  content: string;
+  trailingInline?: React.ReactNode;
+  streaming?: boolean;
+  caretClassName?: string;
+} & ReviewReferenceOptions) {
   const blocks = useMemo(() => parseMarkdown(content), [content]);
   const blockKeys = useMemo(() => blocks.map((block) => JSON.stringify(block)), [blocks]);
   const referenceOptions = useMemo(() => ({ onReviewFileClick, reviewFiles }), [onReviewFileClick, reviewFiles]);
-  // Everything but the last block goes through the memo, same as the streaming
-  // path. A settled message re-renders whenever anything in the app does, and
-  // in a long chat that is every message on every streamed token; the memo
-  // means React reconciles the paragraphs it already has only when their own
-  // text changes. The last block stays direct because it carries the caller's
-  // trailing node, which the memo deliberately does not compare.
+  // One component for streaming and settled rendering: the flip at the end of
+  // a stream is then an ordinary re-render — the caret leaves, the tail block
+  // stops being stabilized — instead of a remount that rebuilds every
+  // paragraph and code block in one frame.
+  //
+  // The caret rides at the end of the text being written — inside the code
+  // box while a fence is open, in the last cell of a table — rather than on
+  // its own line under the block, where it read as a cursor stranded at the
+  // bottom of the message. Only a rule has nowhere to put it.
+  const caret = streaming && caretClassName ? <span className={caretClassName} aria-hidden="true" /> : null;
+  const lastBlock = blocks.at(-1);
+  const caretInline = !!caret && !!lastBlock && lastBlock.type !== "rule";
+  // Everything but the last block goes through the memo. A settled message
+  // re-renders whenever anything in the app does, and in a long chat that is
+  // every message on every streamed token; the memo means React reconciles the
+  // paragraphs it already has only when their own text changes. The last block
+  // stays direct because it carries the caret or the caller's trailing node,
+  // which the memo deliberately does not compare.
   return (
     <div className="markdownContent">
       {blocks.map((block, index) =>
@@ -333,12 +352,13 @@ export function MarkdownContent({
         ) : (
           <MarkdownBlockView
             key={index}
-            block={block}
+            block={streaming ? stabilizedStreamingBlock(block) : block}
             referenceOptions={referenceOptions}
-            trailingInline={trailingInline}
+            trailingInline={caretInline ? caret : trailingInline}
           />
         ),
       )}
+      {caret && !caretInline ? caret : null}
     </div>
   );
 }
@@ -348,14 +368,35 @@ export function LongMarkdownContent({
   onReviewFileClick,
   reviewFiles,
   trailingInline,
-}: { content: string; trailingInline?: React.ReactNode } & ReviewReferenceOptions) {
+  streaming = false,
+  caretClassName,
+}: {
+  content: string;
+  trailingInline?: React.ReactNode;
+  streaming?: boolean;
+  caretClassName?: string;
+} & ReviewReferenceOptions) {
   const [expanded, setExpanded] = useState(false);
-  const preview = useMemo(() => markdownPreview(content, markdownPreviewCharacterLimit), [content]);
-  const displayContent = expanded || !preview.truncated ? content : preview.text;
+  // No preview while streaming: clamping would hide the live tail, and the
+  // scan is wasted work on every flushed batch. The offer to fold a very long
+  // response appears once it has finished arriving.
+  const preview = useMemo(
+    () => (streaming ? null : markdownPreview(content, markdownPreviewCharacterLimit)),
+    [content, streaming],
+  );
+  const truncated = !!preview?.truncated;
+  const displayContent = expanded || !truncated ? content : preview.text;
   return (
     <>
-      <MarkdownContent content={displayContent} onReviewFileClick={onReviewFileClick} reviewFiles={reviewFiles} trailingInline={trailingInline} />
-      {preview.truncated ? (
+      <MarkdownContent
+        content={displayContent}
+        onReviewFileClick={onReviewFileClick}
+        reviewFiles={reviewFiles}
+        trailingInline={trailingInline}
+        streaming={streaming}
+        caretClassName={caretClassName}
+      />
+      {truncated ? (
         <div className="messageOverflowNotice">
           <span>
             Showing a preview of a long response ({content.length.toLocaleString()} characters).
@@ -387,34 +428,6 @@ function stabilizedStreamingBlock(block: MarkdownBlock): MarkdownBlock {
   return block;
 }
 
-function StreamingMarkdownContent({ content, caretClassName }: { content: string; caretClassName?: string }) {
-  const blocks = useMemo(() => parseMarkdown(content), [content]);
-  const blockKeys = useMemo(() => blocks.map((block) => JSON.stringify(block)), [blocks]);
-  const caret = caretClassName ? <span className={caretClassName} aria-hidden="true" /> : null;
-  // The caret rides at the end of the text being written — inside the code
-  // box while a fence is open, in the last cell of a table — rather than on
-  // its own line under the block, where it read as a cursor stranded at the
-  // bottom of the message. Only a rule has nowhere to put it.
-  const lastBlock = blocks.at(-1);
-  const caretInline = !!lastBlock && lastBlock.type !== "rule";
-  return (
-    <div className="markdownContent">
-      {blocks.map((block, index) =>
-        index < blocks.length - 1 ? (
-          <MemoizedMarkdownBlockView key={index} block={block} blockKey={blockKeys[index]} />
-        ) : (
-          <MarkdownBlockView
-            key={index}
-            block={stabilizedStreamingBlock(block)}
-            trailingInline={caretInline ? caret : undefined}
-          />
-        ),
-      )}
-      {caretInline ? null : caret}
-    </div>
-  );
-}
-
 export function AssistantAnswerContent({
   content,
   streaming,
@@ -424,27 +437,27 @@ export function AssistantAnswerContent({
   content: string;
   streaming: boolean;
 } & ReviewReferenceOptions) {
-  if (streaming) {
-    return (
-      <div className="streamingTextContent">
-        <StreamingMarkdownContent content={content} caretClassName="streamingTextCaret" />
-      </div>
-    );
-  }
-  return <LongMarkdownContent content={content} onReviewFileClick={onReviewFileClick} reviewFiles={reviewFiles} />;
+  // The wrapper and everything inside it persist across the streaming →
+  // settled flip; only props change. Settling used to swap component types
+  // here, which unmounted the entire rendered answer and rebuilt it in one
+  // frame — the flash at the end of every response.
+  return (
+    <div className={streaming ? "streamingTextContent" : undefined}>
+      <LongMarkdownContent
+        content={content}
+        onReviewFileClick={onReviewFileClick}
+        reviewFiles={reviewFiles}
+        streaming={streaming}
+        caretClassName="streamingTextCaret"
+      />
+    </div>
+  );
 }
 
 export function WorkMarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
-  if (streaming) {
-    return (
-      <div className="workMarkdownContent isStreaming">
-        <StreamingMarkdownContent content={content} />
-      </div>
-    );
-  }
   return (
-    <div className="workMarkdownContent">
-      <MarkdownContent content={content} />
+    <div className={streaming ? "workMarkdownContent isStreaming" : "workMarkdownContent"}>
+      <MarkdownContent content={content} streaming={streaming} />
     </div>
   );
 }

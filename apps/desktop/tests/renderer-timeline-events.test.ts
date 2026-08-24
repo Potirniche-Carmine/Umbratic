@@ -222,26 +222,24 @@ test("command aggregation, pending permissions, and timelines reflect real event
   assert.equal(multiRoundTimeline[2].text, "This repository is a Next.js application.");
   assert.equal(multiRoundTimeline[2].final, true);
 
-  // After tools have run, live prose stays in Working until the turn ends.
-  // It might still be a mid-round report; promoting it on the first token made
-  // that report look like the answer, then jump back in when the next tool
-  // started. Direct answers (no tools yet) still stream outside from the first
-  // token.
+  // After tools have run, live prose streams below the block from its first
+  // token, and the block's elapsed window closes when the prose begins. If
+  // the prose turns out to be a mid-round report, the next tool folds it into
+  // the block as narration — the same move orientation makes.
   const streamingMidTurnTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "can you tell me about this folder?", at: "2026-01-01T00:00:00.000Z" },
     { type: "command.started", taskId: "task-1", id: "ls-1", command: "ls .", cwd: "C:/repo", kind: "read", commandClass: "read", at: "2026-01-01T00:00:01.000Z" },
     { type: "command.finished", taskId: "task-1", id: "ls-1", exitCode: 0, at: "2026-01-01T00:00:02.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "Now I will list the main subdirectories.", at: "2026-01-01T00:00:03.000Z" },
   ], undefined, "running")));
-  assert.deepEqual(streamingMidTurnTimeline.map((item) => item.type), ["user", "activity"]);
-  assert.equal(streamingMidTurnTimeline[1].finished, false);
-  assert.deepEqual(streamingMidTurnTimeline[1].segments.map((segment) => segment.type), ["command", "reasoning"]);
-  assert.equal(streamingMidTurnTimeline[1].segments[1].text, "Now I will list the main subdirectories.");
-  assert.equal(streamingMidTurnTimeline[1].segments[1].held, true);
-  assert.equal(streamingMidTurnTimeline[1].segments[1].finished, false);
+  assert.deepEqual(streamingMidTurnTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.equal(streamingMidTurnTimeline[1].finished, true);
+  assert.deepEqual(streamingMidTurnTimeline[1].segments.map((segment) => segment.type), ["command"]);
+  assert.equal(streamingMidTurnTimeline[2].text, "Now I will list the main subdirectories.");
+  assert.equal(streamingMidTurnTimeline[2].streaming, true);
   assert.match(
     activitySummary(streamingMidTurnTimeline[1], Date.parse("2026-01-01T00:00:08.000Z")),
-    /^Working/,
+    /^Worked for/,
   );
 
   // A stopped turn ends where it was: no error bubble, and whatever had already
@@ -280,7 +278,9 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "assistant.delta", taskId: "task-1", text: "Partial answer", at: "2026-01-01T00:00:03.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:04.000Z" },
   ], undefined, "completed")));
-  assert.equal(activitySummary(failedToolTimeline[1]), "Worked for 4 seconds");
+  // The work window closes at the answer's first token (00:00:03), not at
+  // assistant.done — the last second was talking, not working.
+  assert.equal(activitySummary(failedToolTimeline[1]), "Worked for 3 seconds");
 
   const delayedFirstTokenTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "Summarize the attachment", at: "2026-01-01T00:00:00.000Z" },
@@ -584,8 +584,9 @@ test("a turn that talks between rounds of tools is still one Working block", () 
   );
   assert.equal(timeline[1].segments[3].text, "Yes, I do — let me pull the actual stories.");
   // One elapsed figure covering the whole stretch of work, not one per round.
+  // It ends when the answer's first token arrives, not at assistant.done.
   assert.equal(timeline[1].startedAt, at(0));
-  assert.equal(timeline[1].endedAt, at(10));
+  assert.equal(timeline[1].endedAt, at(9));
   assert.equal(timeline[2].text, "Here's what's going on today.");
   assert.equal(timeline[2].final, true);
 });
