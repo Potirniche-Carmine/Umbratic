@@ -51,14 +51,23 @@ export type AcceleratorDevice = {
   /**
    * The device shares system memory rather than adding to it. Metal is always
    * unified: its figure is a working-set window onto installed RAM, so adding
-   * it to RAM would count the same gigabytes twice.
+   * it to RAM would count the same gigabytes twice. An integrated GPU is the
+   * same arrangement under another name — the memory it reports is a window
+   * onto the RAM already counted, not memory of its own.
    */
   unified: boolean;
 };
 
-/** "  Vulkan0: NVIDIA GeForce RTX 4070 (12282 MiB, 11000 MiB free)" */
+/**
+ * "  Vulkan0: NVIDIA GeForce RTX 4070 (discrete, 12282 MiB, 11000 MiB free)"
+ *
+ * The device kind comes from the patch in third_party: stock llama.cpp prints
+ * the parenthetical without it. The group stays optional so a list from an
+ * unpatched build still parses, one device short of its classification rather
+ * than not at all.
+ */
 const DEVICE_ROW = /^\s*([A-Za-z][A-Za-z0-9_]*?)\d*:\s*(.+?)\s*$/;
-const DEVICE_MEMORY = /\((\d+)\s*MiB(?:,\s*\d+\s*MiB free)?\)\s*$/;
+const DEVICE_MEMORY = /\((?:(discrete|integrated|accelerator),\s*)?(\d+)\s*MiB(?:,\s*\d+\s*MiB free)?\)\s*$/;
 
 /**
  * Rows that are not an accelerator on this machine.
@@ -91,9 +100,11 @@ export function parseAcceleratorDevices(output: string): AcceleratorDevice[] {
     const memory = rest.match(DEVICE_MEMORY);
     devices.push({
       backend: UNIFIED_BACKEND.test(backend) ? "Metal" : backend,
-      name: rest.replace(/\s*\(.*\)\s*$/, "").trim() || null,
-      memoryGB: memory ? Number(memory[1]) / 1024 : null,
-      unified: UNIFIED_BACKEND.test(backend),
+      // Only the trailing group, so a name carrying brackets of its own — "AMD
+      // Radeon(TM) Graphics" — keeps them instead of being cut at the first.
+      name: rest.replace(/\s*\([^()]*\)\s*$/, "").trim() || null,
+      memoryGB: memory ? Number(memory[2]) / 1024 : null,
+      unified: UNIFIED_BACKEND.test(backend) || memory?.[1] === "integrated",
     });
   }
   return devices;
@@ -122,10 +133,11 @@ export function acceleratorMemoryGB(devices: AcceleratorDevice[]): number | null
  * of those cases installed RAM is the whole answer, which is what this asked
  * before any of it could be known.
  *
- * One case this does not separate: an integrated GPU under Vulkan reports a
- * window onto system memory as if it were its own. Telling that apart needs the
- * device type out of ggml rather than its printed list. The figure it reports
- * tracks installed RAM, so the budget lands near the RAM answer either way.
+ * An integrated GPU under Vulkan reports a window onto system memory as if it
+ * were its own, and is excluded here for the same reason Metal is. It is not
+ * excluded from what the machine can run: llama.cpp offloads to an integrated
+ * GPU only when no discrete one is present, and in that case installed RAM is
+ * already the honest budget, which is what a null vramGB says.
  */
 export type MemoryBudget = {
   ramGB: number;

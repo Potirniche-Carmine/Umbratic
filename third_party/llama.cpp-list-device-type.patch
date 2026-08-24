@@ -1,0 +1,32 @@
+Print the ggml device type in `--list-devices`.
+
+ggml already classifies an integrated GPU as GGML_BACKEND_DEVICE_TYPE_IGPU,
+and llama.cpp uses that at load time to ignore integrated GPUs whenever a
+discrete one is present (see the "add integrated GPUs only if no discrete
+GPUs were found" branch in src/llama.cpp). common_print_available_devices
+drops the type, so a caller reading the printed list cannot apply the same
+rule: on a laptop with a discrete card beside an APU it sees two devices and
+adds a window onto system RAM to real VRAM.
+
+Umbratic reads this list to size models before anything is downloaded, so it
+needs the same distinction the runtime itself makes. Applied to the pinned
+checkout during packaging, after the pin commit is verified.
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 1f70d0a..2709a02 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -1157,7 +1157,13 @@ void common_print_available_devices() {
+     for (auto * dev : devices) {
+         size_t free, total;
+         ggml_backend_dev_memory(dev, &free, &total);
+-        printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / MiB, free / MiB);
++        const char * kind = "discrete";
++        switch (ggml_backend_dev_type(dev)) {
++            case GGML_BACKEND_DEVICE_TYPE_IGPU:  kind = "integrated";  break;
++            case GGML_BACKEND_DEVICE_TYPE_ACCEL: kind = "accelerator"; break;
++            default: break;
++        }
++        printf("  %s: %s (%s, %zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), kind, total / MiB, free / MiB);
+     }
+ }
+ 

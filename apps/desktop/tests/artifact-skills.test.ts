@@ -26,7 +26,10 @@ test("each artifact skill has frontmatter and stays inside its size budget", () 
       Buffer.byteLength(body) <= 6 * 1024,
       `${skill}/SKILL.md is ${Buffer.byteLength(body)} bytes; the budget is 6144`,
     );
-    const frontmatter = /^---\nname: (.+)\ndescription: (.+)\n---\n/.exec(body);
+    // Tolerant of CRLF: .gitattributes checks these out LF, but a clone made
+    // before it existed still holds CRLF, and a skill is no less valid for the
+    // line endings its working copy happens to carry.
+    const frontmatter = /^---\r?\nname: (.+?)\r?\ndescription: (.+?)\r?\n---\r?\n/.exec(body);
     assert.ok(frontmatter, `${skill}/SKILL.md needs name and description frontmatter`);
     // The description is the routing signal: it has to name the file types and
     // the verbs, or the skill never gets selected for the request it serves.
@@ -67,14 +70,19 @@ test("the generated references are in step with the limits the code enforces", (
   const generated = ["umbratic-presentations", "umbratic-documents", "umbratic-pdf"].flatMap((skill) =>
     ["spec.md", "ops.md"].map((name) => path.join(skillsRoot, skill, "references", name)),
   );
-  const before = generated.map((file) => fs.readFileSync(file, "utf8"));
+  // What is being asked is whether the text is in step with the code, not which
+  // line endings the working copy carries. The generator writes LF; a clone
+  // made before .gitattributes holds CRLF, and comparing the two raw reports
+  // every file stale while the words are identical.
+  const read = (file: string) => fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+  const before = generated.map(read);
   execFileSync("node", ["scripts/generate-skill-references.ts"], {
     cwd: desktopRoot,
     stdio: "pipe",
   });
   generated.forEach((file, index) => {
     assert.equal(
-      fs.readFileSync(file, "utf8"),
+      read(file),
       before[index],
       `${path.relative(desktopRoot, file)} is stale; run npm run generate:skill-references`,
     );

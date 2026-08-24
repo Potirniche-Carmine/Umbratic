@@ -42,6 +42,13 @@ function decodePng(data: Buffer, label: string): RgbaImage {
   return { width, height, pixels };
 }
 
+/** Matches `cornerRadiusRatio` in scripts/generate-app-icons.ts. */
+const cornerRadiusRatio = 0.2237;
+
+function alphaAt(image: RgbaImage, x: number, y: number): number {
+  return image.pixels[(y * image.width + x) * 4 + 3] ?? 0;
+}
+
 function tileMetrics(image: RgbaImage) {
   let minX = image.width;
   let minY = image.height;
@@ -50,7 +57,10 @@ function tileMetrics(image: RgbaImage) {
   for (let y = 0; y < image.height; y += 1) {
     for (let x = 0; x < image.width; x += 1) {
       const i = (y * image.width + x) * 4;
-      assert.equal(image.pixels[i + 3], 255);
+      // The rounded corner is the only transparency in the tile, and it is
+      // background rather than mark, so it says nothing about where the shield
+      // reaches.
+      if ((image.pixels[i + 3] ?? 0) === 0) continue;
       const r = image.pixels[i] ?? 0;
       const g = image.pixels[i + 1] ?? 0;
       const b = image.pixels[i + 2] ?? 0;
@@ -65,15 +75,39 @@ function tileMetrics(image: RgbaImage) {
   return {
     widthRatio: (maxX - minX + 1) / image.width,
     heightRatio: (maxY - minY + 1) / image.height,
-    corner: [image.pixels[0], image.pixels[1], image.pixels[2], image.pixels[3]],
   };
 }
 
-function assertFilledTile(image: RgbaImage, label: string) {
+/**
+ * The tile is app-coloured, carries a large shield, and is rounded at exactly
+ * the radius the generator claims.
+ *
+ * The radius is measured rather than eyeballed: on the top row, the first fully
+ * opaque pixel sits one corner radius in from the edge, which is a property of
+ * the rounded rectangle and pins the shape rather than merely observing that
+ * the corner pixel is clear.
+ */
+function assertRoundedTile(image: RgbaImage, label: string) {
   const metrics = tileMetrics(image);
-  assert.deepEqual(metrics.corner, [11, 13, 16, 255], label);
   assert.ok(metrics.heightRatio >= 0.64, `${label} height ${metrics.heightRatio}`);
   assert.ok(metrics.widthRatio >= 0.5, `${label} width ${metrics.widthRatio}`);
+
+  // Clear at the corner, solid app colour halfway along the edge.
+  assert.equal(alphaAt(image, 0, 0), 0, `${label} corner should be cut away`);
+  const middle = Math.floor(image.width / 2);
+  assert.deepEqual(
+    [image.pixels[middle * 4], image.pixels[middle * 4 + 1], image.pixels[middle * 4 + 2], image.pixels[middle * 4 + 3]],
+    [11, 13, 16, 255],
+    `${label} edge midpoint should be opaque app colour`,
+  );
+
+  let firstOpaque = 0;
+  while (firstOpaque < image.width && alphaAt(image, firstOpaque, 0) < 255) firstOpaque += 1;
+  const expected = image.width * cornerRadiusRatio;
+  assert.ok(
+    Math.abs(firstOpaque - expected) <= Math.max(1, image.width * 0.02),
+    `${label} corner radius reads as ${firstOpaque}px, expected about ${expected.toFixed(1)}px`,
+  );
 }
 
 function icnsPng(data: Buffer, type: string): Buffer {
@@ -102,22 +136,29 @@ function icoPng(data: Buffer, size: number): Buffer {
   throw new Error(`missing ${size}px frame in icon.ico`);
 }
 
-test("the dock PNG is an opaque app-colored tile with a large shield", () => {
+test("the dock PNG is a round-cornered app-colored tile with a large shield", () => {
   const image = decodePng(fs.readFileSync(png512), "512");
   assert.equal(image.width, 512);
   assert.equal(image.height, 512);
-  assertFilledTile(image, "512");
+  assertRoundedTile(image, "512");
 });
 
-test("the macOS icns and Windows ico share the filled tile, including installer frames", () => {
+test("the macOS icns and Windows ico share the rounded tile, including installer frames", () => {
   const icns = fs.readFileSync(icnsUrl);
   const ico = fs.readFileSync(icoUrl);
-  assertFilledTile(decodePng(icnsPng(icns, "ic10"), "icns-1024"), "icns-1024");
-  assertFilledTile(decodePng(icoPng(ico, 256), "ico-256"), "ico-256");
+  assertRoundedTile(decodePng(icnsPng(icns, "ic10"), "icns-1024"), "icns-1024");
+  assertRoundedTile(decodePng(icoPng(ico, 256), "ico-256"), "ico-256");
+
+  // The smallest frame is where rounding is easiest to lose: four pixels of
+  // radius, and a reduction that has to carry alpha rather than force it solid.
   const small = decodePng(icoPng(ico, 16), "ico-16");
   assert.equal(small.width, 16);
-  assert.equal(small.pixels[3], 255);
-  assert.deepEqual([small.pixels[0], small.pixels[1], small.pixels[2]], [11, 13, 16]);
+  assert.equal(small.pixels[3], 0, "the 16px corner should be cut away too");
+  const middle = 8 * 4;
+  assert.deepEqual(
+    [small.pixels[middle], small.pixels[middle + 1], small.pixels[middle + 2], small.pixels[middle + 3]],
+    [11, 13, 16, 255],
+  );
 });
 
 test("the DMG and both Windows installers are wired to the filled icons", () => {

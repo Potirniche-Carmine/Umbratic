@@ -15,6 +15,17 @@ const background = { r: 11, g: 13, b: 16 };
 const steel = { r: 236, g: 239, b: 243 };
 const masterSize = 1024;
 const shieldHeightRatio = 0.729;
+/**
+ * Corner radius as a fraction of the tile edge, so every frame from 16px to
+ * 1024px is the same shape rather than the same pixel count.
+ *
+ * Apple's continuous-corner ratio, which is what the Dock expects and what
+ * reads as an app icon rather than a screenshot on the Windows taskbar. The
+ * shield sits well inside it — at this radius the tile edge beside the shield's
+ * topmost point is some eighteen pixels in at master size — so rounding takes
+ * away background and never touches the mark.
+ */
+const cornerRadiusRatio = 0.2237;
 const icnsFrames = [
   { type: "icp4", size: 16 },
   { type: "icp5", size: 32 },
@@ -146,6 +157,25 @@ function sampleAlphaBilinear(image: RgbaImage, x: number, y: number): number {
   return (a00 * (1 - tx) + a10 * tx) * (1 - ty) + (a01 * (1 - tx) + a11 * tx) * ty;
 }
 
+/**
+ * How much of a pixel the rounded tile covers, from 0 outside to 1 inside.
+ *
+ * The distance to a rounded rectangle, softened across the single pixel that
+ * straddles the edge. The area-averaging in `scaleTile` smooths the small
+ * frames on its own, but the 512 and 1024 frames are barely reduced or not at
+ * all, and would carry a visibly stepped corner without this.
+ */
+function tileCoverage(size: number, x: number, y: number): number {
+  const half = size / 2;
+  const radius = size * cornerRadiusRatio;
+  // Distance from the pixel centre out to the straight part of the edge, which
+  // is zero along the flats and grows only into the corners.
+  const dx = Math.max(Math.abs(x + 0.5 - half) - (half - radius), 0);
+  const dy = Math.max(Math.abs(y + 0.5 - half) - (half - radius), 0);
+  const distance = Math.sqrt(dx * dx + dy * dy) - radius;
+  return Math.min(Math.max(0.5 - distance, 0), 1);
+}
+
 function composeMaster(mask: RgbaImage): RgbaImage {
   const pixels = new Uint8Array(masterSize * masterSize * 4);
   const targetHeight = Math.round(masterSize * shieldHeightRatio);
@@ -164,13 +194,21 @@ function composeMaster(mask: RgbaImage): RgbaImage {
       pixels[i] = Math.round(background.r + (steel.r - background.r) * coverage);
       pixels[i + 1] = Math.round(background.g + (steel.g - background.g) * coverage);
       pixels[i + 2] = Math.round(background.b + (steel.b - background.b) * coverage);
-      pixels[i + 3] = 255;
+      pixels[i + 3] = Math.round(255 * tileCoverage(masterSize, x, y));
     }
   }
   return { width: masterSize, height: masterSize, pixels };
 }
 
-function scaleOpaque(source: RgbaImage, size: number): RgbaImage {
+/**
+ * Area-averaging reduction, alpha included.
+ *
+ * Colour is averaged straight rather than premultiplied, which is safe only
+ * because the pixels the rounded corner makes transparent are background on
+ * every side: there is no lighter neighbour for a dark fringe to bleed in from.
+ * Art that reached into the corners would need premultiplying here first.
+ */
+function scaleTile(source: RgbaImage, size: number): RgbaImage {
   if (size === source.width && size === source.height) return source;
   const pixels = new Uint8Array(size * size * 4);
   const scale = source.width / size;
@@ -183,6 +221,7 @@ function scaleOpaque(source: RgbaImage, size: number): RgbaImage {
       let r = 0;
       let g = 0;
       let b = 0;
+      let a = 0;
       let area = 0;
       const rowStart = Math.floor(y0);
       const rowEnd = Math.min(source.height - 1, Math.ceil(y1) - 1);
@@ -197,6 +236,7 @@ function scaleOpaque(source: RgbaImage, size: number): RgbaImage {
           r += (source.pixels[i] ?? 0) * weight;
           g += (source.pixels[i + 1] ?? 0) * weight;
           b += (source.pixels[i + 2] ?? 0) * weight;
+          a += (source.pixels[i + 3] ?? 0) * weight;
           area += weight;
         }
       }
@@ -204,7 +244,7 @@ function scaleOpaque(source: RgbaImage, size: number): RgbaImage {
       pixels[dest] = Math.round(r / area);
       pixels[dest + 1] = Math.round(g / area);
       pixels[dest + 2] = Math.round(b / area);
-      pixels[dest + 3] = 255;
+      pixels[dest + 3] = Math.round(a / area);
     }
   }
   return { width: size, height: size, pixels };
@@ -234,7 +274,7 @@ function writeIco(images: { size: number; png: Buffer }[]): Buffer {
 
 function writeIcns(master: RgbaImage): Buffer {
   const blocks = icnsFrames.map((frame) => {
-    const png = writePng(scaleOpaque(master, frame.size));
+    const png = writePng(scaleTile(master, frame.size));
     const block = Buffer.alloc(8 + png.length);
     block.write(frame.type, 0, 4, "ascii");
     block.writeUInt32BE(block.length, 4);
@@ -252,7 +292,7 @@ const mask = readPng(maskPath);
 const master = composeMaster(mask);
 fs.mkdirSync(brandDir, { recursive: true });
 fs.mkdirSync(iconsDir, { recursive: true });
-fs.writeFileSync(path.join(brandDir, "umbratic-icon-512.png"), writePng(scaleOpaque(master, 512)));
-fs.writeFileSync(path.join(iconsDir, "icon.ico"), writeIco(icoSizes.map((size) => ({ size, png: writePng(scaleOpaque(master, size)) }))));
+fs.writeFileSync(path.join(brandDir, "umbratic-icon-512.png"), writePng(scaleTile(master, 512)));
+fs.writeFileSync(path.join(iconsDir, "icon.ico"), writeIco(icoSizes.map((size) => ({ size, png: writePng(scaleTile(master, size)) }))));
 fs.writeFileSync(path.join(iconsDir, "icon.icns"), writeIcns(master));
-process.stdout.write("Wrote filled Umbratic app icons for macOS, Windows, and the installers.\n");
+process.stdout.write("Wrote round-cornered Umbratic app icons for macOS, Windows, and the installers.\n");

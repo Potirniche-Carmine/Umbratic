@@ -75,13 +75,14 @@ function humanDuration(ms: number) {
  * terminal is the file count and elapsed time. Set UMBRATIC_LLAMA_VERBOSE=1 to
  * watch the real thing instead.
  */
-function runLong(command: string, args: string[], cwd: string, what: string): Promise<void> {
+function runLong(command: string, args: string[], cwd: string, what: string, env = process.env): Promise<void> {
   const verbose = process.env.UMBRATIC_LLAMA_VERBOSE === "1";
   const startedAt = Date.now();
   process.stdout.write(`${what}...\n`);
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
+      env,
       stdio: ["ignore", verbose ? "inherit" : "pipe", verbose ? "inherit" : "pipe"],
       windowsHide: true,
     });
@@ -131,6 +132,84 @@ function runLong(command: string, args: string[], cwd: string, what: string): Pr
 const llamaCpuOnly = process.env.UMBRATIC_LLAMA_CPU_ONLY === "1";
 
 /**
+ * The environment MSVC needs, as vcvarsall.bat would leave it.
+ *
+ * The Visual Studio generator locates the toolchain itself; Ninja does not, and
+ * wants cl.exe on PATH with INCLUDE and LIB already set. Rather than require
+ * that packaging be started from a Developer Command Prompt — easy to forget,
+ * and reported as "no CMAKE_C_COMPILER could be found" when it is — the batch
+ * file is run here and the environment it produces is captured for CMake.
+ *
+ * Returns process.env unchanged off Windows, where none of this applies.
+ */
+let msvcEnvironmentCache: NodeJS.ProcessEnv | null = null;
+function msvcEnvironment(): NodeJS.ProcessEnv {
+  if (process.platform !== "win32") return process.env;
+  if (msvcEnvironmentCache) return msvcEnvironmentCache;
+
+  // vswhere ships with the Visual Studio Installer at a fixed location, which
+  // is the documented way to find an installation without guessing at edition
+  // or year in Program Files.
+  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const vswhere = path.join(programFilesX86, "Microsoft Visual Studio", "Installer", "vswhere.exe");
+  const missingToolset = new Error(
+    "The MSVC C++ toolset is required to build the bundled model runtime, and was not found.\n"
+    + "  Install it with:  winget install Microsoft.VisualStudio.2022.BuildTools"
+    + " --override \"--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\"\n"
+    + "  An existing Visual Studio with the \"Desktop development with C++\" workload also works.",
+  );
+  if (!fs.existsSync(vswhere)) throw missingToolset;
+
+  const found = spawnSync(vswhere, [
+    "-latest",
+    "-products", "*",
+    "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+    "-property", "installationPath",
+  ], { encoding: "utf8", windowsHide: true });
+  const installPath = found.stdout?.trim().split(/\r?\n/)[0] ?? "";
+  if (!installPath) throw missingToolset;
+
+  const vcvarsall = path.join(installPath, "VC", "Auxiliary", "Build", "vcvarsall.bat");
+  if (!fs.existsSync(vcvarsall)) throw missingToolset;
+
+  // A marker rather than parsing from the first line: vcvarsall prints its own
+  // banner, and on some installs a line of it looks enough like KEY=VALUE to be
+  // picked up as a variable.
+  const marker = "__umbratic_vcvars__";
+  const hostArch = process.arch === "arm64" ? "arm64" : "amd64";
+  const dumped = spawnSync(
+    "cmd.exe",
+    ["/d", "/s", "/c", `""${vcvarsall}" ${hostArch} >nul && echo ${marker} && set"`],
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+      // The doubled quotes above are the /s form, which cmd strips to reach a
+      // batch path containing spaces. Node's own argument quoting rewrites them
+      // into something cmd parses as a UNC path instead, and the whole thing
+      // fails as "the network path was not found"; verbatim leaves them alone.
+      windowsVerbatimArguments: true,
+    },
+  );
+  const output = dumped.stdout ?? "";
+  const markerAt = output.indexOf(marker);
+  if (dumped.status !== 0 || markerAt < 0) {
+    throw new Error(
+      `Setting up the MSVC environment failed: ${vcvarsall} ${hostArch}\n`
+      + `  ${(dumped.stderr || output).trim().split(/\r?\n/).slice(-5).join("\n  ")}`,
+    );
+  }
+
+  const environment: NodeJS.ProcessEnv = {};
+  for (const line of output.slice(markerAt + marker.length).split(/\r?\n/)) {
+    const separator = line.indexOf("=");
+    if (separator > 0) environment[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+  msvcEnvironmentCache = environment;
+  return environment;
+}
+
+/**
  * Checks the toolchain before CMake does, because CMake's own failure for a
  * missing dependency is twenty lines of module backtrace with the actionable
  * part — a package to install — nowhere in it.
@@ -140,6 +219,19 @@ function requireLlamaBuildTools(wantsVulkan: boolean) {
     throw new Error(
       "CMake is required to build the bundled model runtime, and is not on PATH.\n"
       + "  Install it with:  winget install Kitware.CMake\n"
+      + "  then open a new terminal so PATH picks it up.",
+    );
+  }
+  // Ninja instead of the default MSBuild generator: llama.cpp builds
+  // vulkan-shaders-gen as a nested ExternalProject, and the .tlog files MSBuild
+  // writes under that prefix push its compiler probe past the 260-character
+  // MAX_PATH limit for any checkout more than a few directories deep. It
+  // surfaces as "the C compiler is broken", which is not what went wrong. Ninja
+  // writes no .tlog files, and leaves the longest path comfortably clear.
+  if (spawnSync("ninja", ["--version"], { stdio: "ignore" }).error) {
+    throw new Error(
+      "Ninja is required to build the bundled model runtime, and is not on PATH.\n"
+      + "  Install it with:  winget install Ninja-build.Ninja\n"
       + "  then open a new terminal so PATH picks it up.",
     );
   }
@@ -160,6 +252,48 @@ function requireLlamaBuildTools(wantsVulkan: boolean) {
 // llama.cpp is built from source at a pinned commit rather than pulled from a
 // release page: the release archives are unsigned, and building here is what
 // lets us turn off the -hf download path the app never uses.
+/**
+ * Local changes to the pinned llama.cpp, applied to the checkout before it is
+ * built.
+ *
+ * Kept as patch files under third_party rather than a fork, so that what
+ * Umbratic changes about the runtime it ships is a few readable lines next to
+ * the pin, and bumping the pin surfaces any that no longer apply as a failure
+ * rather than a silent drift.
+ */
+const llamaPatchDir = path.resolve(desktopRoot, "../../third_party");
+const llamaPatchFiles = ["llama.cpp-list-device-type.patch"];
+
+/** Whether anything changed, which is what makes a cached build tree stale. */
+function applyLlamaPatches(sourceDir: string): boolean {
+  const patches = llamaPatchFiles.map((name) => {
+    const file = path.join(llamaPatchDir, name);
+    if (!fs.existsSync(file)) throw new Error(`Missing llama.cpp patch: ${file}`);
+    return { name, file };
+  });
+
+  // A cached checkout is already patched. `--reverse --check` is how git
+  // answers "would undoing this apply cleanly", which is true exactly when it
+  // is already in place, and leaves the tree untouched either way.
+  const inPlace = patches.every(({ file }) => spawnSync("git", ["apply", "--reverse", "--check", file], {
+    cwd: sourceDir,
+    stdio: "ignore",
+    windowsHide: true,
+  }).status === 0);
+  if (inPlace) return false;
+
+  // All of them, from the pinned commit, whenever any one of them is out of
+  // date: an edited patch leaves the checkout holding a version that neither
+  // applies nor reverses, and patches after it in the list would be undone by
+  // resetting for it. Starting clean makes the result the patch files as they
+  // read now rather than as they read when the cache was filled.
+  run("git", ["checkout", "--", "."], sourceDir, "Resetting the llama.cpp checkout");
+  for (const { name, file } of patches) {
+    run("git", ["apply", file], sourceDir, `Applying ${name}`);
+  }
+  return true;
+}
+
 async function buildLlamaServer() {
   const pin = parseLlamaPin(fs.readFileSync(llamaPinFile, "utf8"));
   fs.mkdirSync(llamaCacheRoot, { recursive: true });
@@ -175,6 +309,13 @@ async function buildLlamaServer() {
   if (head !== pin.commit) {
     throw new Error(`llama.cpp ${pin.tag} resolved to ${head}, but third_party/llama.cpp.pin records ${pin.commit}.`);
   }
+  // After the commit check, never before: the pin identifies what was reviewed,
+  // and the patches are reviewed alongside it as their own files. A cached
+  // build of the sources as they were before a patch changed is not a build of
+  // what is about to ship, so it is dropped rather than reused.
+  if (applyLlamaPatches(sourceDir)) {
+    fs.rmSync(buildDir, { recursive: true, force: true });
+  }
 
   if (!findLlamaServerBinDir(buildDir)) {
     // Only a run that will actually compile needs the toolchain. A repeat
@@ -185,6 +326,10 @@ async function buildLlamaServer() {
       console.warn("UMBRATIC_LLAMA_CPU_ONLY=1: building llama-server without a GPU backend. Do not release this build.");
     }
     const configure = [
+      // See requireLlamaBuildTools for why this is not the default MSBuild
+      // generator. Ninja is single-config, so CMAKE_BUILD_TYPE below is what
+      // selects Release, rather than a --config flag on the build step.
+      "-G", "Ninja",
       "-S", sourceDir,
       "-B", buildDir,
       "-DCMAKE_BUILD_TYPE=Release",
@@ -234,15 +379,17 @@ async function buildLlamaServer() {
       `Building llama.cpp ${pin.tag} from source. The first build takes several minutes;`
       + " later packaging runs reuse apps/desktop/.llama-cache and skip it.",
     );
-    await runLong("cmake", configure, llamaCacheRoot, `Configuring llama.cpp ${pin.tag}`);
+    const buildEnv = msvcEnvironment();
+    await runLong("cmake", configure, llamaCacheRoot, `Configuring llama.cpp ${pin.tag}`, buildEnv);
     // No --target: the backend libraries are loaded by ggml at run time rather
     // than linked, so building only llama-server would leave every one of them
     // unbuilt and the packaged app with nothing to run on.
     await runLong(
       "cmake",
-      ["--build", buildDir, "--config", "Release", "--parallel"],
+      ["--build", buildDir, "--parallel"],
       llamaCacheRoot,
       `Building llama-server ${pin.tag}`,
+      buildEnv,
     );
   }
 

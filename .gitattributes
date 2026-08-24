@@ -1,0 +1,13 @@
+# Line endings are LF in the repository and LF in the working tree, on every
+# platform.
+#
+# Without this, `core.autocrlf` on a Windows clone hands CRLF to code written
+# against LF, and the failure is never about line endings on the face of it:
+# the artifact skill frontmatter parser reports a skill has no frontmatter, and
+# the reference generator rewrites every file it checks as it checks it. Nothing
+# here is a Windows program, so nothing here wants CRLF.
+#
+# `text=auto` rather than `text`, so git keeps detecting the fixtures that carry
+# a lone carriage return on purpose — the composer and task-event tests among
+# them — as binary, and leaves their content alone.
+* text=auto eol=lf

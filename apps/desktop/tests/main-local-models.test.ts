@@ -256,6 +256,39 @@ test("dedicated cards add up and a device that reported nothing is unknown, not 
   assert.equal(hardware.acceleratorMemoryGB(silent), null);
 });
 
+// Verbatim from `llama-server --list-devices` on a laptop pairing a discrete
+// RTX 4060 with the APU's integrated Radeon, built with the device-type patch
+// from third_party. The integrated figure is roughly half of installed RAM
+// because that is what it is: a window onto memory already counted once.
+test("an integrated GPU beside a discrete card is not memory of its own", () => {
+  const laptop = hardware.parseAcceleratorDevices([
+    "Available devices:",
+    "  Vulkan0: NVIDIA GeForce RTX 4060 (discrete, 7956 MiB, 7188 MiB free)",
+    "  Vulkan1: AMD Radeon(TM) Graphics (integrated, 16209 MiB, 15399 MiB free)",
+  ].join("\n"));
+
+  assert.equal(laptop.length, 2);
+  assert.equal(laptop[0].unified, false);
+  assert.equal(laptop[1].unified, true);
+  // The name keeps the brackets it came with rather than being cut at "(TM)".
+  assert.equal(laptop[1].name, "AMD Radeon(TM) Graphics");
+
+  // The card's own memory, not the card plus a second view of installed RAM,
+  // which is what summing the two rows gives and what this machine reported.
+  assert.equal(Math.round(hardware.acceleratorMemoryGB(laptop) ?? 0), 8);
+  const budget = { ramGB: 31, vramGB: hardware.acceleratorMemoryGB(laptop) };
+  assert.equal(hardware.systemQuality(budget, "Vulkan"), "good");
+
+  // With no discrete card the integrated one contributes nothing of its own,
+  // and installed RAM becomes the whole budget — which is the honest answer,
+  // since that is the memory it was borrowing all along.
+  const handheld = hardware.parseAcceleratorDevices(
+    "  Vulkan0: AMD Radeon(TM) Graphics (integrated, 16209 MiB, 15399 MiB free)",
+  );
+  assert.equal(hardware.acceleratorMemoryGB(handheld), null);
+  assert.equal(hardware.fastMemoryGB({ ramGB: 31, vramGB: null }), 31);
+});
+
 // Verbatim from `llama-server --list-devices` on an Apple M5 Max with 48 GB.
 // Two things here are not what they look like: Apple's backend is spelled MTL
 // by this build rather than Metal, and BLAS is Accelerate running on the very
