@@ -52,6 +52,22 @@ test("the dictation model is loaded on first press and released when idle", () =
   assert.doesNotMatch(localSpeechSource, /createLlamaSupervisor\(\{ label: "llama" \}\)/);
 });
 
+test("nothing resident means nothing is warm, so the press that loads says so", () => {
+  const request = {
+    modelFile: "/models/asr.gguf",
+    projectorFile: "/models/mmproj-asr.gguf",
+    modelId: "qwen3-asr-0.6b",
+  };
+  // No sidecar has been started in this process, so every press here is cold.
+  // This is the signal the loading card is gated on: it is false exactly when
+  // the user is about to wait on weights.
+  assert.equal(localSpeech.isLocalSpeechWarm(request), false);
+  assert.equal(localSpeech.isLocalSpeechWarm({ ...request, modelId: "qwen3-asr-1.7b" }), false);
+  // And it is the running key that decides, not merely that something runs —
+  // switching models in Voice settings must not report the new one as warm.
+  assert.match(localSpeechSource, /supervisor\.currentKey\(\) === speechKey\(request\)/);
+});
+
 test("a configured dictation model gives Veil all three speech variables, and none otherwise", () => {
   const base = {
     settings: { mode: "local", baseUrl: "", modelId: "qwen3-8b", secret: "", headers: [] },

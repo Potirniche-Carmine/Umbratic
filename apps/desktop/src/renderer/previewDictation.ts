@@ -25,9 +25,19 @@ function clearTimers(): void {
   timers = [];
 }
 
+/**
+ * Whether this harness pretends the speech model still has to be loaded.
+ *
+ * The real cold press is the first of a session; `?dictationLoading` is how
+ * that one is inspected here, and the default is the warm press every later
+ * dictation is — the case that must not raise the loading card at all.
+ */
+const loadsModel = new URLSearchParams(window.location.search).has("dictationLoading");
+
 export const previewDictation = {
   start(): { started: boolean } {
     clearTimers();
+    if (loadsModel) emit({ kind: "loading" });
     timers = partials.map((text, index) =>
       setTimeout(() => emit({ kind: "partial", text }), 700 + index * 900));
     return { started: true };

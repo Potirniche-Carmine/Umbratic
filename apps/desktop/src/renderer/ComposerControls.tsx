@@ -113,7 +113,11 @@ export function DictationControl({
     : recording
       ? "Stop dictation"
       : busy
-        ? status.state === "starting" ? "Getting the dictation model ready" : "Transcribing"
+        ? status.state === "starting"
+          // Claim a model load only when one is happening; a warm start is
+          // just the microphone opening.
+          ? status.loadingModel ? "Getting the dictation model ready" : "Starting dictation"
+          : "Transcribing"
         : "Dictate prompt";
 
   return (

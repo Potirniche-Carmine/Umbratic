@@ -520,8 +520,12 @@ export type WorkspaceIndexEvent = {
  * A partial replaces the previous partial rather than extending it: a
  * transcript is not append-only, and a model that has heard two more syllables
  * may revise words it already emitted. `final` and `error` are terminal.
+ * `loading` is sent once, before a start that has to read speech weights into
+ * memory — the one press where "starting" is tens of seconds rather than a
+ * beat, and the only one worth explaining outside the button.
  */
 export type DictationEvent =
+  | { kind: "loading" }
   | { kind: "partial"; text: string }
   | { kind: "final"; text: string; truncated: boolean }
   | { kind: "error"; message: string };

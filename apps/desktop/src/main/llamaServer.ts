@@ -40,6 +40,8 @@ export type LlamaSupervisor = {
   ensure(input: { key: string; args: string[]; onDiagnostic?: LlamaDiagnosticSink }): Promise<LlamaConnection>;
   stop(): void;
   current(): LlamaConnection | null;
+  /** The key the live sidecar was started with, or null when none is running. */
+  currentKey(): string | null;
   /** Clears the failure backoff so an explicit user retry attempts immediately. */
   resetBackoff(): void;
   /**
@@ -170,6 +172,10 @@ export function createLlamaSupervisor(options: { label: string }): LlamaSupervis
     return { baseUrl: baseUrlFor(reservedPort), apiKey };
   }
 
+  function currentKey(): string | null {
+    return current() === null ? null : running?.key ?? null;
+  }
+
   function stop(): void {
     const child = running?.child ?? launchingChild;
     running = null;
@@ -271,6 +277,7 @@ export function createLlamaSupervisor(options: { label: string }): LlamaSupervis
 
   return {
     current,
+    currentKey,
     stop,
     resetBackoff() {
       respawn = null;

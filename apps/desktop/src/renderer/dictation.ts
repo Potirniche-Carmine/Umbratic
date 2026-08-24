@@ -52,6 +52,12 @@ export type DictationStatus = {
    */
   level: number;
   error: string | null;
+  /**
+   * True while "starting" is genuinely a model load — the main process said so
+   * — rather than the beat it takes to open a microphone. Only this press
+   * earns an explanation beyond the button's own spinner.
+   */
+  loadingModel?: boolean;
 };
 
 /** How often the level meter is repainted. Fast enough to look live, slow
@@ -204,6 +210,10 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
 
   useEffect(() => {
     return api.onDictationEvent((event: DictationEvent) => {
+      if (event.kind === "loading") {
+        setStatus((current) => (current.state === "starting" ? { ...current, loadingModel: true } : current));
+        return;
+      }
       if (event.kind === "partial") {
         setStatus((current) => (current.state === "idle" ? current : { ...current, preview: event.text }));
         return;

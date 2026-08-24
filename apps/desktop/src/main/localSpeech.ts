@@ -46,6 +46,19 @@ export function stopLocalSpeech(): void {
   supervisor.stop();
 }
 
+function speechKey(request: LocalSpeechRequest): string {
+  return JSON.stringify({ modelFile: request.modelFile, projectorFile: request.projectorFile, modelId: request.modelId });
+}
+
+/**
+ * Whether this press finds the model already resident, so nothing slow stands
+ * between the button and an open microphone. False whenever the idle timeout
+ * has reclaimed the sidecar, or a different model has been chosen since.
+ */
+export function isLocalSpeechWarm(request: LocalSpeechRequest): boolean {
+  return supervisor.currentKey() === speechKey(request);
+}
+
 export function localSpeechArgs(request: LocalSpeechRequest): string[] {
   return [
     "-m", request.modelFile,
@@ -78,7 +91,7 @@ export async function ensureLocalSpeech(
     idleTimer = null;
   }
   return supervisor.ensure({
-    key: JSON.stringify({ modelFile: request.modelFile, projectorFile: request.projectorFile, modelId: request.modelId }),
+    key: speechKey(request),
     args: localSpeechArgs(request),
     onDiagnostic,
   });

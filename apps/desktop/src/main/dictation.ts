@@ -26,7 +26,7 @@ import { app } from "electron";
 import { recordLocalDiagnostic } from "./diagnostics";
 import { configuredEndpointRoute, endpointProvider } from "./endpointConfig";
 import { selectedLocalDictationModel } from "./localModels";
-import { ensureLocalSpeech, releaseLocalSpeech } from "./localSpeech";
+import { ensureLocalSpeech, isLocalSpeechWarm, releaseLocalSpeech } from "./localSpeech";
 import { startLocalTranscription, type LocalTranscribeSession } from "./localTranscribe";
 import { openProviderStream } from "./providerClient";
 import { readDictationSettings, readModelEndpointSettings } from "./storage";
@@ -177,6 +177,12 @@ export async function startDictation(input: { language?: string }, webContents: 
     // failed first recording.
     const dictationModel = selectedLocalDictationModel(app.getPath("userData"), dictationSettings.model);
     if (!dictationModel) throw new Error(chooseDictationModelMessage);
+    // Said only when it is true. A warm press — the model still resident from
+    // the last dictation — goes straight to the microphone, and announcing a
+    // model load it is not doing would teach the user to ignore the notice.
+    if (!isLocalSpeechWarm(dictationModel) && !webContents.isDestroyed()) {
+      webContents.send(dictationEventChannel, { kind: "loading" } satisfies DictationEvent);
+    }
     const runtime = await ensureLocalSpeech(
       dictationModel,
       (diagnostic) => recordLocalDiagnostic({ ...diagnostic, source: "desktop" }),

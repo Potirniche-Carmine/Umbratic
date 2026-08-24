@@ -598,8 +598,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // Pressing the microphone loads the speech weights before the device opens,
   // and in local mode that is the slow part of the first dictation of a
   // session. Same card, same reason: a control that spins in silence for
-  // twenty seconds reads as a control that did nothing.
-  const dictationStarting = dictation.status.state === "starting";
+  // twenty seconds reads as a control that did nothing. But only when the
+  // main process says a load is actually happening — a warm press is over in
+  // a beat, and a card flashing "loading the model" on every dictation taught
+  // the user the card means nothing.
+  const dictationStarting = dictation.status.state === "starting" && dictation.status.loadingModel === true;
   useEffect(() => {
     if (!connectionSettings.localModelLoading && !dictationStarting) setModelStartupDismissed(false);
   }, [connectionSettings.localModelLoading, dictationStarting]);
@@ -4824,10 +4827,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           onCancel={() => void connectionSettings.unloadLocalModel()}
           onDismiss={() => setModelStartupDismissed(true)}
         />
-      ) : dictationStarting ? (
-        // The speech model loads on the press rather than at startup, so the
-        // first dictation of a session waits on gigabytes with nothing but a
-        // 16px spinner to show for it. This is the same card, saying so.
+      ) : dictationStarting && !modelStartupDismissed ? (
+        // The speech model loads on the press rather than at startup, so a
+        // cold dictation waits on gigabytes with nothing but a 16px spinner to
+        // show for it. This is the same card, saying so — and only shown on
+        // that press: `dictationStarting` is already gated on the main
+        // process reporting a real load.
         <ModelStartupNotice
           title="Starting dictation…"
           detail="Loading the speech model into memory."

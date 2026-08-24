@@ -55,6 +55,24 @@ test("the model loads before the microphone opens, so nothing records during the
   assert.ok(startImplementation.indexOf("api.startDictation") < startImplementation.indexOf("getUserMedia"));
 });
 
+test("the loading card appears only when speech weights are actually loading", () => {
+  const dictationTransport = read("../src/main/dictation.ts");
+  // The main process announces a load only on a cold press; a warm sidecar
+  // goes straight to the microphone with nothing to explain.
+  assert.match(dictationTransport, /!isLocalSpeechWarm\(dictationModel\)/);
+  assert.match(dictationTransport, /\{ kind: "loading" \}/);
+  // The renderer holds that claim only while starting, and the floating card
+  // is gated on it — every other press shows only the button's own spinner.
+  assert.match(rendererDictation, /event\.kind === "loading"/);
+  assert.match(rendererDictation, /state === "starting" \? \{ \.\.\.current, loadingModel: true \}/);
+  const rendererMain = read("../src/renderer/main.tsx");
+  assert.match(rendererMain, /state === "starting" && dictation\.status\.loadingModel === true/);
+  // Dismissing the card keeps it down for the rest of the load.
+  assert.match(rendererMain, /dictationStarting && !modelStartupDismissed/);
+  // The button's tooltip never claims a model load on a warm start either.
+  assert.match(composerControls, /status\.loadingModel \? "Getting the dictation model ready" : "Starting dictation"/);
+});
+
 test("a live recording shows its level, and the level rests at zero otherwise", () => {
   assert.match(rendererDictation, /export function frameLevel/);
   // Sampled on a timer rather than pushed per frame: capture posts every 8 ms.
