@@ -270,8 +270,14 @@ function s3Request(
   headers.authorization = `AWS4-HMAC-SHA256 Credential=${r2.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
   const requestPath = canonicalQuery ? `${canonicalPath}?${canonicalQuery}` : canonicalPath;
+  // A connection of its own, every time. Node keeps sockets alive by default,
+  // so a pooled connection whose TLS state has gone bad is handed straight
+  // back to the retry that was meant to escape it — which is how one corrupt
+  // record turns into five identical failures in a row. Nothing here is
+  // chatty enough for pooling to be worth that.
+  const agent = new https.Agent({ keepAlive: false });
   return new Promise((resolve, reject) => {
-    const request = https.request({ host, method, path: requestPath, headers }, (response) => {
+    const request = https.request({ host, method, path: requestPath, headers, agent }, (response) => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk) => chunks.push(chunk));
       response.on("end", () => resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
@@ -325,18 +331,19 @@ async function s3RequestRetrying(
   query: Record<string, string> = {},
   label = key,
 ): Promise<Response> {
+  const attempts = 8;
   let wait = 1000;
   for (let attempt = 1; ; attempt += 1) {
     let failure: unknown;
     try {
       const response = await s3Request(r2, method, key, extraHeaders, body, query);
-      if (attempt === 5 || (response.status !== 429 && response.status < 500)) return response;
+      if (attempt === attempts || (response.status !== 429 && response.status < 500)) return response;
       failure = new Error(describe(response));
     } catch (error) {
-      if (attempt === 5 || !isTransient(error)) throw error;
+      if (attempt === attempts || !isTransient(error)) throw error;
       failure = error;
     }
-    console.log(`    ${label}: ${shortly(failure)} — retrying in ${wait / 1000}s (attempt ${attempt + 1} of 5)`);
+    console.log(`    ${label}: ${shortly(failure)} — retrying in ${wait / 1000}s (attempt ${attempt + 1} of ${attempts})`);
     await sleep(wait);
     wait = Math.min(wait * 2, 16000);
   }
@@ -363,7 +370,7 @@ async function remoteText(r2: R2, key: string): Promise<string | null> {
  * of taking the whole transfer with it. Parts already accepted are not sent
  * again, so a bad line costs the failed piece and nothing else.
  */
-const partSize = 16 * 1024 * 1024;
+const partSize = 8 * 1024 * 1024;
 const multipartFrom = 32 * 1024 * 1024;
 
 async function uploadInParts(r2: R2, artifact: Artifact, size: number) {
