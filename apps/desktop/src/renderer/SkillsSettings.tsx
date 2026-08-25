@@ -76,14 +76,10 @@ export function SkillsSettingsPanel({
     <div className="settingsPanel">
       <div className="settingsPanelHead">
         <h3>Skills</h3>
-        <p>
-          Focused guidance for specific work.
-        </p>
       </div>
 
       <div className="settingsGroup">
         <div className="skillSectionHeader">
-          <h4>Available skills</h4>
           <div className="skillSectionActions">
             <button
               className="settingsInlineButton"

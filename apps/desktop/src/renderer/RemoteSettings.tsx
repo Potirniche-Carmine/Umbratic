@@ -255,14 +255,9 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
     <div className="settingsPanel remoteSettings">
       <div className="settingsPanelHead">
         <h3>Remote connections</h3>
-        <p>
-          Run Umbratic&rsquo;s workspace tools on another machine over SSH. The model still answers from this
-          computer; only the files and commands are that host&rsquo;s.
-        </p>
       </div>
 
       <div className="settingsGroup">
-        <h4>Saved hosts</h4>
         {connections.length === 0 ? (
           <p className="remoteEmpty">No remote hosts yet.</p>
         ) : (
@@ -298,7 +293,6 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
 
       {editing ? (
         <div className="settingsGroup">
-          <h4>{selected ? "Connection" : "New connection"}</h4>
           <label className="settingsField">
             <span>Name</span>
             <input
@@ -397,7 +391,6 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
 
       {selected ? (
         <div className="settingsGroup">
-          <h4>Runner</h4>
           <div className="settingsList">
             <div className="settingsListRow">
               <span>Status</span>
@@ -466,7 +459,6 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
 
       {selected ? (
         <div className="settingsGroup">
-          <h4>Default folder</h4>
           <div className="settingsList">
             <div className="settingsListRow">
               <span>Runs start in</span>

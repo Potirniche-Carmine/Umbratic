@@ -26,11 +26,6 @@ export function TelemetrySettingsPanel({
     <div className="settingsPanel">
       <div className="settingsPanelHead">
         <h3>Telemetry</h3>
-        <p>
-          {syncEnabled
-            ? "Your organization owns and controls telemetry stored on its configured Veil server."
-            : "Your organization owns and controls these logs. In local mode, they remain on this device."}
-        </p>
       </div>
 
       <div className="telemetryPrivacyNotice">
@@ -64,7 +59,6 @@ export function TelemetrySettingsPanel({
       </div>
 
       <div className="settingsGroup">
-        <h4>{syncEnabled ? "What your server receives" : "Local mode"}</h4>
         <div className="settingsList telemetryDisclosureList">
           {syncEnabled ? (
             <>
@@ -96,7 +90,6 @@ export function TelemetrySettingsPanel({
       </div>
 
       <div className="settingsGroup">
-        <h4>{syncEnabled ? "What stays private" : "What stays local"}</h4>
         <div className="settingsList telemetryDisclosureList">
           <div className="settingsListRow">
             <span>Repository</span>

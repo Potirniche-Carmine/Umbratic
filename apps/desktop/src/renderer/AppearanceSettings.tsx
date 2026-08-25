@@ -47,7 +47,6 @@ export function AppearanceSettingsPanel({
     <div className="settingsPanel">
       <div className="settingsPanelHead">
         <h3>Appearance</h3>
-        <p>Theme and typography used throughout Umbratic.</p>
       </div>
 
       <div className="settingsGroup">

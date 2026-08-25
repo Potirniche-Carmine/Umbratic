@@ -79,7 +79,6 @@ export function VoiceSettings({
     <div className="settingsPanel">
       <div className="settingsPanelHead">
         <h3>Voice</h3>
-        <p>Dictate prompts instead of typing them.</p>
       </div>
 
       <div className="settingsGroup">

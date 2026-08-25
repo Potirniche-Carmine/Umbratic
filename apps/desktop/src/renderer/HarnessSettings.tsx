@@ -37,7 +37,6 @@ export function HarnessSettingsPanel({
     <div className="settingsPanel">
       <div className="settingsPanelHead">
         <h3>Harness</h3>
-        <p>Choose the working profile Umbratic uses when it starts a new run. Skills that do not belong with that work start off.</p>
       </div>
 
       <div className="settingsGroup">
@@ -61,11 +60,6 @@ export function HarnessSettingsPanel({
       </div>
 
       <div className={`settingsGroup contextLengthGroup ${endpointMode === "server" ? "isDisabled" : ""}`}>
-        <div className="contextLengthHead">
-          <div>
-            <p>Choose the context window the local model uses.</p>
-          </div>
-        </div>
         <div className="contextLengthSliderShell">
           <input
             className="contextLengthSlider"

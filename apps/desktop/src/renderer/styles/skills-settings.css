@@ -6,18 +6,6 @@
   flex-wrap: wrap;
 }
 
-.skillSectionHeader h4 {
-  margin: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .skillSectionActions {
   display: inline-flex;
   align-items: center;
@@ -225,18 +213,6 @@
   opacity: 0.56;
 }
 
-.contextLengthHead {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.contextLengthHead > div {
-  min-width: 0;
-}
-
-.contextLengthHead p,
 .contextLengthHint {
   margin: 4px 0 0;
   color: var(--muted);
@@ -461,9 +437,9 @@
   white-space: nowrap;
   color: var(--faint);
   font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .skillPreviewBody {

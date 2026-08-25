@@ -71,7 +71,6 @@ export function AboutSettingsPanel({ api }: { api: DesktopApi }) {
     <div className="settingsPanel">
       <div className="settingsPanelHead">
         <h3>About</h3>
-        <p>New releases install when you restart. Nothing about this machine is sent.</p>
       </div>
 
       <div className="settingsGroup">

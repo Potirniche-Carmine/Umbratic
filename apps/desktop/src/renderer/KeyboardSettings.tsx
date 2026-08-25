@@ -120,7 +120,6 @@ export function KeyboardSettingsPanel({ api }: { api: DesktopApi }) {
     <div className="settingsPanel">
       <div className="settingsPanelHead">
         <h3>Keyboard</h3>
-        <p>The keys this app answers to. Press a chord to change one.</p>
       </div>
 
       {shortcutSections().map((group) => (
