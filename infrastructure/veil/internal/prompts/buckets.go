@@ -55,6 +55,11 @@ type Bucket struct {
 	// carries workspace_graph. A run without the tool assembles byte-identically
 	// to today.
 	GraphGuidance string
+	// WebGuidance is rendered only when the request's tool array actually
+	// carries both web_search and web_fetch. Marketing and sales deliverables
+	// still complete from supplied context alone, so this is extra collection
+	// method, not a new evidence requirement.
+	WebGuidance string
 	// Stop is the bucket's completion rule.
 	Stop string
 	// RequiresEvidence marks a bucket whose answer must rest on tool results.
@@ -228,10 +233,14 @@ Prefer stopping and asking over a speculative multi-hop tool loop.`,
 const marketingDiscoveryRule = `Ask for missing context only when it is decision-critical for THIS deliverable. Completeness is bucket-specific: copy work does not need a campaign budget, and research synthesis does not need an offer or channel. Never ask for something that cannot change the requested output. If the supplied source and requested outcome are already sufficient, skip discovery and produce the deliverable.
 Never invent metrics, customer quotes, benchmarks, or proof points.`
 
+// publicWebGuidance is appended only when web_search and web_fetch are both in
+// the request. Without those tools the playbook is unchanged.
+const publicWebGuidance = `If a needed fact is public, search then fetch it instead of asking. web_search returns DuckDuckGo snippets only — fetch the page with web_fetch. Prefer primary documents (filings, official product and pricing pages, regulator notices) and established newsrooms (Reuters, AP, BBC, Bloomberg, FT, WSJ) over aggregators, listicles, and social posts. Cite the URL. Do not invent a live figure from training data.`
+
 var marketingBuckets = []Bucket{
 	{
 		ID:   DirectAnswerBucket,
-		When: "Chitchat or a conceptual question that produces no marketing deliverable.",
+		When: "Chitchat or a conceptual question that produces no marketing deliverable. Not current news, competitor research, or a briefing.",
 	},
 	{
 		ID:   "positioning",
@@ -240,7 +249,8 @@ var marketingBuckets = []Bucket{
 
 Decision-critical inputs: audience, category, competitors, proof points, forbidden claims, tone, and where this will be used.
 Then produce the positioning in the requested format.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-marketing-brief", "umbratic-markdown"},
+		PreferredSkills: []string{"umbratic-discovery", "umbratic-marketing-brief", "umbratic-competitive-research", "umbratic-markdown"},
+		WebGuidance:     publicWebGuidance,
 		Stop:            "the positioning is delivered, or the blocking questions are asked.",
 	},
 	{
@@ -251,6 +261,7 @@ Then produce the positioning in the requested format.`,
 Decision-critical inputs: objective, audience, offer, timeline, channels, budget band, assets on hand, KPI, and compliance limits.
 Then produce a channel plan, an asset list, and a sequence. Flag every unknown.`,
 		PreferredSkills: []string{"umbratic-discovery", "umbratic-marketing-brief", "umbratic-markdown"},
+		WebGuidance:     publicWebGuidance,
 		Stop:            "the plan is delivered, or the blocking questions are asked.",
 	},
 	{
@@ -261,6 +272,7 @@ Then produce a channel plan, an asset list, and a sequence. Flag every unknown.`
 Decision-critical inputs: audience, call to action, length, tone, must-include and must-avoid, and the source facts. Ask fewer questions when a source draft already exists.
 Then draft and tighten. No invented social proof.`,
 		PreferredSkills: []string{"umbratic-discovery", "umbratic-marketing-brief", "umbratic-markdown", "umbratic-documents"},
+		WebGuidance:     publicWebGuidance,
 		Stop:            "the copy is delivered.",
 	},
 	{
@@ -275,11 +287,12 @@ Then load the matching artifact skill and produce the asset.`,
 	},
 	{
 		ID:   "research_synth",
-		When: "Synthesize from attachments or workspace research material.",
-		Playbook: `Read the source material completely when coverage is required, take notes, then synthesize only what the sources support. Mark gaps explicitly.
+		When: "Synthesize from attachments, workspace research, public competitor or market research, or current sector news.",
+		Playbook: `Read attached and workspace sources completely when coverage is required, take notes, then synthesize only what the sources support. Mark gaps explicitly.
 Ask a clarifying question only if the synthesis goal itself is unclear.
 Never invent findings the sources do not carry.`,
-		PreferredSkills: []string{"umbratic-pdf", "umbratic-data-analysis", "umbratic-markdown"},
+		PreferredSkills: []string{"umbratic-competitive-research", "umbratic-news-briefing", "umbratic-pdf", "umbratic-data-analysis", "umbratic-markdown"},
+		WebGuidance:     publicWebGuidance,
 		Stop:            "the synthesis is delivered with its gaps marked.",
 	},
 	{
@@ -298,6 +311,7 @@ Never fabricate benchmarks or industry averages.`,
 
 Clarify what "done" looks like, then produce the smallest useful marketing output.`,
 		PreferredSkills: []string{"umbratic-discovery", "umbratic-markdown"},
+		WebGuidance:     publicWebGuidance,
 		Stop:            "one useful output is delivered, or the blocking question is asked.",
 	},
 }
@@ -308,15 +322,16 @@ Never invent firmographics, customer references, pricing, terms, or proof points
 var salesBuckets = []Bucket{
 	{
 		ID:   DirectAnswerBucket,
-		When: "Chitchat or a conceptual question that produces no sales deliverable.",
+		When: "Chitchat or a conceptual question that produces no sales deliverable. Not an account lookup, competitor research, or current news about a company or sector.",
 	},
 	{
 		ID:   "account_research",
-		When: "An account brief from supplied notes or files.",
+		When: "An account brief from supplied notes, files, or public information about a named company.",
 		Playbook: salesDiscoveryRule + `
 
-Gather only supplied and workspace facts, produce the account brief, and end with an open-questions list.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement", "umbratic-pdf", "umbratic-markdown"},
+Gather supplied and workspace facts, produce the account brief, and end with an open-questions list.`,
+		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement", "umbratic-competitive-research", "umbratic-news-briefing", "umbratic-pdf", "umbratic-markdown"},
+		WebGuidance:     publicWebGuidance,
 		Stop:            "the brief and its open questions are delivered.",
 	},
 	{
@@ -327,6 +342,7 @@ Gather only supplied and workspace facts, produce the account brief, and end wit
 Useful inputs: persona, deal stage, known pain, product wedge, competitive notes, and call length.
 Then produce hypotheses, prioritized questions, and listen-fors.`,
 		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement"},
+		WebGuidance:     publicWebGuidance,
 		Stop:            "the question set is delivered.",
 	},
 	{
@@ -346,7 +362,8 @@ Then produce grounded proposal sections and label every assumption.`,
 
 Useful inputs: the exact objection, the buyer persona, approved proof, and hard limits on claims.
 Then produce a rebuttal, a clarifying question, and an optional proof ask. Do not disparage competitors.`,
-		PreferredSkills: []string{"umbratic-sales-enablement", "umbratic-discovery"},
+		PreferredSkills: []string{"umbratic-sales-enablement", "umbratic-competitive-research", "umbratic-discovery"},
+		WebGuidance:     publicWebGuidance,
 		Stop:            "the responses are delivered.",
 	},
 	{
@@ -361,13 +378,24 @@ Then produce a timed flow, a talk track, and fallback paths.`,
 	},
 	{
 		ID:   "enablement_asset",
-		When: "A one-pager, leave-behind, or internal enablement deck or sheet.",
+		When: "A one-pager, leave-behind, internal enablement deck or sheet, or battlecard.",
 		Playbook: salesDiscoveryRule + `
 
 Decision-critical inputs: audience, format, and approved claims.
 Then load the matching artifact skill and build the asset.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement", "umbratic-presentations", "umbratic-documents", "umbratic-spreadsheets", "umbratic-pdf"},
+		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement", "umbratic-competitive-research", "umbratic-presentations", "umbratic-documents", "umbratic-spreadsheets", "umbratic-pdf"},
+		WebGuidance:     publicWebGuidance,
 		Stop:            "the asset is produced.",
+	},
+	{
+		ID:   "research_synth",
+		When: "Competitor landscape, public comparison of named alternatives, or current sector news. Not a specific account brief and not a leave-behind unless they asked to build one.",
+		Playbook: `Read attached and workspace sources completely when coverage is required, take notes, then synthesize only what the sources support. Mark gaps explicitly.
+Ask a clarifying question only if the synthesis goal itself is unclear.
+Never invent findings the sources do not carry.`,
+		PreferredSkills: []string{"umbratic-competitive-research", "umbratic-news-briefing", "umbratic-sales-enablement", "umbratic-pdf", "umbratic-markdown"},
+		WebGuidance:     publicWebGuidance,
+		Stop:            "the synthesis is delivered with its gaps marked.",
 	},
 	{
 		ID:   "pipeline_ops",
@@ -385,6 +413,7 @@ Clarify the process constraints, then give concrete pipeline next steps.`,
 
 Clarify what "done" looks like, then produce the smallest useful customer-facing output.`,
 		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement"},
+		WebGuidance:     publicWebGuidance,
 		Stop:            "one useful output is delivered, or the blocking question is asked.",
 	},
 }
@@ -724,6 +753,7 @@ func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadat
 		return ""
 	}
 	withGraph := HasTool(tools, "workspace_graph")
+	withWeb := HasTool(tools, "web_search") && HasTool(tools, "web_fetch")
 	body := bucket.body(withGraph)
 	if strings.TrimSpace(body) == "" {
 		return ""
@@ -731,6 +761,9 @@ func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadat
 	sections := []string{playbookHeader, "", body}
 	if strings.TrimSpace(bucket.GraphGuidance) != "" && withGraph {
 		sections = append(sections, "", bucket.GraphGuidance)
+	}
+	if strings.TrimSpace(bucket.WebGuidance) != "" && withWeb {
+		sections = append(sections, "", bucket.WebGuidance)
 	}
 	if preferred := intersectSkills(bucket.PreferredSkills, availableSkills); len(preferred) > 0 {
 		sections = append(sections, "",

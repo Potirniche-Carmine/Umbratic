@@ -16,6 +16,8 @@ export const systemSkillIds = [
   "umbratic-security-review",
   "umbratic-marketing-brief",
   "umbratic-sales-enablement",
+  "umbratic-competitive-research",
+  "umbratic-news-briefing",
 ] as const;
 
 export const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
@@ -39,6 +41,8 @@ export const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>
     "umbratic-spreadsheets",
     "umbratic-discovery",
     "umbratic-marketing-brief",
+    "umbratic-competitive-research",
+    "umbratic-news-briefing",
   ]),
   sales: new Set([
     "umbratic-markdown",
@@ -50,6 +54,8 @@ export const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>
     "umbratic-spreadsheets",
     "umbratic-discovery",
     "umbratic-sales-enablement",
+    "umbratic-competitive-research",
+    "umbratic-news-briefing",
   ]),
 };
 

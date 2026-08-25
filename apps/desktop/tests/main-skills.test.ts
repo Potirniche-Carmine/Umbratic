@@ -64,6 +64,8 @@ test("installBundledSystemSkills provisions the central skills layout", () => {
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-security-review", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-marketing-brief", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-sales-enablement", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-competitive-research", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-news-briefing", "SKILL.md")), true);
   // OCR stays orphaned on disk: umbratic-pdf covers that path in v1.
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-ocr")), false);
   assert.match(fs.readFileSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md"), "utf8"), /## OCR/);
@@ -71,6 +73,14 @@ test("installBundledSystemSkills provisions the central skills layout", () => {
   assert.match(pythonSkill, /write the file first/i);
   assert.match(pythonSkill, /If `uv` is not found, stop issuing `uv` commands/i);
   assert.match(pythonSkill, /Prose, code fences, and proposed commands do not create or run anything/i);
+  const competitiveSkill = fs.readFileSync(path.join(directory, "system", "umbratic-competitive-research", "SKILL.md"), "utf8");
+  assert.match(competitiveSkill, /web_search/);
+  assert.match(competitiveSkill, /web_fetch/);
+  assert.match(competitiveSkill, /DuckDuckGo/);
+  const newsSkill = fs.readFileSync(path.join(directory, "system", "umbratic-news-briefing", "SKILL.md"), "utf8");
+  assert.match(newsSkill, /web_search/);
+  assert.match(newsSkill, /Reuters/);
+  assert.match(newsSkill, /training data/);
 });
 
 test("skill frontmatter accepts inline and list path globs", () => {
@@ -171,6 +181,8 @@ test("listSkills reads folder and markdown skills with frontmatter and settings"
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-security-review" && skill.name === "Security Review"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-marketing-brief" && skill.name === "Marketing Brief"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-sales-enablement" && skill.name === "Sales Enablement"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-competitive-research" && skill.name === "Competitive Research"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-news-briefing" && skill.name === "News Briefing"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-data-analysis" && skill.name === "Data Analysis"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-marketing"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-sales"), false);
@@ -200,10 +212,14 @@ test("system skills follow the current harness unless the user overrides them", 
   assert.equal(enabled(engineering, "umbratic-spreadsheets"), false);
   assert.equal(enabled(engineering, "umbratic-presentations"), false);
   assert.equal(enabled(engineering, "umbratic-marketing-brief"), false);
+  assert.equal(enabled(engineering, "umbratic-competitive-research"), false);
+  assert.equal(enabled(engineering, "umbratic-news-briefing"), false);
 
   storage.writeHarnessProfileSetting("marketing");
   const marketing = await skills.listSkills(directory, {});
   assert.equal(enabled(marketing, "umbratic-marketing-brief"), true);
+  assert.equal(enabled(marketing, "umbratic-competitive-research"), true);
+  assert.equal(enabled(marketing, "umbratic-news-briefing"), true);
   assert.equal(enabled(marketing, "umbratic-spreadsheets"), true);
   assert.equal(enabled(marketing, "umbratic-presentations"), true);
   assert.equal(enabled(marketing, "umbratic-git-worktree"), false);
@@ -213,6 +229,8 @@ test("system skills follow the current harness unless the user overrides them", 
   storage.writeHarnessProfileSetting("sales");
   const sales = await skills.listSkills(directory, {});
   assert.equal(enabled(sales, "umbratic-sales-enablement"), true);
+  assert.equal(enabled(sales, "umbratic-competitive-research"), true);
+  assert.equal(enabled(sales, "umbratic-news-briefing"), true);
   assert.equal(enabled(sales, "umbratic-marketing-brief"), false);
   assert.equal(enabled(sales, "umbratic-spreadsheets"), true);
   assert.equal(enabled(sales, "umbratic-git-worktree"), false);

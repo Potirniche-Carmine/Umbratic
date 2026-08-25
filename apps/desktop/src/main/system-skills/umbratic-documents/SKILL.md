@@ -64,8 +64,8 @@ field work. Set `toc: true` only when the document has headings.
 
 - **Lead with the answer.** A brief whose first paragraph is background is a
   brief nobody finishes. Recommendation first, then why.
-- **Ground every number in the supplied material.** Write
-  `[proof needed: renewal rate]` rather than a plausible figure.
+- **Ground every number in the supplied material or a page you fetched this
+  turn.** Write `[proof needed: renewal rate]` rather than a plausible figure.
 - Use `callout` for the two or three things that must not be missed —
   `decision`, `warning`, `note`, `summary`. A document where everything is
   called out has nothing called out.

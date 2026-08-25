@@ -110,6 +110,14 @@ var globalPromptSections = []promptSection{
 		},
 	},
 	{
+		header: "Public web:",
+		lines: []promptLine{
+			{text: "web_search queries DuckDuckGo and returns at most five titles, URLs, and short snippets. Distill the query; do not paste the whole user prompt. Snippets are leads, not evidence.", needs: []string{"web_search"}},
+			{text: "web_fetch reads the text of one public page. Send one absolute http or https URL from a search result or the user. It is not a browser. Private, loopback, and credentialed URLs are blocked.", needs: []string{"web_fetch"}},
+			{text: "Prefer fetching a known primary URL over hoping search ranks it. Treat a live event, price, or headline as unknown until a fetched page states it.", needs: []string{"web_search", "web_fetch"}},
+		},
+	},
+	{
 		header: "Ending the turn:",
 		lines: []promptLine{
 			{text: `Independent reads, listings, and searches belong in one response. Your final response is the one with no tool calls: findings, lists, paths, and conclusions all go there, and that is where the user looks for them. Save what you found for the final response.`},
@@ -164,8 +172,8 @@ func BuildCompaction(previousSummary string, sourceJSON string) []model.Message 
 
 var routePrompts = map[Route]string{
 	EngineeringChat: "Route: engineering chat. Give concrete technical help for software, codebase, debugging, test, and implementation work. Use repository-native workflows and state verification gaps clearly. For other requests, answer normally; this route does not make you software-only.",
-	MarketingChat:   "Route: marketing chat. For campaign, content, positioning, launch, site copy, audience, or brand requests, stay grounded in supplied facts and do not invent metrics, customer claims, or brand promises. For other requests, answer normally.",
-	SalesChat:       "Route: sales chat. For account research, enablement, demo, proposal, objection, CRM, or pipeline requests, keep outputs customer-facing, practical, and grounded in supplied facts. For other requests, answer normally.",
+	MarketingChat:   "Route: marketing chat. For campaign, content, positioning, launch, site copy, audience, or brand requests, stay grounded in supplied facts and in public pages fetched this turn; do not invent metrics, customer claims, or brand promises. For other requests, answer normally.",
+	SalesChat:       "Route: sales chat. For account research, enablement, demo, proposal, objection, CRM, or pipeline requests, keep outputs customer-facing, practical, and grounded in supplied facts and in public pages fetched this turn. For other requests, answer normally.",
 }
 
 func Build(route Route, clientMessages []model.Message, tools any) ([]model.Message, error) {

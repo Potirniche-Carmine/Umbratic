@@ -64,9 +64,10 @@ in it. Split it.
   ("Revenue grew 12% on renewals").
 - **Detail belongs in `notes`.** Notes are unlimited and are what the presenter
   actually says. A slide dense enough to read is a slide nobody listens to.
-- **Ground every number in what the user gave you.** If a figure is not in the
-  material, write `[proof needed: Q3 churn]` rather than a plausible number.
-  A deck that invents one number cannot be trusted on any of them.
+- **Ground every number in what the user gave you or in a page you fetched this
+  turn.** If a figure is in neither, write `[proof needed: Q3 churn]` rather
+  than a plausible number. A deck that invents one number cannot be trusted on
+  any of them.
 - Two lines of plan first — audience, purpose, outline. Ask at most one
   question, and only if the answer changes the deck. Otherwise state your
   assumptions in the closing slide.

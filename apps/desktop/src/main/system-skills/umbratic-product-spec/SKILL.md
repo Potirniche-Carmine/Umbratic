@@ -45,6 +45,6 @@ Non-negotiable when requirements were incomplete. For each assumption record wha
 
 ## Never
 
-- Invent metrics, user research, or competitive claims to make a section look complete. Write "unknown" and list it as an open question.
+- Invent metrics, user research, or competitive claims to make a section look complete. Write "unknown" and list it as an open question, or look the public fact up when web tools are present.
 - Present an assumption as a given.
 - Pad with sections the document does not need.

@@ -22,6 +22,8 @@ func allWorkspaceTools() any {
 		"retrieve_context",
 		"run_program",
 		"workspace_graph",
+		"web_search",
+		"web_fetch",
 	}
 	tools := make([]any, 0, len(names))
 	for _, name := range names {
@@ -57,6 +59,9 @@ func withoutWorkspaceTool(dropped string) any {
 // also being forbidden to reach for grep through command.
 func TestGlobalPromptOnlyDescribesDeclaredTools(t *testing.T) {
 	full := GlobalSystemPrompt(allWorkspaceTools())
+	if !strings.Contains(full, "queries DuckDuckGo") || !strings.Contains(full, "web_fetch reads the text") {
+		t.Fatal("the full tool surface must describe web_search and web_fetch")
+	}
 
 	withoutSearch := GlobalSystemPrompt(withoutWorkspaceTool("search"))
 	for _, gone := range []string{
@@ -90,11 +95,23 @@ func TestGlobalPromptOnlyDescribesDeclaredTools(t *testing.T) {
 		t.Fatal("a request without read_attachment still names it")
 	}
 
+	withoutSearchWeb := GlobalSystemPrompt(withoutWorkspaceTool("web_search"))
+	if strings.Contains(withoutSearchWeb, "queries DuckDuckGo") {
+		t.Fatal("a request without web_search still describes it")
+	}
+	withoutFetch := GlobalSystemPrompt(withoutWorkspaceTool("web_fetch"))
+	if strings.Contains(withoutFetch, "web_fetch reads the text") {
+		t.Fatal("a request without web_fetch still describes it")
+	}
+
 	// A request that carries no tools at all has no tool mechanics to state, so
 	// the section built from them disappears with its header.
 	bare := GlobalSystemPrompt(nil)
 	if strings.Contains(bare, "Finding and reading files:") {
 		t.Fatal("an empty tool array must not render a tool section header")
+	}
+	if strings.Contains(bare, "Public web:") {
+		t.Fatal("an empty tool array must not render public-web guidance")
 	}
 	if !strings.Contains(bare, "private and confidential AI assistant") {
 		t.Fatal("identity survives a request with no tools")

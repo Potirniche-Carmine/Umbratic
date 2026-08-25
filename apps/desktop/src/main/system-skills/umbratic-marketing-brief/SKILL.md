@@ -1,11 +1,11 @@
 ---
 name: Marketing Brief
-description: Use for positioning, messaging pillars, campaign briefs, and marketing copy, covering message house structure, audience framing, and claim discipline.
+description: Use for positioning, messaging pillars, campaign briefs, and marketing copy, covering message house structure, audience framing, claim discipline, and public-source competitive research when web tools are available.
 ---
 
 # Marketing Brief
 
-Structure for positioning, campaign, and copy work. Grounded in what the user supplied; nothing invented.
+Structure for positioning, campaign, and copy work. Grounded in what the user supplied and in public pages you actually fetched this turn; nothing invented.
 
 ## Claim discipline
 
@@ -13,9 +13,20 @@ This is the rule that outranks the rest.
 
 - Never invent metrics, percentages, customer counts, revenue figures, or benchmarks.
 - Never fabricate customer quotes, logos, case studies, or analyst mentions.
-- Never state a competitive claim the user did not supply and cannot substantiate.
+- Never state a competitive claim the user did not supply and you did not fetch from a primary or independent source.
 - Where a proof point is needed but missing, write a visible placeholder such as `[proof needed: retention figure]` rather than a plausible number.
 - Respect stated forbidden claims and regulatory limits exactly.
+- Label factual sentences **user-supplied**, **observed** (URL), or **inferred**.
+
+## Public research
+
+When `web_search` and `web_fetch` are in the tools array, look up public facts instead of asking the user for them. Search is DuckDuckGo snippets only — fetch the page. Prefer filings, official product and pricing pages, and established newsrooms (Reuters, AP, BBC, Bloomberg, FT, WSJ) over aggregators and listicles. Cite the URL.
+
+If those tools are absent, do not narrate a live market from training data. Use supplied material and label the gaps.
+
+For a competitor landscape, battlecard, or alternative comparison, also read the competitive-research skill when it is enabled. For current sector news, also read the news-briefing skill when it is enabled.
+
+A differentiator without proof is a hypothesis. Label it as one.
 
 ## Positioning
 
@@ -24,10 +35,8 @@ Work in this order:
 1. **Audience** — who specifically, and what they are trying to get done.
 2. **Category** — the frame of reference the buyer already has.
 3. **Differentiation** — what is true of you and not of the alternatives.
-4. **Proof** — the evidence for each differentiator, supplied by the user.
+4. **Proof** — the evidence for each differentiator, supplied or fetched.
 5. **Value** — the outcome the buyer gets, in their words.
-
-A differentiator without proof is a hypothesis. Label it as one.
 
 ## Message house
 
@@ -49,7 +58,7 @@ Tie each asset to a pillar and a stage. An asset that serves neither should be c
 - One idea per paragraph, one call to action per piece.
 - Match the requested length and tone; do not inflate.
 - Draft, then tighten. Cut adjectives before you cut arguments.
-- Keep every factual sentence traceable to a source the user gave you.
+- Keep every factual sentence traceable to a source the user gave you or a page you fetched.
 
 ## Format
 

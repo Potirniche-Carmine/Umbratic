@@ -87,6 +87,13 @@ pinned build number, at least one CPU backend, and the GPU backend that platform
 expects — so a backend that silently stops being built cannot ship as a
 quietly CPU-only release.
 
+Building llama.cpp needs CMake on both platforms. Windows also needs Ninja
+(`winget install Kitware.CMake Ninja-build.Ninja`) because the default MSBuild
+generator trips MAX_PATH in the nested shader build; macOS builds with CMake's
+default Unix Makefiles from the Xcode Command Line Tools and needs nothing
+beyond `brew install cmake`. `UMBRATIC_LLAMA_GENERATOR` overrides the generator
+on either platform.
+
 Windows packaging needs the Vulkan SDK on the build machine for headers and
 `glslc` (`winget install KhronosGroup.VulkanSDK`, then a new terminal so
 `VULKAN_SDK` is set). Installing it from an unreviewed download is governed by

@@ -697,6 +697,24 @@
     "bucket": "research_synth"
   },
   {
+    "id": "mkt-research-7",
+    "route": "marketing/chat",
+    "request": "what's in the news in enterprise SaaS this week?",
+    "bucket": "research_synth"
+  },
+  {
+    "id": "mkt-research-8",
+    "route": "marketing/chat",
+    "request": "research our top three competitors' latest launches",
+    "bucket": "research_synth"
+  },
+  {
+    "id": "mkt-research-9",
+    "route": "marketing/chat",
+    "request": "give me a daily briefing on fintech regulation",
+    "bucket": "research_synth"
+  },
+  {
     "id": "sales-account",
     "route": "sales/chat",
     "request": "build me an account brief from these notes",
@@ -736,6 +754,12 @@
     "id": "sales-account-7",
     "route": "sales/chat",
     "request": "what do we still not know about this account?",
+    "bucket": "account_research"
+  },
+  {
+    "id": "sales-account-8",
+    "route": "sales/chat",
+    "request": "look up Acme Corp before tomorrow's call",
     "bucket": "account_research"
   },
   {
@@ -1017,5 +1041,23 @@
     "route": "sales/chat",
     "request": "they asked for a formal quote document, draft it",
     "bucket": "proposal_draft"
+  },
+  {
+    "id": "sales-research",
+    "route": "sales/chat",
+    "request": "what's in the news in our sector this week?",
+    "bucket": "research_synth"
+  },
+  {
+    "id": "sales-research-2",
+    "route": "sales/chat",
+    "request": "research our top competitors' latest launches",
+    "bucket": "research_synth"
+  },
+  {
+    "id": "sales-research-3",
+    "route": "sales/chat",
+    "request": "give me a landscape of the three alternatives they named",
+    "bucket": "research_synth"
   }
 ]

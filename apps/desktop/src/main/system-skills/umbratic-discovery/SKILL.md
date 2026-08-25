@@ -1,6 +1,6 @@
 ---
 name: Discovery
-description: Use before drafting a spec, campaign, proposal, or other deliverable when decision-critical inputs are missing, to ask one tight batch of questions instead of drip-feeding them.
+description: Use before drafting a spec, campaign, proposal, or other deliverable when decision-critical inputs are missing, to ask one tight batch of questions instead of drip-feeding them, looking up public facts with web tools rather than asking the user for them.
 ---
 
 # Discovery
@@ -11,11 +11,11 @@ Ask once, ask well, then build. The goal is a working brief, not an interview.
 
 Ask only for facts that can change the output you were asked for.
 
-- **Blocker** — you cannot produce a correct deliverable without it. Ask.
+- **Blocker** — you cannot produce a correct deliverable without it. Ask. If `web_search` and `web_fetch` are in the tools array, a public fact is not a blocker: look it up, then ask only for what is still private (budget, unpublished pricing, forbidden claims, internal metrics, stakeholder politics, what is approved to say).
 - **Nice-to-have** — it would sharpen the result but a stated assumption covers it. Do not ask; assume and label.
 - **Irrelevant** — it cannot change this deliverable. Never ask.
 
-If the supplied brief, source material, and requested outcome are already sufficient, skip discovery entirely and produce the deliverable. A ceremonial question batch on a complete brief is a failure, not diligence.
+If the supplied brief, source material, fetched public pages, and requested outcome are already sufficient, skip discovery entirely and produce the deliverable. A ceremonial question batch on a complete brief is a failure, not diligence.
 
 ## How to ask
 
@@ -47,5 +47,6 @@ Proceed immediately. State your assumptions explicitly at the top of the draft, 
 
 ## Never
 
-- Invent facts, metrics, customer quotes, or firmographics to fill a gap. An unknown stays an unknown, labelled as one.
+- Invent facts, metrics, customer quotes, or firmographics to fill a gap. An unknown stays an unknown, labelled as one. Training data is not a live source.
 - Stall a deliverable on a question whose answer would not change it.
+- Ask the user for a fact a public page already states when the web tools are present.

@@ -260,6 +260,8 @@ test("business harness modes keep their Veil route and the matching business ski
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-pdf"), true);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), true);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-marketing-brief"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-competitive-research"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-news-briefing"), true);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-sales-enablement"), false);
   assert.equal(config.provider.chatEndpointPath, "/api/marketing/chat");
   assert.equal("system" in config, false);

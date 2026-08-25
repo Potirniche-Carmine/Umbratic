@@ -314,7 +314,8 @@ func TestOnlyEvidenceBackedBucketsRequireEvidence(t *testing.T) {
 			t.Fatalf("%q must not require evidence", id)
 		}
 	}
-	// Marketing and sales deliverables come from supplied context, not tools.
+	// Marketing and sales still complete from supplied context. Web tools are
+	// extra collection when present, not a requirement to open the turn.
 	for _, route := range []Route{MarketingChat, SalesChat} {
 		buckets, _ := RouteBuckets(route)
 		for _, bucket := range buckets {
@@ -719,6 +720,41 @@ func TestGraphGuidanceRendersOnlyWhenTheToolIsPresent(t *testing.T) {
 		}
 		if PlaybookPrompt(EngineeringChat, bucket, nil, nil) != absent {
 			t.Fatalf("%s: a nil tool array must render like an array without the tool", bucket)
+		}
+	}
+}
+
+// Public-web guidance is the same contract as graph guidance: name the tools
+// only when the request actually declared them, so a run with web search off
+// assembles the playbook it had before those tools existed.
+func TestWebGuidanceRendersOnlyWhenBothToolsArePresent(t *testing.T) {
+	both := []any{
+		map[string]any{"type": "function", "function": map[string]any{"name": "web_search"}},
+		map[string]any{"type": "function", "function": map[string]any{"name": "web_fetch"}},
+	}
+	searchOnly := []any{
+		map[string]any{"type": "function", "function": map[string]any{"name": "web_search"}},
+	}
+
+	for _, trial := range []struct {
+		route  Route
+		bucket string
+	}{
+		{MarketingChat, "research_synth"},
+		{MarketingChat, "positioning"},
+		{SalesChat, "account_research"},
+		{SalesChat, "research_synth"},
+	} {
+		absent := PlaybookPrompt(trial.route, trial.bucket, nil, nil)
+		present := PlaybookPrompt(trial.route, trial.bucket, nil, both)
+		if strings.Contains(absent, "web_search") || strings.Contains(absent, "web_fetch") {
+			t.Fatalf("%s/%s named web tools without them:\n%s", trial.route, trial.bucket, absent)
+		}
+		if !strings.Contains(present, "web_search") || !strings.Contains(present, "web_fetch") {
+			t.Fatalf("%s/%s dropped web guidance with the tools present:\n%s", trial.route, trial.bucket, present)
+		}
+		if PlaybookPrompt(trial.route, trial.bucket, nil, searchOnly) != absent {
+			t.Fatalf("%s/%s must require both web tools, not search alone", trial.route, trial.bucket)
 		}
 	}
 }

@@ -93,8 +93,8 @@ function runLong(command: string, args: string[], cwd: string, what: string, env
       // Keep only the tail: a failing build's message is at the end, and the
       // whole log is tens of megabytes.
       captured = `${captured}${text}`.slice(-16000);
-      // Both MSBuild and Ninja name each translation unit as they go, which is
-      // enough to show that something is still happening.
+      // Ninja, Make, and MSBuild all name each translation unit as they go,
+      // which is enough to show that something is still happening.
       compiled += (text.match(/\.(?:c|cc|cpp|cu|m|mm)\b/gi) ?? []).length;
     };
     child.stdout?.on("data", absorb);
@@ -130,6 +130,24 @@ function runLong(command: string, args: string[], cwd: string, what: string, env
  * never sets it.
  */
 const llamaCpuOnly = process.env.UMBRATIC_LLAMA_CPU_ONLY === "1";
+
+/**
+ * The CMake generator for the llama.cpp build, chosen per platform.
+ *
+ * Ninja on Windows, and only there: llama.cpp builds vulkan-shaders-gen as a
+ * nested ExternalProject, and the .tlog files the default MSBuild generator
+ * writes under that prefix push its compiler probe past the 260-character
+ * MAX_PATH limit for any checkout more than a few directories deep. That
+ * surfaces as "the C compiler is broken", which is not what went wrong. Ninja
+ * writes no .tlog files, and leaves the longest path comfortably clear.
+ *
+ * Everywhere else, null: CMake's platform default (Unix Makefiles) builds the
+ * same thing with the make the Xcode Command Line Tools already provide,
+ * without asking for another tool. Set UMBRATIC_LLAMA_GENERATOR to override
+ * either choice — for example to use an installed Ninja on a Mac.
+ */
+const llamaGenerator = process.env.UMBRATIC_LLAMA_GENERATOR?.trim()
+  || (process.platform === "win32" ? "Ninja" : null);
 
 /**
  * The environment MSVC needs, as vcvarsall.bat would leave it.
@@ -215,25 +233,36 @@ function msvcEnvironment(): NodeJS.ProcessEnv {
  * part — a package to install — nowhere in it.
  */
 function requireLlamaBuildTools(wantsVulkan: boolean) {
+  const mac = process.platform === "darwin";
   if (spawnSync("cmake", ["--version"], { stdio: "ignore" }).error) {
     throw new Error(
       "CMake is required to build the bundled model runtime, and is not on PATH.\n"
-      + "  Install it with:  winget install Kitware.CMake\n"
+      + (mac
+        ? "  Install it with:  brew install cmake\n"
+        : "  Install it with:  winget install Kitware.CMake\n")
       + "  then open a new terminal so PATH picks it up.",
     );
   }
-  // Ninja instead of the default MSBuild generator: llama.cpp builds
-  // vulkan-shaders-gen as a nested ExternalProject, and the .tlog files MSBuild
-  // writes under that prefix push its compiler probe past the 260-character
-  // MAX_PATH limit for any checkout more than a few directories deep. It
-  // surfaces as "the C compiler is broken", which is not what went wrong. Ninja
-  // writes no .tlog files, and leaves the longest path comfortably clear.
-  if (spawnSync("ninja", ["--version"], { stdio: "ignore" }).error) {
+  // See llamaGenerator for why this is Ninja on Windows and CMake's own
+  // default elsewhere.
+  if (llamaGenerator === "Ninja" && spawnSync("ninja", ["--version"], { stdio: "ignore" }).error) {
     throw new Error(
       "Ninja is required to build the bundled model runtime, and is not on PATH.\n"
-      + "  Install it with:  winget install Ninja-build.Ninja\n"
+      + (mac
+        ? "  Install it with:  brew install ninja\n"
+        : "  Install it with:  winget install Ninja-build.Ninja\n")
       + "  then open a new terminal so PATH picks it up.",
     );
+  }
+  if (mac) {
+    // Compiler and make both come from the Command Line Tools; this is the
+    // standard check for them that cannot pop the GUI install dialog.
+    if (spawnSync("xcode-select", ["-p"], { stdio: "ignore" }).status !== 0) {
+      throw new Error(
+        "The Xcode Command Line Tools are required to build the bundled model runtime.\n"
+        + "  Install them with:  xcode-select --install",
+      );
+    }
   }
   if (!wantsVulkan) return;
   // FindVulkan needs the headers, the loader import library, and glslc, all of
@@ -326,10 +355,10 @@ async function buildLlamaServer() {
       console.warn("UMBRATIC_LLAMA_CPU_ONLY=1: building llama-server without a GPU backend. Do not release this build.");
     }
     const configure = [
-      // See requireLlamaBuildTools for why this is not the default MSBuild
-      // generator. Ninja is single-config, so CMAKE_BUILD_TYPE below is what
-      // selects Release, rather than a --config flag on the build step.
-      "-G", "Ninja",
+      // See llamaGenerator for the per-platform choice. Ninja and the Unix
+      // Makefiles default are both single-config, so CMAKE_BUILD_TYPE below is
+      // what selects Release, rather than a --config flag on the build step.
+      ...(llamaGenerator ? ["-G", llamaGenerator] : []),
       "-S", sourceDir,
       "-B", buildDir,
       "-DCMAKE_BUILD_TYPE=Release",
