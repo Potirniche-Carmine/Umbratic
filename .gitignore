@@ -12,3 +12,4 @@ packages/runner/dist/
 %SystemDrive%/ProgramData/Microsoft/Windows/Caches/
 .build
 *.profraw
+.claude/

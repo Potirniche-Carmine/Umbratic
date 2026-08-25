@@ -26,6 +26,39 @@
   background: var(--control-hover);
 }
 
+/* The one thing in the sidebar that asks for something. It sits above the
+   brand because that is the quietest place it can be and still be seen, and
+   it is shaped like the Settings button below it so it reads as part of the
+   footer rather than as an interruption.
+
+   It borrows that button's tokens rather than a colour of its own: whatever
+   theme makes Settings readable makes this readable too, and the emphasis
+   comes from weight and contrast instead of a hue nothing else here has
+   ever had to survive a theme change with. */
+.sidebarUpdate {
+  display: grid;
+  grid-template-columns: 16px auto;
+  justify-content: center;
+  gap: 8px;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--control-hover);
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 600;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.sidebarUpdate:hover {
+  border-color: var(--accent);
+}
+
 .sideSection {
   display: flex;
   flex-direction: column;

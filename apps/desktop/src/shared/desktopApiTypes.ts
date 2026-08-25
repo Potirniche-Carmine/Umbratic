@@ -566,11 +566,12 @@ export type KeyBindingSettings = Record<string, StoredKeyBinding>;
  * Where the installed app stands against the release feed at downloads.umbratic.ai.
  *
  * `automatic` is the one setting: whether the app checks on its own. Off means
- * the feed is only ever reached by "Check now", which is the contract for a
- * machine that is meant to stay quiet. `checkedAt` is the last time this
- * session consulted the feed, so a user can see that "up to date" is a fresh
- * answer rather than an old one. Downloads happen in the background; the
- * `ready` state is the one that asks something of the user.
+ * the feed is never reached at all — there is no on-demand check to override
+ * it — which is the contract for a machine that is meant to stay quiet.
+ * `checkedAt` is the last time this session actually consulted the feed, so a
+ * user can see that "up to date" is a fresh answer rather than an old one; a
+ * check that never left the machine does not move it. Downloads happen in the
+ * background; the `ready` state is the one that asks something of the user.
  */
 export type AppUpdateStatus = {
   installedVersion: string;
@@ -582,6 +583,13 @@ export type AppUpdateStatus = {
     | { phase: "idle" }
     | { phase: "checking" }
     | { phase: "current" }
+    /**
+     * The feed will not serve this installation: its company's licence ended,
+     * it was revoked, or this machine has never reached a Veil to be given a
+     * token. Distinct from `failed` because nothing is broken and nobody at
+     * this keyboard can act on it.
+     */
+    | { phase: "unlicensed" }
     | { phase: "downloading"; latestVersion: string; percent: number }
     | { phase: "ready"; latestVersion: string }
     | { phase: "failed"; message: string };
@@ -967,7 +975,6 @@ export type DesktopApi = {
   cancelDictation(): Promise<void>;
   getAppUpdateStatus(): Promise<AppUpdateStatus>;
   /** Consults the feed now and answers once it has, before any download. */
-  checkForAppUpdate(): Promise<AppUpdateStatus>;
   setAutomaticAppUpdates(input: { enabled: boolean }): Promise<AppUpdateStatus>;
   /** Quits into the downloaded release. Only meaningful in the `ready` state. */
   installAppUpdate(): Promise<void>;

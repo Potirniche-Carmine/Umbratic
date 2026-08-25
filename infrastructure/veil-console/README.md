@@ -358,4 +358,4 @@ from copying the complete zip. This redistribution limit is contractual in versi
 to the desktop enrollment flow.
 
 For entitlement reissue, key rotation, backup, and recovery steps, see
-[`../../docs/enterprise-licensing.md`](../../docs/enterprise-licensing.md).
+[`../../docs/guides/operate-server.md`](../../docs/guides/operate-server.md).

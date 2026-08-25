@@ -421,7 +421,6 @@ let previewLocalMtp = true;
   onModelDownloadEvent: () => () => undefined,
   // The preview is not an installed build; it shows the state one would.
   getAppUpdateStatus: async () => previewUpdateStatus,
-  checkForAppUpdate: async () => previewUpdateStatus,
   setAutomaticAppUpdates: async ({ enabled }) => ({ ...previewUpdateStatus, automatic: enabled }),
   installAppUpdate: async () => undefined,
   onAppUpdateStatus: () => () => undefined,

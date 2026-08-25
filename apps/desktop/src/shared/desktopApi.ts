@@ -113,7 +113,6 @@ export const desktopIpcChannels = {
   stopDictation: "umbratic:stop-dictation",
   cancelDictation: "umbratic:cancel-dictation",
   getAppUpdateStatus: "umbratic:get-app-update-status",
-  checkForAppUpdate: "umbratic:check-for-app-update",
   setAutomaticAppUpdates: "umbratic:set-automatic-app-updates",
   installAppUpdate: "umbratic:install-app-update",
 } as const satisfies Record<

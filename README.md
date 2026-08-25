@@ -45,7 +45,7 @@ it produces `Umbratic-<version>.dmg` and `Umbratic-<version>.zip`, which unzips
 to `Umbratic.app`. Each build runs on its own platform; electron-builder cannot
 produce a macOS app from Windows or the reverse. Signing, notarization, and
 publishing to `downloads.umbratic.ai` — where installed apps look for updates
-— are covered in [docs/releasing.md](docs/releasing.md).
+— are covered in [docs/guides/release-desktop.md](docs/guides/release-desktop.md).
 
 Both carry their own Veil binary, so a packaged app runs with no install script
 and no separate Veil process to start.
@@ -59,11 +59,13 @@ and gives the user one Enrollment code. The desktop uses the code once to enroll
 one device. It then uses a device key and short sessions. A shared company bearer
 token cannot access chat or telemetry.
 
-See [`docs/enterprise-licensing.md`](docs/enterprise-licensing.md) for customer
-release, entitlement, backup, and recovery procedures.
+See [`docs/guides/deploy-customer.md`](docs/guides/deploy-customer.md) to build
+a customer release and install it, and
+[`docs/guides/operate-server.md`](docs/guides/operate-server.md) for entitlement
+changes, backup, and recovery.
 
-See [`docs/storage-layout.md`](docs/storage-layout.md) for desktop and server
-installation, state, cache, and log locations.
+See [`docs/reference/storage.md`](docs/reference/storage.md) for desktop and
+server installation, state, cache, and log locations.
 
 Run Veil by itself for server development:
 
@@ -78,4 +80,4 @@ npm run test:all
 ```
 
 Dependency update, audit, runtime provisioning, and SBOM rules are documented in
-[`docs/supply-chain.md`](docs/supply-chain.md).
+[`docs/reference/supply-chain.md`](docs/reference/supply-chain.md).

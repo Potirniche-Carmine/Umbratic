@@ -133,6 +133,7 @@ import {
   Paperclip,
   Play,
   RefreshCw,
+  RotateCw,
   Send,
   Server,
   Settings,
@@ -358,6 +359,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [branchError, setBranchError] = useState<string | null>(null);
   const [checkoutPending, setCheckoutPending] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Only the downloaded-and-waiting state reaches the sidebar. Checking,
+  // downloading, and every way a check can come back empty-handed are the
+  // app's business, not something to put in front of someone mid-sentence.
+  const [updateReadyVersion, setUpdateReadyVersion] = useState<string | null>(null);
   // The dictation offer, raised by pressing a microphone that is not set up.
   const [dictationSetupOffer, setDictationSetupOffer] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
@@ -1068,6 +1073,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const unsubscribeIndex = api.onWorkspaceIndex((event) => {
       setIndexingWorkspace(event.phase === "started" ? event.workspacePath : null);
     });
+    const unsubscribeUpdates = api.onAppUpdateStatus((status) => {
+      setUpdateReadyVersion(status.state.phase === "ready" ? status.state.latestVersion : null);
+    });
+    void api.getAppUpdateStatus().then((status) => {
+      setUpdateReadyVersion(status.state.phase === "ready" ? status.state.latestVersion : null);
+    });
     return () => {
       window.clearInterval(statusTimer);
       backendEventFlushDisposed = true;
@@ -1078,6 +1089,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       }
       unsubscribe();
       unsubscribeIndex();
+      unsubscribeUpdates();
     };
   }, []);
 
@@ -3854,6 +3866,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         </div>
 
         <div className="sidebarFooter">
+          {updateReadyVersion ? (
+            <button
+              className="sidebarUpdate"
+              type="button"
+              onClick={() => void api.installAppUpdate()}
+              title={`Version ${updateReadyVersion} is downloaded and installs when you restart`}
+            >
+              <RotateCw size={14} />
+              <span>Restart to update</span>
+            </button>
+          ) : null}
           <div className="sidebarBrand" aria-hidden="true"><span className="sidebarBrandRow"><span className="sidebarBrandMark" /><span className="sidebarBrandName">Umbratic</span></span><span className="confidentialMark">Private and Confidential</span></div>
           <ShortcutTooltip id="app.settings">
             <button
