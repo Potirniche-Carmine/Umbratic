@@ -102,6 +102,12 @@ pub struct ProviderConfig {
     pub send_reasoning_visible_field: bool,
     /// Whether this run asked Veil to forward reasoning tokens. Off by default.
     pub reasoning_visible: bool,
+    /// Whether `web_search` asks Veil to run the search instead of querying a
+    /// public engine from this machine. Off unless the desktop confirmed the
+    /// Veil advertises `web.search`: only that deployment holds a search
+    /// credential, and only there does the query stay inside the company
+    /// boundary.
+    pub veil_web_search: bool,
     pub headers: BTreeMap<String, String>,
     pub mtls: Option<MtlsConfig>,
 }
@@ -573,6 +579,10 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
             .get("reasoningVisible")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        veil_web_search: provider_object
+            .get("veilWebSearch")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         headers,
         mtls,
     };
@@ -692,6 +702,7 @@ mod tests {
             thinking: None,
             send_reasoning_visible_field: false,
             reasoning_visible: false,
+            veil_web_search: false,
             headers: BTreeMap::new(),
             mtls: None,
         };
@@ -715,6 +726,7 @@ mod tests {
             thinking: None,
             send_reasoning_visible_field: false,
             reasoning_visible: false,
+            veil_web_search: false,
             headers: BTreeMap::new(),
             mtls: None,
         }
@@ -896,6 +908,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ignored.local_date, None);
+    }
+
+    #[test]
+    fn veil_web_search_is_off_until_the_desktop_confirms_the_feature() {
+        let without = parse_runner_config(
+            r#"{"password":"p","cwd":"/tmp","provider":{"name":"Veil","baseURL":"http://127.0.0.1:1","mode":"local","chatEndpointPath":"/api/engineering/chat","modelId":"m"}}"#,
+        )
+        .unwrap();
+        assert!(!without.provider.veil_web_search);
+        let with = parse_runner_config(
+            r#"{"password":"p","cwd":"/tmp","provider":{"name":"Veil","baseURL":"http://127.0.0.1:1","mode":"local","chatEndpointPath":"/api/engineering/chat","modelId":"m","veilWebSearch":true}}"#,
+        )
+        .unwrap();
+        assert!(with.provider.veil_web_search);
     }
 
     #[test]

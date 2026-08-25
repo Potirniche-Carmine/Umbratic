@@ -4136,7 +4136,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 disabled={busy}
                 onToggle={(next) => selectWorkspaceMode(next ? "worktree" : "local")}
               />
-            ) : null}<WebToolsControl initial={startupSettings.webTools === true} disabled={busy} setWebTools={api.setWebTools} onError={setError} />
+            ) : null}{endpointSettings.mode === "local" || backend?.veilFeatures.includes("web.search") === true ? (<WebToolsControl initial={startupSettings.webTools === true} disabled={busy} setWebTools={api.setWebTools} onError={setError} />) : null}
 
             <div className="attachmentControl">
               <button

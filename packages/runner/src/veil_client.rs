@@ -141,6 +141,94 @@ pub async fn compact_context(
         .ok_or_else(|| "context compaction response did not contain a summary".to_owned())
 }
 
+/// Why a Veil-run web search produced no results.
+#[derive(Debug)]
+pub enum VeilWebSearchError {
+    /// Veil answered with `writeCodedError`. The code is the contract between
+    /// the two binaries; turning it into advice the model can act on is the
+    /// caller's job, not the transport's.
+    Coded(String),
+    /// No coded answer ever arrived — the request failed, timed out, or came
+    /// back as something this runner could not read.
+    Transport(String),
+}
+
+/// A single search round trip has an end, unlike a chat stream, so it gets the
+/// overall timeout the shared client deliberately does without. Veil serializes
+/// its own outbound calls, so a queued search can legitimately wait a moment.
+const WEB_SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Asks Veil to run one public-web search. In server mode the query must not
+/// leave the company boundary from this machine, so the runner never learns
+/// which engine answered or what credential it used — it posts the query and
+/// reads back whatever results Veil is willing to hand over.
+pub async fn veil_web_search(
+    session: &Session,
+    query: &str,
+) -> Result<Vec<Value>, VeilWebSearchError> {
+    let (mut endpoint, host_header) =
+        request_endpoint(&session.config.provider).map_err(VeilWebSearchError::Transport)?;
+    endpoint.set_path("/api/web/search");
+    endpoint.set_query(None);
+    let client = shared_client(&session.config.provider).map_err(VeilWebSearchError::Transport)?;
+    let mut request = client
+        .post(endpoint)
+        .header("Content-Type", "application/json")
+        .timeout(WEB_SEARCH_TIMEOUT);
+    if let Some(host) = host_header {
+        request = request.header("Host", host);
+    }
+    let bearer = provider_bearer(&session.config.provider);
+    if !bearer.trim().is_empty() {
+        request = request.bearer_auth(&bearer);
+    }
+    for (name, value) in &session.config.provider.headers {
+        request = request.header(name, value);
+    }
+    let response = request
+        .json(&json!({ "query": query }))
+        .send()
+        .await
+        .map_err(|error| VeilWebSearchError::Transport(describe_request_error(&error)))?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| VeilWebSearchError::Transport(describe_request_error(&error)))?;
+    // The route promises at most five titles and snippets. Anything this large
+    // is not that answer, and reading it would spend the model's context on
+    // whatever it actually is.
+    if bytes.len() > 64 * 1024 {
+        return Err(VeilWebSearchError::Transport(
+            "the search response was oversized".to_owned(),
+        ));
+    }
+    let payload: Value = serde_json::from_slice(&bytes).map_err(|_| {
+        VeilWebSearchError::Transport("the search response was not JSON".to_owned())
+    })?;
+    if !status.is_success() {
+        return Err(VeilWebSearchError::Coded(
+            payload
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or("web_search_unavailable")
+                .to_owned(),
+        ));
+    }
+    // The route always sends `results`, empty array and all, so a 200 without
+    // one did not come from it — a proxy or captive sign-on answering an
+    // expired session with its own cheerful JSON is the shape to expect. Read
+    // leniently and that becomes "no hits", which tells the model the web was
+    // searched and holds nothing on the subject. The search never ran.
+    payload
+        .get("results")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| {
+            VeilWebSearchError::Transport("the search response was not a result set".to_owned())
+        })
+}
+
 fn shared_client(provider: &ProviderConfig) -> Result<Client, String> {
     if let Some(client) = SHARED_HTTP_CLIENT.get() {
         return Ok(client.clone());

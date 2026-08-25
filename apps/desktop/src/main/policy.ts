@@ -533,6 +533,13 @@ export function assertUmbraticRunnerConfig(
     provider.thinking === undefined || provider.thinking === "on" || provider.thinking === "off",
     "provider thinking must be on, off, or absent",
   );
+  // This flag decides whether a search query leaves the deployment, so a
+  // non-boolean is rejected rather than coerced into whichever answer the
+  // runner's parser happens to reach for.
+  assert(
+    provider.veilWebSearch === undefined || typeof provider.veilWebSearch === "boolean",
+    "provider veilWebSearch must be an explicit boolean when present",
+  );
   assert(!("system" in config), "protected system prompts must stay inside Veil");
   assert(
     config.localDate === undefined

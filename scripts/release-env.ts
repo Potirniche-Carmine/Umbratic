@@ -5,7 +5,7 @@
 // the machine that releases, not to the source tree. They live in one file in
 // the user's home directory; both `desktop:release` and `publish:release` read
 // it, so a release machine is set up exactly once and the repository never
-// carries a secret. `scripts/release.env.example` documents every key.
+// carries a secret. `docs/release.env.example` documents every key.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -48,7 +48,7 @@ export function loadReleaseEnv(): boolean {
 export function requireReleaseEnv(key: string): string {
   const value = process.env[key]?.trim();
   if (!value) {
-    throw new Error(`${key} is not set. Add it to ${releaseEnvPath} (see scripts/release.env.example).`);
+    throw new Error(`${key} is not set. Add it to ${releaseEnvPath} (see docs/release.env.example).`);
   }
   return value;
 }

@@ -230,6 +230,92 @@ test("engineering harness mode uses its Veil route without runtime prompt profil
   assert.equal("system" in config, false);
 });
 
+test("the runner searches through Veil only where Veil advertises that it can", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-web-search-"));
+  const cache = new Map();
+  const electron = electronMock(userData);
+  const mocks = { electron, "node:os": { ...os, homedir: () => path.join(userData, "home") } };
+  const adapter = loadTypeScriptModule(runnerAdapterPath, { cache, mocks });
+  const storage = loadTypeScriptModule(new URL("../src/main/storage.ts", import.meta.url), { cache, mocks });
+  const features = loadTypeScriptModule(new URL("../src/main/veilFeatures.ts", import.meta.url), { cache, mocks });
+
+  const model = {
+    providerId: "company-endpoint",
+    providerName: "Umbratic Veil",
+    modelId: "veil-managed",
+    displayName: "Veil",
+    baseUrl: "https://veil.example.internal",
+  };
+  const task = {
+    id: "task-web-search",
+    repositoryId: "repo-1",
+    prompt: "Search",
+    workspaceKind: "folder",
+    workspaceMode: "local",
+    enabledTools: ["web_search", "web_fetch"],
+    worktreePath: userData,
+  };
+  const built = () => adapter.buildUmbraticRunnerConfig(task, model);
+  const veilWebSearch = () => built().provider.veilWebSearch;
+  const offersWebSearch = () => built().enabledTools.includes("web_search");
+
+  storage.writeModelEndpointSettings({ mode: "server", baseUrl: "https://veil.example.internal", modelId: "veil-managed" });
+  // A server that never advertised the name cannot serve a search, so the
+  // runner must not be told to ask it for one — and there is no other route out
+  // of this machine that stays inside the company, so the tool is withheld
+  // rather than answered from here. An unanswered health check reads the same
+  // way, which is the point: the safe answer is the one that holds before the
+  // server has spoken.
+  features.recordVeilFeatures([]);
+  assert.equal(veilWebSearch(), false);
+  assert.equal(offersWebSearch(), false);
+  // One control turns both web tools on, so withholding the search withholds
+  // the page read with it. Half a web toggle is worse than none.
+  assert.equal(built().enabledTools.includes("web_fetch"), false);
+  features.recordVeilFeatures(["web.search"]);
+  assert.equal(veilWebSearch(), true);
+  assert.equal(offersWebSearch(), true);
+  assert.equal(built().enabledTools.includes("web_fetch"), true);
+
+  // Local mode is a loopback Veil with no subscription behind it; the runner
+  // searches the public web itself there, so the tool is offered whatever the
+  // features list says.
+  storage.writeModelEndpointSettings({ mode: "local", baseUrl: "http://127.0.0.1:11434", modelId: "qwen3:8b" });
+  features.recordVeilFeatures([]);
+  assert.equal(veilWebSearch(), false);
+  assert.equal(offersWebSearch(), true);
+});
+
+test("the runner configuration carries no search credential in either direction", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-no-search-key-"));
+  const { adapter, storage } = loadRunnerAdapter(userData);
+  storage.writeHarnessProfileSetting("engineering");
+  const model = {
+    providerId: "company-endpoint",
+    providerName: "Umbratic Veil",
+    modelId: "veil-managed",
+    displayName: "Veil",
+    baseUrl: "http://127.0.0.1:8080",
+  };
+  const task = {
+    id: "task-no-search-key",
+    repositoryId: "repo-1",
+    prompt: "Search",
+    workspaceKind: "folder",
+    workspaceMode: "local",
+    enabledTools: ["web_search", "web_fetch"],
+    worktreePath: userData,
+  };
+  // The app ships no search key at all: searching is either Veil's business or
+  // the runner's own unauthenticated call. Anything that looks like a token
+  // here would be a credential shipped inside an unpackable installer.
+  const config = plain(adapter.buildUmbraticRunnerConfig(task, model));
+  assert.equal("webSearchApiKey" in config, false);
+  assert.doesNotMatch(JSON.stringify(config), /brave/i);
+  const env = adapter.runtimeEnv(userData);
+  assert.equal(Object.keys(env).some((name) => /SEARCH/i.test(name)), false);
+});
+
 test("business harness modes keep their Veil route and the matching business skill catalog", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-markdown-"));
   const { adapter, storage } = loadRunnerAdapter(userData);

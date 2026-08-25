@@ -11,7 +11,7 @@ Ask once, ask well, then build. The goal is a working brief, not an interview.
 
 Ask only for facts that can change the output you were asked for.
 
-- **Blocker** — you cannot produce a correct deliverable without it. Ask. If `web_search` and `web_fetch` are in the tools array, a public fact is not a blocker: look it up, then ask only for what is still private (budget, unpublished pricing, forbidden claims, internal metrics, stakeholder politics, what is approved to say).
+- **Blocker** — you cannot produce a correct deliverable without it. Ask. If `web_search` and `web_fetch` are in the tools array, a public fact is not a blocker: look it up from search results (never invent a domain), then ask only for what is still private (budget, unpublished pricing, forbidden claims, internal metrics, stakeholder politics, what is approved to say).
 - **Nice-to-have** — it would sharpen the result but a stated assumption covers it. Do not ask; assume and label.
 - **Irrelevant** — it cannot change this deliverable. Never ask.
 

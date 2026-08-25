@@ -53,6 +53,17 @@ export const veilFeature = {
    * rather than offering a button that fails on first press.
    */
   speechTranscribe: "speech.transcribe",
+  /**
+   * `POST /api/web/search` exists and the server can actually serve it — a
+   * subscription key is configured and this month's allowance is not spent.
+   * The client sends nothing to earn it; the name decides where `web_search`
+   * runs. Present, the runner asks Veil and the query stays inside the
+   * company boundary the deployment exists to enforce. Absent, the runner
+   * searches the public web itself, which is what local mode wants and what a
+   * server deployment must never silently fall back to — so the answer comes
+   * off the health check each time rather than out of a build-time flag.
+   */
+  webSearch: "web.search",
 } as const;
 
 export type VeilFeature = (typeof veilFeature)[keyof typeof veilFeature];

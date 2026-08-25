@@ -22,6 +22,7 @@ import type {
   HarnessProfileId,
   LocalModelInfo,
   LspServerLaunchConfig,
+  ModelEndpointMode,
   RunnerProcess,
   RunnerToolId,
   SseStream,
@@ -42,6 +43,28 @@ export function harnessRouteConfig(profileId: HarnessProfileId): HarnessRouteCon
   return {
     chatEndpointPath: `/api/${profileId}/chat`,
   };
+}
+
+/**
+ * Whether the web tools can be offered for this connection at all.
+ *
+ * Local mode always can: the runner queries a public engine from this machine,
+ * which is what that mode is. A server deployment can only search where Veil
+ * said it can, because every other route out of here crosses the boundary the
+ * deployment exists to enforce.
+ *
+ * One switch covers `web_search` and `web_fetch` together, so this withholds
+ * both. A server without search could still read a pasted URL, but the user's
+ * consent for that is the same control, and a web toggle that turns on half of
+ * what it says is worse than no toggle.
+ *
+ * `connectedVeilSupports` answers false until a health check has come back.
+ * That is the safe default and it is deliberate — a server that has not yet
+ * told us it can search is treated as one that cannot, so no query escapes in
+ * the window before the first health check answers.
+ */
+export function webToolsAvailable(mode: ModelEndpointMode): boolean {
+  return mode === "local" || connectedVeilSupports(veilFeature.webSearch);
 }
 
 export function buildUmbraticRunnerConfig(
@@ -67,8 +90,14 @@ export function buildUmbraticRunnerConfig(
   // to the workspace's machine, so a remote task gets them too: the runner asks
   // over the event stream and the bytes travel.
   const artifactService = artifactEngineAvailable();
+  // Same shape as the three tools below: requested plus available. A server
+  // deployment that has not advertised `web.search` has nowhere to send a query
+  // that keeps it inside the company boundary, so the web tools are not offered
+  // at all rather than quietly answered from this machine.
+  const webTools = webToolsAvailable(endpointSettings.mode);
   const enabledTools = requestedTools.filter(
-    (tool) => tool !== "lsp" && tool !== "workspace_graph" && tool !== "artifact",
+    (tool) => tool !== "lsp" && tool !== "workspace_graph" && tool !== "artifact"
+      && (webTools || (tool !== "web_search" && tool !== "web_fetch")),
   ) as RunnerToolId[];
   if (requestedTools.includes("lsp") && lspServers.length > 0) {
     enabledTools.splice(Math.min(4, enabledTools.length), 0, "lsp" as RunnerToolId);
@@ -130,6 +159,13 @@ export function buildUmbraticRunnerConfig(
       thinking: readReasoningEffortSetting() === "off" ? "off" : "on",
       sendReasoningVisibleField: connectedVeilSupports(veilFeature.reasoningVisible),
       reasoningVisible: readShowThinkingSetting() && readReasoningEffortSetting() !== "off",
+      // Which side of the boundary `web_search` runs on, for the two cases
+      // where it is offered at all. A company Veil that advertises the name
+      // searches on the user's behalf and the query never leaves the
+      // deployment; local mode leaves the runner to search the open web itself.
+      veilWebSearch:
+        endpointSettings.mode === "server"
+        && connectedVeilSupports(veilFeature.webSearch),
       capabilities: selectedModel.capabilities ?? {
         parallelToolCalls: endpointSettings.mode === "local",
         vision: false,

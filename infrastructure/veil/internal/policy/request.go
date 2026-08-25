@@ -172,6 +172,60 @@ func DecodeOrientInput(r io.Reader) (OrientInput, error) {
 	return OrientInput{Route: route, RequestText: req.RequestText, PreviousResponse: previous}, nil
 }
 
+// MaxWebSearchQueryBytes bounds one web search query. The runner's tool catalog
+// already asks the model for something far shorter; this is the boundary check
+// that stops a client's mistake from becoming an outbound request, not a promise
+// about what a well-behaved caller sends.
+const MaxWebSearchQueryBytes = 512
+
+type WebSearchInput struct {
+	Query string
+}
+
+type webSearchRequest struct {
+	Query string `json:"query"`
+}
+
+// DecodeWebSearchInput decodes a web search request. The query is bounded and
+// refused when it is empty or carries control characters; unknown fields are
+// stripped and counted, because a newer harness may carry search hints this
+// build has never seen.
+func DecodeWebSearchInput(r io.Reader) (WebSearchInput, error) {
+	body, err := io.ReadAll(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			return WebSearchInput{}, ErrRequestTooLarge
+		}
+		return WebSearchInput{}, errors.New("invalid request body")
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(body, &raw) != nil {
+		return WebSearchInput{}, errors.New("invalid JSON request")
+	}
+	stripUnknownFields(raw, "query")
+	var req webSearchRequest
+	if json.Unmarshal(body, &req) != nil {
+		return WebSearchInput{}, errors.New("invalid JSON request")
+	}
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return WebSearchInput{}, errors.New("query is required")
+	}
+	if len(query) > MaxWebSearchQueryBytes {
+		return WebSearchInput{}, errors.New("query is too large")
+	}
+	if !utf8.ValidString(query) {
+		return WebSearchInput{}, errors.New("query must be valid UTF-8")
+	}
+	// A control character in a query is never something a person typed. It is a
+	// header-splitting or log-forging attempt reaching for the outbound request
+	// this route is about to make.
+	if strings.ContainsFunc(query, func(char rune) bool { return char < 0x20 || char == 0x7f }) {
+		return WebSearchInput{}, errors.New("query must not contain control characters")
+	}
+	return WebSearchInput{Query: query}, nil
+}
+
 type ChatInput struct {
 	Messages        []model.Message
 	Stream          bool

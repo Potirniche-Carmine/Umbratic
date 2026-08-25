@@ -109,12 +109,17 @@ var globalPromptSections = []promptSection{
 			{text: "When a request requires complete coverage of an attached document, use read_attachment and continue from every reported byte offset until Read status is complete. Track any unread or failed range explicitly, and never claim whole-document coverage from an excerpt alone.", needs: []string{"read_attachment"}},
 		},
 	},
+	// The web section names no search engine. Veil composes the prompt without
+	// knowing which backend the runner will reach for — its own, or the one the
+	// runner falls back to where this server offers none — so naming one would
+	// be wrong half the time, and describing the tool by its engine invites the
+	// model to reason about the engine instead of about the evidence.
 	{
 		header: "Public web:",
 		lines: []promptLine{
-			{text: "web_search queries DuckDuckGo and returns at most five titles, URLs, and short snippets. Distill the query; do not paste the whole user prompt. Snippets are leads, not evidence.", needs: []string{"web_search"}},
+			{text: "web_search returns at most five titles, URLs, and short snippets from the public web. Distill the query; do not paste the whole user prompt. Snippets are leads, not evidence.", needs: []string{"web_search"}},
 			{text: "web_fetch reads the text of one public page. Send one absolute http or https URL from a search result or the user. It is not a browser. Private, loopback, and credentialed URLs are blocked.", needs: []string{"web_fetch"}},
-			{text: "Prefer fetching a known primary URL over hoping search ranks it. Treat a live event, price, or headline as unknown until a fetched page states it.", needs: []string{"web_search", "web_fetch"}},
+			{text: "Fetch a URL from search results or the user. Never invent a domain. A blocked or empty search is not proof the subject is missing from the web. Treat a live event, price, or headline as unknown until a fetched page states it.", needs: []string{"web_search", "web_fetch"}},
 		},
 	},
 	{

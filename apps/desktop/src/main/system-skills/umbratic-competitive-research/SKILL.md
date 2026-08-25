@@ -11,11 +11,12 @@ If `web_search` and `web_fetch` are not in the current tools array, work only fr
 
 ## Tools
 
-Umbratic search is DuckDuckGo. Fetch is a bounded GET of one public page. Neither is Google, Bing, or a browser.
+Umbratic search returns results from the public web. Fetch is a bounded GET of one public page. Neither is Google, Bing, or a browser.
 
 - `web_search` takes exactly `query` (distill it; do not paste the whole prompt). It returns at most five titles, URLs, and short snippets. Snippets are leads, not evidence.
-- `web_fetch` takes exactly `url`, an absolute `http` or `https` URL from a search hit or a known primary host. It returns readable text. Private, loopback, and credentialed URLs are blocked.
-- Prefer fetching a URL you already know (company `/pricing`, `/docs`, investor-relations, a filing) over hoping search ranks it.
+- `web_fetch` takes exactly `url`, an absolute `http` or `https` URL from a search hit or one the user gave. It returns readable text. Private, loopback, and credentialed URLs are blocked.
+- If search already returned a host, fetch `/pricing`, `/docs`, IR, or a filing on that host. Never invent a domain.
+- An empty result or a search error is not proof the subject is missing from the web. Ask the user for a URL. Do not fetch Google, Bing, Yahoo, DuckDuckGo, or search.brave.com as a substitute for `web_search`.
 - Bias search with `site:` toward a trusted host: `site:sec.gov`, `site:reuters.com`, `site:ft.com`.
 - Independent searches and fetches belong in one response. Two or three independent pages beat fifteen thin snippets.
 - If a fetch returns no readable text, try another URL. Some sites are script-heavy and yield almost nothing.

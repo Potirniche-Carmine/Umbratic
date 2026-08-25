@@ -36,9 +36,13 @@ through a binding.
 
 ### 3. The revocation list
 
-**Storage & Databases → KV → Create namespace** → `umbratic-revoked`. Copy the
-namespace ID into `id` in `infrastructure/downloads-worker/wrangler.toml`, then
-commit that change.
+**Storage & Databases → KV → Create namespace** → `umbratic-revoked`. Put its
+ID — the 32-character hex string, not the name — into `id` in
+`infrastructure/downloads-worker/wrangler.toml`, then commit that change:
+
+```bash
+npx wrangler kv namespace list
+```
 
 ### 4. The Worker
 

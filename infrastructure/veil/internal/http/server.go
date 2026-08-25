@@ -22,6 +22,7 @@ import (
 	"umbratic-veil/internal/rag"
 	"umbratic-veil/internal/telemetry"
 	"umbratic-veil/internal/templates"
+	"umbratic-veil/internal/websearch"
 )
 
 type ModelClient interface {
@@ -42,6 +43,13 @@ type ModelClient interface {
 	ThinkingSupported(ctx context.Context, modelID string) bool
 }
 
+// WebSearchClient is what the search route needs from the outbound client. An
+// interface for the same reason ModelClient is one: the route's tests must be
+// able to answer a search without reaching the public internet.
+type WebSearchClient interface {
+	Search(ctx context.Context, query string) ([]websearch.Result, error)
+}
+
 type Server struct {
 	cfg          config.Config
 	model        ModelClient
@@ -52,6 +60,10 @@ type Server struct {
 	// work, which is a different question from how much work runs at once.
 	modelQuota     *quotaLimiter
 	telemetryQuota *quotaLimiter
+	// webSearchQuota is separate from modelQuota on purpose: a lookup costs the
+	// company a search credit, not a generation, and research should not be able
+	// to spend the turn's chat budget.
+	webSearchQuota *quotaLimiter
 	admission      *admissionController
 	lifecycle      *lifecycle
 	stream         *streamMetrics
@@ -63,6 +75,16 @@ type Server struct {
 	// keeps /api/transcribe absent rather than broken on a deployment without
 	// one.
 	speech *model.SpeechClient
+	// webSearch is nil unless this build carries a subscription key, and
+	// webSearchUsage is the month's pool it spends from. Both nil is the normal
+	// state: a build with no key does no searching, the same way a deployment
+	// with no ASR endpoint does no dictation.
+	webSearch      WebSearchClient
+	webSearchUsage *websearch.Ledger
+	// license is the signed entitlement this server was started with. The
+	// identity store holds its own copy for seats and devices; the monthly
+	// search pool is read here, on a route the store knows nothing about.
+	license entitlement.Payload
 }
 
 type contextKey int
@@ -81,6 +103,7 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 		identityRate:   &identityRateLimiter{entries: map[string]rateEntry{}},
 		modelQuota:     newQuotaLimiter(cfg.ModelRequestsPerMinute, time.Minute),
 		telemetryQuota: newQuotaLimiter(cfg.TelemetryBundlesPerHour, time.Hour),
+		webSearchQuota: newQuotaLimiter(cfg.WebSearchRequestsPerMinute, time.Minute),
 		lifecycle:      &lifecycle{},
 		stream:         newStreamMetrics(),
 		admission: newAdmissionController(
@@ -93,11 +116,23 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 	if cfg.SpeechEnabled() {
 		server.speech = model.NewSpeechClient(cfg.SpeechBaseURL, cfg.SpeechModel, cfg.SpeechAPIKey, cfg.ModelTimeout)
 	}
+	if key := websearch.Key(); key != "" {
+		usage, usageErr := websearch.OpenLedger(cfg.WebSearchUsagePath)
+		if usageErr != nil {
+			// A ledger Veil cannot read is a month it cannot count, so search
+			// stays absent rather than spending an unknown amount of the pool.
+			recordWebSearchFailure("usage", usageErr)
+		} else {
+			server.webSearch = websearch.NewClient(key, webSearchTimeout)
+			server.webSearchUsage = usage
+		}
+	}
 	if cfg.CompanyIdentityMode {
 		license, licenseErr := entitlement.Load(cfg.EntitlementPath)
 		if licenseErr != nil {
 			server.identityErr = licenseErr
 		} else {
+			server.license = license
 			server.identity, server.identityErr = identity.Open(cfg.IdentityStorePath, license)
 		}
 	}
@@ -217,6 +252,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !s.allowQuota(w, r, s.modelQuota) {
 			return
 		}
+	case "/api/web/search":
+		if !s.guardLifecycle(w) {
+			return
+		}
+		if !s.allowQuota(w, r, s.webSearchQuota) {
+			return
+		}
 	case "/api/telemetry":
 		if !s.allowQuota(w, r, s.telemetryQuota) {
 			return
@@ -238,6 +280,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleOrient(w, r)
 	case "/api/transcribe":
 		s.handleTranscribe(w, r)
+	case "/api/web/search":
+		s.handleWebSearch(w, r)
 	case "/api/telemetry":
 		s.handleTelemetry(w, r)
 	default:
@@ -606,7 +650,7 @@ func isActivityProductRoute(path string) bool {
 	switch path {
 	case "/api/model/connect", "/api/model/context", "/api/models", "/api/engineering/chat", "/api/marketing/chat",
 		"/api/sales/chat", "/api/internal/context/compact", "/api/internal/orient", "/api/telemetry",
-		"/api/transcribe":
+		"/api/transcribe", "/api/web/search":
 		return true
 	default:
 		return false
@@ -684,7 +728,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
 		"state":    string(s.lifecycle.state()),
-		"features": Features(s.cfg.RAG.Enabled, s.cfg.ModelSelectionEnabled, s.cfg.SpeechEnabled()),
+		"features": Features(s.cfg.RAG.Enabled, s.cfg.ModelSelectionEnabled, s.cfg.SpeechEnabled(), s.webSearchAvailable()),
 		"capabilities": map[string]bool{
 			"parallel_tool_calls": s.cfg.ModelParallelToolCalls,
 			"vision":              s.cfg.ModelVision,

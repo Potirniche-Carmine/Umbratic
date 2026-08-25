@@ -245,6 +245,7 @@ fn provider_with_mtls(mtls: MtlsConfig) -> ProviderConfig {
         thinking: None,
         send_reasoning_visible_field: false,
         reasoning_visible: false,
+        veil_web_search: false,
         headers: BTreeMap::new(),
         mtls: Some(mtls),
     }

@@ -191,6 +191,19 @@ test("web tools live on the composer, default off, and ask before turning on", (
   assert.match(controls, /setConfirming\(true\)/);
 });
 
+test("the web toggle appears only where a search can actually run", () => {
+  const main = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
+  // On a server whose Veil never advertised web.search there is nowhere to send
+  // a query that stays inside the company, so the control is absent rather than
+  // reworded: one switch governs both web tools, and neither is on offer.
+  // Local mode searches from this machine, so the question there is only what
+  // the server said it can do.
+  assert.match(
+    main,
+    /\{endpointSettings\.mode === "local" \|\| backend\?\.veilFeatures\.includes\("web\.search"\) === true \? \(<WebToolsControl/,
+  );
+});
+
 test("startup never loads a model; the hardware probe is what warms", () => {
   const main = fs.readFileSync(new URL("../src/main/main.ts", import.meta.url), "utf8");
   // Loading gigabytes of weights is an explicit user action — picking a model,

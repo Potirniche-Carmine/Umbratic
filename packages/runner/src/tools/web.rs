@@ -1,6 +1,17 @@
-//! Public web search and page fetch. Search hits one documented HTML endpoint
-//! (DuckDuckGo). Fetch is a bounded GET from this machine. Neither is a paid
-//! API, and neither fans out to Google or Bing.
+//! Public web search and page fetch.
+//!
+//! Search has two backends and the deployment picks one. Pointed at a Veil that
+//! advertises `web.search`, the runner posts the query to Veil and Veil runs the
+//! search: that is the whole point of a server deployment, and sending the query
+//! straight out of this machine would carry it past the boundary the deployment
+//! exists to enforce. In local mode the runner queries DuckDuckGo's HTML
+//! endpoint itself, with no credential of any kind. There is deliberately no
+//! fallback from the first to the second — and a server whose Veil does not
+//! advertise the feature is the third case, where the search simply does not
+//! happen.
+//!
+//! Fetch is a bounded GET from this machine either way. Neither path fans out to
+//! Google or Bing.
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs},
@@ -13,7 +24,9 @@ use std::sync::{Mutex, OnceLock};
 use serde_json::{Map, Value, json};
 use url::Url;
 
-use super::{ToolError, ToolExecutionResult, ToolResult, string_arg};
+use super::{Session, ToolError, ToolExecutionResult, ToolResult, string_arg};
+use crate::config::ProviderMode;
+use crate::veil_client::{VeilWebSearchError, veil_web_search};
 
 const SEARCH_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 const MAX_RESULTS: usize = 5;
@@ -48,21 +61,36 @@ pub(super) struct SearchHit {
     pub snippet: String,
 }
 
-pub(super) async fn web_search_tool(input: &Map<String, Value>) -> ToolExecutionResult {
+/// What the model is told when a query genuinely matched nothing. It has to say
+/// so without implying the subject does not exist: read as "there is nothing out
+/// there", an empty result set is what makes a model invent a plausible domain.
+const NO_HITS: &str = "No indexed hits for this query. That is not proof the subject is missing from the web. Do not invent a domain. If the user can share a URL, web_fetch it.";
+
+pub(super) async fn web_search_tool(
+    session: &Session,
+    input: &Map<String, Value>,
+) -> ToolExecutionResult {
     let query = string_arg(input, &["query"]);
-    let html = http_text(
-        "POST",
-        SEARCH_ENDPOINT,
-        Some(&[("q", query.as_str()), ("kl", "us-en")]),
-    )
-    .await?
-    .body;
-    let hits = parse_ddg_html(&html);
+    // A server deployment whose Veil cannot search has no route for this query
+    // that stays inside the boundary, so there is nothing to try. The desktop
+    // already withholds the tool in that case; this is the runner refusing it
+    // anyway, because the runner is what enforces the boundary and a bug in
+    // trusted configuration must not be able to walk a query out of the
+    // company.
+    if session.config.provider.mode == ProviderMode::Server
+        && !session.config.provider.veil_web_search
+    {
+        return Err(ToolError::policy(search_did_not_run(
+            "web_search is not available on this server. Tell the user their administrator has not enabled web search.",
+        )));
+    }
+    let hits = if session.config.provider.veil_web_search {
+        veil_search(session, &query).await?
+    } else {
+        duckduckgo_search(&query).await?
+    };
     if hits.is_empty() {
-        return Ok(ToolResult::success(
-            query,
-            "No results found. Try a more specific query, or web_fetch a known URL.",
-        ));
+        return Ok(ToolResult::success(query, NO_HITS));
     }
     let shown = hits.into_iter().take(MAX_RESULTS).collect::<Vec<_>>();
     let mut parts = Vec::new();
@@ -88,9 +116,121 @@ pub(super) async fn web_search_tool(input: &Map<String, Value>) -> ToolExecution
     ))
 }
 
+/// The server-mode path: Veil searches, the runner only reads the answer. A
+/// failure here is the end of the search — falling back to DuckDuckGo would send
+/// the query out of this machine, which is exactly what this deployment forbids.
+async fn veil_search(session: &Session, query: &str) -> Result<Vec<SearchHit>, ToolError> {
+    let results = veil_web_search(session, query)
+        .await
+        .map_err(veil_search_error)?;
+    Ok(results
+        .iter()
+        .filter_map(|result| {
+            let url = result
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            // Veil drops private, loopback, and link-local hosts before it
+            // answers. Checking again costs nothing and means one forgetful
+            // server cannot talk this machine into fetching its own network.
+            if url.is_empty() || check_public_url(url).is_err() {
+                return None;
+            }
+            Some(SearchHit {
+                title: collapse_ws(result.get("title").and_then(Value::as_str).unwrap_or("")),
+                url: url.to_owned(),
+                snippet: collapse_ws(result.get("snippet").and_then(Value::as_str).unwrap_or("")),
+            })
+        })
+        .collect())
+}
+
+/// The tail every failed search carries. A model that reads "the search did not
+/// run" as "the web holds nothing" invents a plausible domain, and one that
+/// reads it as "try another way" fetches a results page, so both are closed off
+/// wherever the search does not happen.
+fn search_did_not_run(message: &str) -> String {
+    format!(
+        "{message} That is not an empty result set — do not invent a domain and do not fetch a search-engine results page instead."
+    )
+}
+
+/// Turns Veil's coded refusals into something the model can act on. Every arm
+/// has to be unmistakably "the search did not run", never "the search found
+/// nothing", and none of them may suggest reaching for a results page instead.
+fn veil_search_error(error: VeilWebSearchError) -> ToolError {
+    let message = match error {
+        VeilWebSearchError::Coded(code) => match code.as_str() {
+            "web_search_unconfigured" => {
+                "web_search is not configured on this server. Tell the user their administrator has not enabled web search."
+                    .to_owned()
+            }
+            "rate_limited" => {
+                "The server rate-limited this search. Wait a moment and retry.".to_owned()
+            }
+            "web_search_quota_exhausted" => {
+                "This organization's monthly web-search allowance is spent. Tell the user; it resets next month."
+                    .to_owned()
+            }
+            "web_search_unavailable" => {
+                "Web search is unavailable right now: the server could not complete the search."
+                    .to_owned()
+            }
+            other => format!("Web search failed on the server ({other})."),
+        },
+        VeilWebSearchError::Transport(detail) => {
+            format!("Web search could not reach the server: {detail}.")
+        }
+    };
+    ToolError::runtime(search_did_not_run(&message))
+}
+
+/// The local path: one POST to DuckDuckGo's documented HTML endpoint, no key.
+async fn duckduckgo_search(query: &str) -> Result<Vec<SearchHit>, ToolError> {
+    let html = http_text(
+        "POST",
+        SEARCH_ENDPOINT,
+        Some(&[("q", query), ("kl", "us-en")]),
+    )
+    .await?
+    .body;
+    let hits = parse_ddg_html(&html);
+    if hits.is_empty() && !is_ddg_results_page(&html) {
+        return Err(ToolError::runtime(search_did_not_run(
+            "Web search is unavailable right now: the search endpoint answered with a challenge page instead of results.",
+        )));
+    }
+    Ok(hits)
+}
+
+/// Markers a real DuckDuckGo results page carries even when it matched nothing:
+/// the result container, and the "no results" notice that sits inside it.
+const DDG_RESULTS_MARKERS: &[&str] = &["id=\"links\"", "class=\"results\"", "class=\"no-results\""];
+
+/// Whether the body we got back is a results page at all.
+///
+/// A captcha or anomaly interstitial comes back as a perfectly normal 200 with
+/// no result blocks in it, which parses to the same empty list an honest
+/// zero-result page does — and the model reads "no results" as proof the subject
+/// is absent from the web. Only a body that still looks like the results page is
+/// allowed to mean "nothing matched"; anything else is a failed search. If DDG
+/// ever renames these containers this starts erring on live pages, which is the
+/// safe direction to be wrong in.
+fn is_ddg_results_page(html: &str) -> bool {
+    DDG_RESULTS_MARKERS
+        .iter()
+        .any(|marker| html.contains(marker))
+}
+
 pub(super) async fn web_fetch_tool(input: &Map<String, Value>) -> ToolExecutionResult {
     let raw_url = string_arg(input, &["url"]);
     let url = check_public_url(&raw_url)?;
+    if is_search_results_page(&url) {
+        return Err(ToolError::policy(
+            "web_fetch is for a specific page, not a search-engine results page. Use web_search.",
+        ));
+    }
     let fetched = http_text("GET", url.as_str(), None).await?;
     let mut text = truncate_page(&readable_text(&fetched.body));
     if fetched.truncated {
@@ -140,6 +280,41 @@ pub(super) fn check_public_url(raw: &str) -> Result<Url, ToolError> {
         )));
     }
     Ok(url)
+}
+
+/// Search-engine result pages are not a substitute for `web_search`. Fetching
+/// Google, Bing, Yahoo, or another SERP is what produced empty "the company
+/// does not exist" answers after a failed search.
+pub(super) fn is_search_results_page(url: &Url) -> bool {
+    let host = url
+        .host_str()
+        .unwrap_or("")
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    let path = url.path().to_ascii_lowercase();
+    let query = url.query().unwrap_or("");
+    if host == "html.duckduckgo.com" || host == "lite.duckduckgo.com" {
+        return true;
+    }
+    if host == "duckduckgo.com"
+        && (path == "/"
+            || path == "/html"
+            || path == "/html/"
+            || path.starts_with("/lite")
+            || query.contains("q="))
+    {
+        return true;
+    }
+    if host == "search.yahoo.com" || host == "search.brave.com" {
+        return true;
+    }
+    if host == "bing.com" && path.starts_with("/search") {
+        return true;
+    }
+    let google = host == "google.com" || host.starts_with("google.");
+    google
+        && (path.starts_with("/search") || path.starts_with("/webhp") || path.starts_with("/url"))
 }
 
 fn allow_public_destination(raw: &str) -> Result<Url, ToolError> {

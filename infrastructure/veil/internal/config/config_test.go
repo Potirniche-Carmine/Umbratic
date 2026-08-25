@@ -41,6 +41,62 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
 	t.Setenv("VEIL_SPEECH_BASE_URL", "")
 	t.Setenv("VEIL_SPEECH_MODEL", "")
+	t.Setenv("VEIL_WEB_SEARCH_USAGE_PATH", "")
+	t.Setenv("VEIL_WEB_SEARCH_REQUESTS_PER_MINUTE", "")
+}
+
+func TestWebSearchUsageLandsBesideTheIdentityStore(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WebSearchUsagePath != "web-search-usage.json" {
+		t.Fatalf("a deployment with no identity store got %q", cfg.WebSearchUsagePath)
+	}
+	if cfg.WebSearchRequestsPerMinute != 20 {
+		t.Fatalf("unexpected default search rate: %d", cfg.WebSearchRequestsPerMinute)
+	}
+
+	t.Setenv("VEIL_IDENTITY_STORE_PATH", filepath.Join("var", "lib", "veil", "identity.json"))
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join("var", "lib", "veil", "web-search-usage.json"); cfg.WebSearchUsagePath != want {
+		t.Fatalf("the ledger did not default beside the identity store: %q", cfg.WebSearchUsagePath)
+	}
+
+	t.Setenv("VEIL_WEB_SEARCH_USAGE_PATH", filepath.Join("elsewhere", "usage.json"))
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join("elsewhere", "usage.json"); cfg.WebSearchUsagePath != want {
+		t.Fatalf("an explicit ledger path was ignored: %q", cfg.WebSearchUsagePath)
+	}
+}
+
+func TestWebSearchRateBounds(t *testing.T) {
+	setRequiredEnv(t)
+	for _, trial := range []struct {
+		value string
+		valid bool
+	}{
+		{"0", true},
+		{"120", true},
+		{"-1", false},
+		{"lots", false},
+	} {
+		t.Setenv("VEIL_WEB_SEARCH_REQUESTS_PER_MINUTE", trial.value)
+		cfg, err := Load()
+		if trial.valid != (err == nil) {
+			t.Fatalf("VEIL_WEB_SEARCH_REQUESTS_PER_MINUTE=%q gave %v", trial.value, err)
+		}
+		if trial.valid && trial.value == "0" && cfg.WebSearchRequestsPerMinute != 0 {
+			t.Fatal("zero must disable the limiter rather than fall back to the default")
+		}
+	}
 }
 
 func TestSpeechIsOffUntilBothVariablesAreSet(t *testing.T) {

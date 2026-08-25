@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -82,7 +83,14 @@ type Config struct {
 	// company's own network needs none; the desktop's llama-server sidecar is
 	// started with a per-run key and will refuse a call without it.
 	SpeechAPIKey string
-	RAG          RAG
+	// WebSearchUsagePath is where the organization's monthly search ledger is
+	// written, and WebSearchRequestsPerMinute bounds how often one user may
+	// search. The rate is its own limiter rather than a share of the model one:
+	// a lookup is cheap next to a generation, and letting research spend the
+	// chat budget would make a well-used tool run the turn out of quota.
+	WebSearchUsagePath         string
+	WebSearchRequestsPerMinute int
+	RAG                        RAG
 	// Networks whose X-Forwarded-For header may be believed. Empty by default,
 	// so an unconfigured deployment keys rate limits on the immediate peer
 	// rather than on a header any client can forge.
@@ -153,6 +161,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	webSearchRequestsPerMinute, err := envInt("VEIL_WEB_SEARCH_REQUESTS_PER_MINUTE", 20)
+	if err != nil {
+		return Config{}, err
+	}
 	contextLength, err := envInt("VEIL_CONTEXT_LENGTH", 0)
 	if err != nil {
 		return Config{}, err
@@ -192,6 +204,8 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	identityStorePath := strings.TrimSpace(os.Getenv("VEIL_IDENTITY_STORE_PATH"))
+
 	var generation model.GenerationProfile
 	if mode == model.ModeLocal {
 		generation, err = loadLocalGenerationProfile(maxOutputTokens)
@@ -206,38 +220,40 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		Addr:                    envString("VEIL_ADDR", "127.0.0.1:8080"),
-		TrustedProxyCIDRs:       trustedProxyCIDRs,
-		AuthToken:               strings.TrimSpace(os.Getenv("VEIL_AUTH_TOKEN")),
-		ControlToken:            strings.TrimSpace(os.Getenv("VEIL_CONTROL_TOKEN")),
-		CompanyIdentityMode:     companyIdentityMode,
-		EntitlementPath:         strings.TrimSpace(os.Getenv("VEIL_ENTITLEMENT_PATH")),
-		IdentityStorePath:       strings.TrimSpace(os.Getenv("VEIL_IDENTITY_STORE_PATH")),
-		Mode:                    mode,
-		ProviderBaseURL:         strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
-		ProviderAPIKey:          strings.TrimSpace(os.Getenv("VEIL_PROVIDER_API_KEY")),
-		DefaultModel:            strings.TrimSpace(os.Getenv("VEIL_MODEL")),
-		ContextLength:           contextLength,
-		MaxOutputTokens:         generation.MaxOutputTokens,
-		ModelParallelToolCalls:  generation.ParallelToolCalls,
-		Generation:              generation,
-		ModelVision:             modelVision,
-		ModelReasoning:          modelReasoning,
-		TemplateRegistryPath:    strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
-		TelemetryEnabled:        telemetryEnabled,
-		TelemetryStorePath:      strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
-		TelemetryRetentionDays:  telemetryRetentionDays,
-		TelemetryMaxBodyBytes:   telemetryMaxBodyBytes,
-		ModelRequestsPerMinute:  modelRequestsPerMinute,
-		TelemetryBundlesPerHour: telemetryBundlesPerHour,
-		SpeechBaseURL:           strings.TrimRight(strings.TrimSpace(os.Getenv("VEIL_SPEECH_BASE_URL")), "/"),
-		SpeechModel:             strings.TrimSpace(os.Getenv("VEIL_SPEECH_MODEL")),
-		SpeechAPIKey:            strings.TrimSpace(os.Getenv("VEIL_SPEECH_API_KEY")),
-		ModelTimeout:            modelTimeout,
-		RequestTimeout:          requestTimeout,
-		StreamIdleTimeout:       streamIdleTimeout,
-		MaxBodyBytes:            maxBodyBytes,
-		RAG:                     ragConfig,
+		Addr:                       envString("VEIL_ADDR", "127.0.0.1:8080"),
+		TrustedProxyCIDRs:          trustedProxyCIDRs,
+		AuthToken:                  strings.TrimSpace(os.Getenv("VEIL_AUTH_TOKEN")),
+		ControlToken:               strings.TrimSpace(os.Getenv("VEIL_CONTROL_TOKEN")),
+		CompanyIdentityMode:        companyIdentityMode,
+		EntitlementPath:            strings.TrimSpace(os.Getenv("VEIL_ENTITLEMENT_PATH")),
+		IdentityStorePath:          identityStorePath,
+		Mode:                       mode,
+		ProviderBaseURL:            strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
+		ProviderAPIKey:             strings.TrimSpace(os.Getenv("VEIL_PROVIDER_API_KEY")),
+		DefaultModel:               strings.TrimSpace(os.Getenv("VEIL_MODEL")),
+		ContextLength:              contextLength,
+		MaxOutputTokens:            generation.MaxOutputTokens,
+		ModelParallelToolCalls:     generation.ParallelToolCalls,
+		Generation:                 generation,
+		ModelVision:                modelVision,
+		ModelReasoning:             modelReasoning,
+		TemplateRegistryPath:       strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
+		TelemetryEnabled:           telemetryEnabled,
+		TelemetryStorePath:         strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
+		TelemetryRetentionDays:     telemetryRetentionDays,
+		TelemetryMaxBodyBytes:      telemetryMaxBodyBytes,
+		ModelRequestsPerMinute:     modelRequestsPerMinute,
+		TelemetryBundlesPerHour:    telemetryBundlesPerHour,
+		SpeechBaseURL:              strings.TrimRight(strings.TrimSpace(os.Getenv("VEIL_SPEECH_BASE_URL")), "/"),
+		SpeechModel:                strings.TrimSpace(os.Getenv("VEIL_SPEECH_MODEL")),
+		SpeechAPIKey:               strings.TrimSpace(os.Getenv("VEIL_SPEECH_API_KEY")),
+		WebSearchUsagePath:         webSearchUsagePath(identityStorePath),
+		WebSearchRequestsPerMinute: webSearchRequestsPerMinute,
+		ModelTimeout:               modelTimeout,
+		RequestTimeout:             requestTimeout,
+		StreamIdleTimeout:          streamIdleTimeout,
+		MaxBodyBytes:               maxBodyBytes,
+		RAG:                        ragConfig,
 	}
 
 	if err := validateBindAddress(cfg.Addr); err != nil {
@@ -293,6 +309,9 @@ func Load() (Config, error) {
 	if cfg.TelemetryBundlesPerHour < 0 {
 		return Config{}, errors.New("VEIL_TELEMETRY_BUNDLES_PER_HOUR must not be negative")
 	}
+	if cfg.WebSearchRequestsPerMinute < 0 {
+		return Config{}, errors.New("VEIL_WEB_SEARCH_REQUESTS_PER_MINUTE must not be negative")
+	}
 	if err := cfg.Generation.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -310,6 +329,21 @@ func Load() (Config, error) {
 // the route and the advertised feature name, so the two can never disagree.
 func (c Config) SpeechEnabled() bool {
 	return c.SpeechBaseURL != "" && c.SpeechModel != ""
+}
+
+// webSearchUsagePath resolves where the monthly search ledger is written. It
+// defaults beside the identity store because that is the one directory a
+// company deployment already keeps writable state in. A deployment without an
+// identity store has no monthly cap to enforce either, so its ledger lands in
+// the working directory and only records what was spent.
+func webSearchUsagePath(identityStorePath string) string {
+	if configured := strings.TrimSpace(os.Getenv("VEIL_WEB_SEARCH_USAGE_PATH")); configured != "" {
+		return configured
+	}
+	if identityStorePath != "" {
+		return filepath.Join(filepath.Dir(identityStorePath), "web-search-usage.json")
+	}
+	return "web-search-usage.json"
 }
 
 // validateSpeech refuses a half-configured runtime. Setting one variable and

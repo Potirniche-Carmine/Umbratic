@@ -469,6 +469,10 @@ export function ComposerModelPicker({
 /**
  * Lets this chat search the public web and read pages. Off until asked: the
  * queries leave this machine, so the control is the consent.
+ *
+ * The caller withholds this entirely on a server whose Veil cannot search,
+ * rather than passing a flag down: the control is one switch over both web
+ * tools, and neither is offered there.
  */
 export function WebToolsControl({
   initial,

@@ -144,9 +144,20 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
   }
   assert.doesNotThrow(() => policy.assertUmbraticRunnerConfig({ ...config, provider: { ...config.provider, mode: "server" } }, model));
   assert.doesNotThrow(() => policy.assertUmbraticRunnerConfig({ ...config, localDate: "Saturday, August 15, 2026" }, model));
+  assert.doesNotThrow(() => policy.assertUmbraticRunnerConfig(
+    { ...config, provider: { ...config.provider, veilWebSearch: true } },
+    model,
+  ));
   assert.throws(
     () => policy.assertUmbraticRunnerConfig({ ...config, localDate: "Saturday\nAugust 15, 2026" }, model),
     /local date/,
+  );
+  assert.throws(
+    () => policy.assertUmbraticRunnerConfig(
+      { ...config, provider: { ...config.provider, veilWebSearch: "yes" } },
+      model,
+    ),
+    /veilWebSearch/,
   );
 });
 

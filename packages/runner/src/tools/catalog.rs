@@ -359,7 +359,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
         name: "web_search",
         kind: "search",
         gate: Gate::Capability("web_search"),
-        description: "Search the public web. Returns titles, URLs, and short snippets from DuckDuckGo. These are not full pages; call web_fetch with one result URL to read a page. Send exactly query. Private and loopback hosts never appear.",
+        description: "Search the public web. Returns titles, URLs, and short snippets. These are not full pages; call web_fetch with one result URL to read a page. An empty result is not proof the subject is missing from the web; never invent a domain. Send exactly query. Private and loopback hosts never appear.",
         fields: &[bounded_text(
             "query",
             true,

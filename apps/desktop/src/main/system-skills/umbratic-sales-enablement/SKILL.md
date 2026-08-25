@@ -18,7 +18,7 @@ Customer-facing sales material. Grounded in supplied account facts, approved cla
 
 ## Public research
 
-When `web_search` and `web_fetch` are in the tools array, gather public facts about a named account or alternative before asking the user. Search is DuckDuckGo snippets only — fetch the page.
+When `web_search` and `web_fetch` are in the tools array, gather public facts about a named account or alternative before asking the user. Search returns snippets only — fetch the page. Never invent a domain.
 
 Fetch first: the company's IR and official site, SEC EDGAR or the local filing equivalent, recent independent news (Reuters, AP, Bloomberg, FT, WSJ), and official product or pricing pages. Job postings are a weak signal for stack or org, labelled as such.
 

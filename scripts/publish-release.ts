@@ -314,7 +314,7 @@ function compareVersions(a: string, b: string): number {
 
 async function main() {
   const configured = loadReleaseEnv();
-  if (!configured) throw new Error(`${releaseEnvPath} does not exist. Copy scripts/release.env.example there and fill it in.`);
+  if (!configured) throw new Error(`${releaseEnvPath} does not exist. Copy docs/release.env.example there and fill it in.`);
   requireReleaseCheckout();
   const plan = releasePlan();
   requireSigned(plan);

@@ -36,7 +36,7 @@ few rules that keep every release installable.
   an unsigned build is refused.
 - `~/.umbratic/release.env` is the machine's identity — notarization key on the
   Mac, signing account on Windows, R2 credentials on both. Template:
-  `scripts/release.env.example`.
+  `docs/release.env.example`.
 
 Windows x64 and arm64 are separate builds with their own channel files
 (`latest.yml`, `latest-arm64.yml`), because their sidecars are compiled for
@@ -65,7 +65,7 @@ other one's installer.
 
 ```sh
 mkdir -p ~/.umbratic && chmod 700 ~/.umbratic
-cp scripts/release.env.example ~/.umbratic/release.env
+cp docs/release.env.example ~/.umbratic/release.env
 chmod 600 ~/.umbratic/release.env
 ```
 

@@ -76,11 +76,22 @@ test("installBundledSystemSkills provisions the central skills layout", () => {
   const competitiveSkill = fs.readFileSync(path.join(directory, "system", "umbratic-competitive-research", "SKILL.md"), "utf8");
   assert.match(competitiveSkill, /web_search/);
   assert.match(competitiveSkill, /web_fetch/);
-  assert.match(competitiveSkill, /DuckDuckGo/);
+  // One copy of these skills ships to both deployments, and which engine answers
+  // a search belongs to the deployment: Veil's own when the server runs it, the
+  // runner's direct search when it does not. Naming one would be wrong half the
+  // time, so the copy describes the results rather than the engine — the same
+  // reason Veil's public-web prompt and the runner's tool description name none.
+  // Engine hosts still appear as a web_fetch deny-list, which is not that claim.
+  assert.match(competitiveSkill, /Umbratic search returns results from the public web/);
+  assert.doesNotMatch(competitiveSkill, /search is (?:Brave|DuckDuckGo)/i);
+  assert.match(competitiveSkill, /Never invent a domain/);
   const newsSkill = fs.readFileSync(path.join(directory, "system", "umbratic-news-briefing", "SKILL.md"), "utf8");
   assert.match(newsSkill, /web_search/);
   assert.match(newsSkill, /Reuters/);
   assert.match(newsSkill, /training data/);
+  assert.match(newsSkill, /Umbratic search returns results from the public web/);
+  assert.doesNotMatch(newsSkill, /search is (?:Brave|DuckDuckGo)/i);
+  assert.match(newsSkill, /Never invent a company domain/);
 });
 
 test("skill frontmatter accepts inline and list path globs", () => {

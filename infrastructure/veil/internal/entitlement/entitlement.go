@@ -20,6 +20,15 @@ type Payload struct {
 	OrgUID             string `json:"org_uid"`
 	MaxAuthorizedUsers int    `json:"max_authorized_users"`
 	MaxDevicesPerUser  int    `json:"max_devices_per_user"`
+	// MaxSearchesPerMonth is the whole organization's monthly web-search pool,
+	// not a per-seat rate: a sales team searches far more than an engineering
+	// one, and pooling is the point. Zero is the default and means this
+	// organization did not buy web search.
+	//
+	// omitempty is load-bearing rather than tidy. The signature covers
+	// json.Marshal of this struct, so every document signed before the field
+	// existed has to keep marshaling byte identically or it stops verifying.
+	MaxSearchesPerMonth int `json:"max_searches_per_month,omitempty"`
 }
 
 type Document struct {
@@ -78,6 +87,11 @@ func validatePayload(payload Payload) error {
 	}
 	if payload.MaxDevicesPerUser < 1 || payload.MaxDevicesPerUser > 32 {
 		return errors.New("entitlement device limit is invalid")
+	}
+	// Zero is valid here, unlike the seat and device limits: an organization
+	// that bought no web search is the common case, not a malformed document.
+	if payload.MaxSearchesPerMonth < 0 || payload.MaxSearchesPerMonth > 100_000_000 {
+		return errors.New("entitlement monthly search limit is invalid")
 	}
 	return nil
 }

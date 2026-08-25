@@ -128,6 +128,21 @@ test("desktop packages the native Rust runner instead of a Node launcher", () =>
   assert.doesNotMatch(preparePackage, /umbratic-runner\.cjs|dist["'], ["']cli\.js/);
 });
 
+test("the packaged app ships no search credential", () => {
+  const config = fs.readFileSync(configUrl, "utf8");
+  const preparePackage = fs.readFileSync(preparePackageUrl, "utf8");
+  const verifyPackage = fs.readFileSync(new URL("../scripts/verify-package.ts", import.meta.url), "utf8");
+
+  // An installed app can be unpacked, so a search key placed in extraResources
+  // is a key handed to every customer. Searching against a subscription is
+  // Veil's job; nothing in the bundle needs a token to do it.
+  for (const source of [config, preparePackage, verifyPackage]) {
+    assert.doesNotMatch(source, /brave/i);
+    assert.doesNotMatch(source, /SEARCH_API_KEY/);
+  }
+  assert.doesNotMatch(config, /- from: \.package\/web-search/);
+});
+
 test("the Windows uninstaller offers an explicit local-data removal option", () => {
   const config = fs.readFileSync(configUrl, "utf8");
   const include = fs.readFileSync(installerIncludeUrl, "utf8");

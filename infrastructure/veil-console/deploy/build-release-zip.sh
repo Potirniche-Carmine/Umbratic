@@ -9,6 +9,7 @@ seats=""
 devices_per_user=2
 signing_key_file="${UMBRATIC_ENTITLEMENT_SIGNING_KEY_FILE:-}"
 feed_key_file="${UMBRATIC_FEED_MASTER_KEY_FILE:-}"
+searches_per_month=0
 org_uid=""
 positional=0
 
@@ -20,6 +21,7 @@ while [[ $# -gt 0 ]]; do
     --devices-per-user) devices_per_user="${2:-}"; shift 2 ;;
     --signing-key-file) signing_key_file="${2:-}"; shift 2 ;;
     --feed-key-file) feed_key_file="${2:-}"; shift 2 ;;
+    --searches-per-month) searches_per_month="${2:-}"; shift 2 ;;
     --org-uid) org_uid="${2:-}"; shift 2 ;;
     --*)
       echo "Unknown option: $1" >&2
@@ -60,10 +62,51 @@ if [[ -z "$feed_key_file" || ! -f "$feed_key_file" ]]; then
   echo "--feed-key-file must name the protected update-feed master key file." >&2
   exit 2
 fi
+if [[ ! "$searches_per_month" =~ ^[0-9]+$ ]] || (( searches_per_month > 100000000 )); then
+  echo "--searches-per-month must be between 0 and 100000000." >&2
+  exit 2
+fi
 if [[ -n "$org_uid" && ( ! "$org_uid" =~ ^org_[A-Za-z0-9_-]{8,76}$ ) ]]; then
   echo "--org-uid must be a valid existing organization UID." >&2
   exit 2
 fi
+
+# The Brave subscription key is not a per-release input. It is ours rather than
+# any customer's, identical for every bundle we build, and so it belongs to the
+# release machine the same way the publishing credentials do: taken from the
+# environment, and otherwise from the one assignment for it in
+# ~/.umbratic/release.env. The file is read line by line and never sourced — it
+# holds credentials, not commands, and sourcing it would run whatever a stray
+# line happened to contain.
+read_release_env_value() {
+  local name="$1" file="$HOME/.umbratic/release.env" line key value
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    [[ "$key" == "$name" ]] || continue
+    value="${line#*=}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    # Quotes around a value are allowed and stripped, so the file reads the way
+    # it would in a shell — the same rule the desktop release's reader applies.
+    if (( ${#value} >= 2 )) && [[ ( "$value" == \"*\" ) || ( "$value" == \'*\' ) ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    printf '%s' "$value"
+    return 0
+  done <"$file"
+}
+
+search_key="${UMBRATIC_BRAVE_SEARCH_API_KEY:-}"
+if [[ -z "$search_key" ]]; then
+  search_key="$(read_release_env_value UMBRATIC_BRAVE_SEARCH_API_KEY)"
+fi
+# No key anywhere is not a failure: a customer who did not buy web search gets a
+# bundle whose veil holds no subscription key, which is a complete product.
 
 work_dir="$(mktemp -d)"
 trap 'rm -rf -- "$work_dir"' EXIT
@@ -81,6 +124,7 @@ entitlement_output="$(
     --feed-key-file "$feed_key_file"
     --seats "$seats"
     --devices-per-user "$devices_per_user"
+    --searches-per-month "$searches_per_month"
   )
   if [[ -n "$org_uid" ]]; then
     entitlement_args+=(--org-uid "$org_uid")
@@ -90,8 +134,16 @@ entitlement_output="$(
 entitlement_public_key="$(printf '%s\n' "$entitlement_output" | sed -n 1p)"
 feed_key="$(printf '%s\n' "$entitlement_output" | sed -n 2p)"
 
+# The subscription key read above is the third baked-in value. It goes into the
+# veil binary and nowhere else — not into the bundle directory, not into
+# SHA256SUMS, not into Console's environment, and never onto a log line.
+veil_ldflags="-X umbratic-veil/internal/entitlement.TrustedPublicKey=$entitlement_public_key -X umbratic-veil/internal/updatefeed.CustomerKey=$feed_key"
+if [[ -n "$search_key" ]]; then
+  veil_ldflags+=" -X umbratic-veil/internal/websearch.SubscriptionKey=$search_key"
+fi
+
 (cd "$repo_root/infrastructure/veil" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-  -ldflags "-X umbratic-veil/internal/entitlement.TrustedPublicKey=$entitlement_public_key -X umbratic-veil/internal/updatefeed.CustomerKey=$feed_key" \
+  -ldflags "$veil_ldflags" \
   -o "$bundle_dir/veil" ./cmd/veil)
 (cd "$repo_root/infrastructure/veil-console" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
   -ldflags "-X umbratic-veil-console/internal/entitlement.TrustedPublicKey=$entitlement_public_key" \

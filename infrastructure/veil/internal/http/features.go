@@ -56,10 +56,18 @@ const ragFeature = "rag"
 // press is worse than no microphone button.
 const speechFeature = "speech.transcribe"
 
+// webSearchFeature is advertised only while this build can actually run a
+// search: a subscription key is baked in and the organization's month still has
+// room. Gated harder than the others on purpose — a client that sees this name
+// stops searching on its own and routes every query through here, so withdrawing
+// it is how a spent month tells the client to stop asking rather than how it
+// learns to fail.
+const webSearchFeature = "web.search"
+
 // Features returns the advertised capability list. The slice is built fresh so
 // a caller cannot rewrite what this server claims to support.
-func Features(ragEnabled, modelSelectionEnabled, speechEnabled bool) []string {
-	names := make([]string, 0, len(serverFeatures)+3)
+func Features(ragEnabled, modelSelectionEnabled, speechEnabled, webSearchEnabled bool) []string {
+	names := make([]string, 0, len(serverFeatures)+4)
 	names = append(names, serverFeatures...)
 	if ragEnabled {
 		names = append(names, ragFeature)
@@ -69,6 +77,9 @@ func Features(ragEnabled, modelSelectionEnabled, speechEnabled bool) []string {
 	}
 	if speechEnabled {
 		names = append(names, speechFeature)
+	}
+	if webSearchEnabled {
+		names = append(names, webSearchFeature)
 	}
 	return names
 }

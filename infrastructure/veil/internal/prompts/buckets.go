@@ -235,7 +235,7 @@ Never invent metrics, customer quotes, benchmarks, or proof points.`
 
 // publicWebGuidance is appended only when web_search and web_fetch are both in
 // the request. Without those tools the playbook is unchanged.
-const publicWebGuidance = `If a needed fact is public, search then fetch it instead of asking. web_search returns DuckDuckGo snippets only — fetch the page with web_fetch. Prefer primary documents (filings, official product and pricing pages, regulator notices) and established newsrooms (Reuters, AP, BBC, Bloomberg, FT, WSJ) over aggregators, listicles, and social posts. Cite the URL. Do not invent a live figure from training data.`
+const publicWebGuidance = `If a needed fact is public, search then fetch it instead of asking. web_search returns snippets only — fetch the page with web_fetch. Prefer primary documents (filings, official product and pricing pages, regulator notices) and established newsrooms (Reuters, AP, BBC, Bloomberg, FT, WSJ) over aggregators, listicles, and social posts. Cite the URL. Do not invent a live figure from training data. Never invent a company domain. A blocked or empty search is not proof the subject is missing; ask for a URL. Do not fetch a search-engine results page as a substitute for web_search.`
 
 var marketingBuckets = []Bucket{
 	{

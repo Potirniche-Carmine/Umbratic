@@ -339,6 +339,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
             thinking: None,
             send_reasoning_visible_field: false,
             reasoning_visible: false,
+            veil_web_search: false,
             headers: std::collections::BTreeMap::new(),
             mtls: None,
         },

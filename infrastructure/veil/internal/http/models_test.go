@@ -128,7 +128,7 @@ func TestModelsRouteCachesAvailabilityProbes(t *testing.T) {
 }
 
 func TestFeaturesFollowTheRegistryState(t *testing.T) {
-	always := Features(false, false, false)
+	always := Features(false, false, false, false)
 	for _, name := range []string{"models.list", "chat.thinking_toggle", "chat.reasoning_visible"} {
 		if !slices.Contains(always, name) {
 			t.Fatalf("%q is advertised on every build: %#v", name, always)
@@ -137,14 +137,20 @@ func TestFeaturesFollowTheRegistryState(t *testing.T) {
 	if slices.Contains(always, "chat.model_selection") {
 		t.Fatalf("model selection must not be advertised without a registry: %#v", always)
 	}
-	if !slices.Contains(Features(false, true, false), "chat.model_selection") {
+	if !slices.Contains(Features(false, true, false, false), "chat.model_selection") {
 		t.Fatal("a configured registry must advertise chat.model_selection")
 	}
 	if slices.Contains(always, "speech.transcribe") {
 		t.Fatalf("dictation must not be advertised without a speech runtime: %#v", always)
 	}
-	if !slices.Contains(Features(false, false, true), "speech.transcribe") {
+	if !slices.Contains(Features(false, false, true, false), "speech.transcribe") {
 		t.Fatal("a configured speech runtime must advertise speech.transcribe")
+	}
+	if slices.Contains(always, "web.search") {
+		t.Fatalf("web search must not be advertised without a key and an allowance: %#v", always)
+	}
+	if !slices.Contains(Features(false, false, false, true), "web.search") {
+		t.Fatal("a server that can search must advertise web.search")
 	}
 }
 

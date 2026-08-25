@@ -753,6 +753,9 @@ func TestWebGuidanceRendersOnlyWhenBothToolsArePresent(t *testing.T) {
 		if !strings.Contains(present, "web_search") || !strings.Contains(present, "web_fetch") {
 			t.Fatalf("%s/%s dropped web guidance with the tools present:\n%s", trial.route, trial.bucket, present)
 		}
+		if !strings.Contains(present, "Never invent a company domain") {
+			t.Fatalf("%s/%s lost the no-invented-domain rule:\n%s", trial.route, trial.bucket, present)
+		}
 		if PlaybookPrompt(trial.route, trial.bucket, nil, searchOnly) != absent {
 			t.Fatalf("%s/%s must require both web tools, not search alone", trial.route, trial.bucket)
 		}

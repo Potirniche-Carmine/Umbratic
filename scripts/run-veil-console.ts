@@ -49,6 +49,8 @@ const explicitVersion = takeOption("--version");
 const explicitSeats = takeOption("--seats");
 const explicitDevicesPerUser = takeOption("--devices-per-user");
 const explicitSigningKeyFile = takeOption("--signing-key-file");
+const explicitFeedKeyFile = takeOption("--feed-key-file");
+const explicitSearchesPerMonth = takeOption("--searches-per-month");
 const explicitOrgUid = takeOption("--org-uid");
 const explicitConsolePort = takeOption("--port");
 const explicitVeilPort = takeOption("--veil-port");
@@ -68,6 +70,20 @@ function parsePositiveInteger(name, value, maximum = Number.MAX_SAFE_INTEGER) {
   return parsed;
 }
 
+// An allowance, unlike a seat count, is legitimately zero: that is the customer
+// who bought no web search. The ceiling matches the one the release script
+// enforces, so a typo fails here rather than after a full cross build.
+function parseAllowance(name, value, maximum) {
+  if (!value) {
+    return 0;
+  }
+  if (!/^\d+$/.test(value) || Number(value) > maximum) {
+    console.error(`${name} must be between 0 and ${maximum}.`);
+    process.exit(2);
+  }
+  return Number(value);
+}
+
 if (commandArguments.length > 0) {
   console.error(`Unknown option: ${commandArguments[0]}`);
   process.exit(2);
@@ -84,15 +100,32 @@ if (explicitVersion && action !== "release") {
   console.error("--version is available only for a release.");
   process.exit(2);
 }
-if ((explicitSeats || explicitDevicesPerUser || explicitSigningKeyFile || explicitOrgUid) && action !== "release") {
-  console.error("--seats, --devices-per-user, --signing-key-file, and --org-uid are available only for a release.");
+if (
+  (explicitSeats
+    || explicitDevicesPerUser
+    || explicitSigningKeyFile
+    || explicitFeedKeyFile
+    || explicitSearchesPerMonth
+    || explicitOrgUid)
+  && action !== "release"
+) {
+  console.error(
+    "--seats, --devices-per-user, --signing-key-file, --feed-key-file, --searches-per-month, and --org-uid "
+    + "are available only for a release.",
+  );
   process.exit(2);
 }
 const releaseSeats = action === "release" ? parsePositiveInteger("--seats", explicitSeats) : 0;
 const releaseDevicesPerUser =
   action === "release" ? parsePositiveInteger("--devices-per-user", explicitDevicesPerUser || "2", 32) : 0;
+const releaseSearchesPerMonth =
+  action === "release" ? parseAllowance("--searches-per-month", explicitSearchesPerMonth, 100000000) : 0;
 if (action === "release" && !explicitSigningKeyFile) {
   console.error("--signing-key-file is required for a release.");
+  process.exit(2);
+}
+if (action === "release" && !explicitFeedKeyFile) {
+  console.error("--feed-key-file is required for a release.");
   process.exit(2);
 }
 
@@ -105,7 +138,11 @@ function windowsPathToWSL(value) {
   return `/mnt/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
 }
 
-function signingKeyPathForLinux(value) {
+// Both release keys stay on this machine and are read by the build script
+// running under Linux, so a Windows path has to be handed over as the WSL path
+// for the same file. A value that is already absolute in Linux terms is passed
+// through: on Windows that is how someone names a file inside the distribution.
+function keyFilePathForLinux(value) {
   if (process.platform !== "win32") {
     return path.resolve(value);
   }
@@ -219,7 +256,11 @@ try {
         "--devices-per-user",
         String(releaseDevicesPerUser),
         "--signing-key-file",
-        signingKeyPathForLinux(explicitSigningKeyFile),
+        keyFilePathForLinux(explicitSigningKeyFile),
+        "--feed-key-file",
+        keyFilePathForLinux(explicitFeedKeyFile),
+        "--searches-per-month",
+        String(releaseSearchesPerMonth),
       ];
       if (explicitOrgUid) {
         releaseArguments.push("--org-uid", explicitOrgUid);

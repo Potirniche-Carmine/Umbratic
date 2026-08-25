@@ -13,16 +13,18 @@ const defaultMaxDevicesPerUser = 2
 
 func main() {
 	var output, privateKeyPath, feedKeyPath, orgUID string
-	var seats, devices int
+	var seats, devices, searchesPerMonth int
 	flag.StringVar(&output, "output", "", "signed entitlement output path")
 	flag.StringVar(&privateKeyPath, "private-key-file", "", "base64url Ed25519 signing key file")
 	flag.StringVar(&feedKeyPath, "feed-key-file", "", "base64url update-feed master key file")
 	flag.StringVar(&orgUID, "org-uid", "", "existing organization UID")
 	flag.IntVar(&seats, "seats", 0, "maximum authorized users")
 	flag.IntVar(&devices, "devices-per-user", defaultMaxDevicesPerUser, "maximum devices per user")
+	// Zero is the honest default: an organization that bought no web search.
+	flag.IntVar(&searchesPerMonth, "searches-per-month", 0, "purchased web searches per month for the whole organization")
 	flag.Parse()
 	if flag.NArg() != 0 || output == "" || privateKeyPath == "" || feedKeyPath == "" || seats < 1 {
-		fmt.Fprintln(os.Stderr, "usage: entitlement --output FILE --private-key-file FILE --feed-key-file FILE --seats N [--devices-per-user N] [--org-uid UID]")
+		fmt.Fprintln(os.Stderr, "usage: entitlement --output FILE --private-key-file FILE --feed-key-file FILE --seats N [--devices-per-user N] [--searches-per-month N] [--org-uid UID]")
 		os.Exit(2)
 	}
 	key, err := os.ReadFile(privateKeyPath)
@@ -37,6 +39,7 @@ func main() {
 	}
 	document, publicKey, err := entitlement.Sign(entitlement.Payload{
 		Version: 1, OrgUID: orgUID, MaxAuthorizedUsers: seats, MaxDevicesPerUser: devices,
+		MaxSearchesPerMonth: searchesPerMonth,
 	}, strings.TrimSpace(string(key)))
 	if err != nil {
 		fail(err)

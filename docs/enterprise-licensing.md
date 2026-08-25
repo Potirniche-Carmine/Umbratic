@@ -90,6 +90,12 @@ Run this command from the repository root:
 npm run veil-console:release -- --version 0.1.0 --seats 30 --devices-per-user 2 --signing-key-file "$HOME/umbratic-entitlement-signing.key" --feed-key-file "$HOME/umbratic-feed-master.key"
 ```
 
+Add `--searches-per-month` when the customer bought web search:
+
+```sh
+npm run veil-console:release -- --version 0.1.0 --seats 30 --devices-per-user 2 --searches-per-month 20000 --signing-key-file "$HOME/umbratic-entitlement-signing.key" --feed-key-file "$HOME/umbratic-feed-master.key"
+```
+
 The release appears at:
 
 ```text
@@ -103,9 +109,53 @@ The release contains:
 - The installer and production configuration templates.
 - `SHA256SUMS`.
 
-The entitlement sets the organization, authorized-user limit, and device limit.
-It does not expire. Assigned users stay active until an administrator
-deactivates them.
+The entitlement sets the organization, authorized-user limit, device limit, and
+monthly web-search allowance. It does not expire. Assigned users stay active
+until an administrator deactivates them.
+
+### Web search
+
+Two separate inputs turn web search on, and both are needed:
+
+| Input | Where it comes from | Meaning |
+| --- | --- | --- |
+| `--searches-per-month N` | The release command | The purchased monthly allowance, signed into the entitlement. Default `0` |
+| Brave subscription key | `UMBRATIC_BRAVE_SEARCH_API_KEY`, otherwise `~/.umbratic/release.env` | The credential that buys those searches |
+
+The allowance is what this customer bought, so it stays a flag on the release
+command. The subscription key is not theirs at all: it is ours, it buys
+searches on our credit plan, and it is the same key in every bundle we build.
+That makes it part of the release-signing computer's identity rather than part
+of a release command, so it lives in `~/.umbratic/release.env` beside the
+publishing credentials and no release command names it again. The release runs
+under Linux or WSL, so the file it reads is the Linux home's copy.
+`docs/release.env.example` documents the entry.
+
+`--searches-per-month` is a whole-organization pool, not a per-seat rate. Sales
+and marketing users search many times a day and engineers barely at all, so a
+per-seat allowance would be wrong for both. Size it for the organization.
+
+The subscription key is baked into that customer's `veil` binary at build time.
+It is never written into the release zip, never listed in `SHA256SUMS`, and
+never stored on the customer server as a file. Keep `release.env` readable by
+you alone, and do not commit it.
+
+Both inputs are optional. Leave the key out of `release.env`, or omit the
+allowance, and the release is a complete product with no web search: the
+desktop application never offers it, because Veil does not advertise the
+feature and the desktop application ships no search credential of its own.
+
+Searches leave the customer's server, not the user's machine. The desktop
+application sends the query terms to Veil, Veil calls the search provider, and
+the results come back the same way, so a search never crosses the company
+boundary from an employee laptop.
+
+When the month's pool is spent, the assistant reports that the organization's
+search allowance is used up and stops searching; it does not silently fall back
+to some other search route. Chat, documents, and every other feature keep
+working. The pool resets on the first day of the next UTC month without any
+administrator action. To raise the allowance mid-month, issue a new release as
+described in "Change seat, device, or search limits" below.
 
 ## 3. Prepare the server
 
@@ -270,7 +320,7 @@ Restarting Console also restarts its supervised Veil process. Veil sessions are
 kept in memory, so desktop applications must create new sessions after a Veil
 restart.
 
-## 10. Change seat or device limits
+## 10. Change seat, device, or search limits
 
 Read `org_uid` from the installed entitlement:
 
@@ -281,14 +331,22 @@ Read `org_uid` from the installed entitlement:
 Create a new release with the same organization UID and signing key:
 
 ```sh
-npm run veil-console:release -- --version 0.2.0 --seats 40 --devices-per-user 2 --org-uid org_EXISTING_VALUE --signing-key-file "$HOME/umbratic-entitlement-signing.key"
+npm run veil-console:release -- --version 0.2.0 --seats 40 --devices-per-user 2 --org-uid org_EXISTING_VALUE --signing-key-file "$HOME/umbratic-entitlement-signing.key" --feed-key-file "$HOME/umbratic-feed-master.key"
 ```
 
 Do not change the organization UID. The identity store belongs to that UID.
 
+Carry every limit forward on each new release, including
+`--searches-per-month`. The entitlement is a complete statement of what the
+organization bought, not a patch: a flag you leave off returns to its default,
+and for web search that default is off. The subscription key needs no carrying
+forward — it comes from `release.env` on every build.
+
 If a new limit is lower than current use, administration stays available, but
 product access stops until an administrator deactivates users or revokes
-devices to meet the new limit.
+devices to meet the new limit. A lowered search allowance behaves differently:
+the month's usage so far is already counted, so a new allowance below it simply
+leaves no searches for the rest of that month.
 
 ## 11. Upgrade an installed release
 
