@@ -92,7 +92,13 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
     // A GGUF somebody put in the models folder themselves: here, runnable, and
     // nothing this collection has read a card for.
     row("local-qwen3-coder-30b", "Qwen3 Coder 30B", 18_600_000_000, 28, { downloaded: true, discovered: true }),
-    row("gemma4-e4b", "Gemma 4 E4B", 4_977_171_584, 8, { role: chatRole }),
+    row("ornith-1.5-9b", "Ornith 1.5 9B", 5_780_090_816, 8, {
+      mtp: true,
+      role: {
+        label: "Light agentic",
+        detail: "Thinks before answering and calls tools. Small enough for a laptop, and fine for short agentic runs.",
+      },
+    }),
     row("ornith-1.5-35b-a3b", "Ornith 1.5 35B A3B", 21_713_462_848, 32, {
       role: {
         label: "Agentic coding",

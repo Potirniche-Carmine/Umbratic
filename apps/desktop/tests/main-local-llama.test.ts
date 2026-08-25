@@ -11,13 +11,13 @@ const llamaServerSource = fs.readFileSync(new URL("../src/main/llamaServer.ts", 
 const childShutdownSource = fs.readFileSync(new URL("../src/main/childShutdown.ts", import.meta.url), "utf8");
 
 test("the chat sidecar is launched with the weights, the whole context, and one slot", () => {
-  const args = localLlama.localLlamaArgs({ modelFile: "/models/gemma4-e4b.gguf", modelId: "gemma4-e4b", contextLength: 64000, mtp: null });
+  const args = localLlama.localLlamaArgs({ modelFile: "/models/gemma4-e2b.gguf", modelId: "gemma4-e2b", contextLength: 64000, mtp: null });
 
   assert.deepEqual([...args], [
-    "-m", "/models/gemma4-e4b.gguf",
+    "-m", "/models/gemma4-e2b.gguf",
     // The alias is what Veil finds the model under: without it llama-server
     // advertises the weights file path and Veil's health answers 503 forever.
-    "--alias", "gemma4-e4b",
+    "--alias", "gemma4-e2b",
     "--ctx-size", "64000",
     "--jinja",
     "--parallel", "1",
@@ -46,11 +46,11 @@ test("a model with an MTP head drafts from it when asked, naming a separate head
 
 test("a missing or unconfigured model sends the user to the connection panel, not to a stack trace", async () => {
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: "", modelId: "gemma4-e4b", contextLength: 64000, mtp: null }),
+    () => localLlama.ensureLocalLlama({ modelFile: "", modelId: "gemma4-e2b", contextLength: 64000, mtp: null }),
     /Download a model in Settings/,
   );
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: path.join(os.tmpdir(), "umbratic-absent.gguf"), modelId: "gemma4-e4b", contextLength: 64000, mtp: null }),
+    () => localLlama.ensureLocalLlama({ modelFile: path.join(os.tmpdir(), "umbratic-absent.gguf"), modelId: "gemma4-e2b", contextLength: 64000, mtp: null }),
     /Download a model in Settings/,
   );
 
@@ -61,7 +61,7 @@ test("a missing or unconfigured model sends the user to the connection panel, no
     /Download a model in Settings/,
   );
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: present, modelId: "gemma4-e4b", contextLength: 0, mtp: null }),
+    () => localLlama.ensureLocalLlama({ modelFile: present, modelId: "gemma4-e2b", contextLength: 0, mtp: null }),
     /context length is not configured/,
   );
 });

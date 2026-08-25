@@ -68,14 +68,14 @@ test("every catalog id is unique and every chat quantization is one weights file
 });
 
 test("MTP is for dense models; mixture-of-experts do not draft", () => {
-  for (const id of ["gemma4-e2b", "gemma4-e4b", "ornith-1.5-35b-a3b"]) {
+  for (const id of ["gemma4-e2b", "ornith-1.5-35b-a3b"]) {
     const model = catalog.catalogModel(id);
     assert.notEqual(model.mtp, true, `${id} is mixture-of-experts and should not draft`);
     for (const quant of model.quants) {
       assert.equal(catalog.quantMtpFile(quant), null, `${id} should not download a drafting head`);
     }
   }
-  for (const id of ["qwen38-27b", "qwen38-27b-obliterated"]) {
+  for (const id of ["ornith-1.5-9b", "qwen38-27b", "qwen38-27b-obliterated"]) {
     assert.equal(catalog.catalogModel(id).mtp, true, `${id} is dense and should draft`);
   }
 });
@@ -83,11 +83,11 @@ test("MTP is for dense models; mixture-of-experts do not draft", () => {
 test("the recommendation follows the memory a model would run in", () => {
   // A machine too small for anything is still offered the smallest model.
   assert.equal(hardware.recommendedModelId("chat", { ramGB: 4, vramGB: null }), "gemma4-e2b");
-  // E4B runs in 8 GB, so it is the suggestion from there up to the 27B's 32.
-  assert.equal(hardware.recommendedModelId("chat", { ramGB: 8, vramGB: null }), "gemma4-e4b");
-  assert.equal(hardware.recommendedModelId("chat", { ramGB: 11.9, vramGB: null }), "gemma4-e4b");
-  assert.equal(hardware.recommendedModelId("chat", { ramGB: 16, vramGB: null }), "gemma4-e4b");
-  assert.equal(hardware.recommendedModelId("chat", { ramGB: 31.9, vramGB: null }), "gemma4-e4b");
+  // The 9B runs in 8 GB, so it is the suggestion from there up to the 27B's 32.
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 8, vramGB: null }), "ornith-1.5-9b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 11.9, vramGB: null }), "ornith-1.5-9b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 16, vramGB: null }), "ornith-1.5-9b");
+  assert.equal(hardware.recommendedModelId("chat", { ramGB: 31.9, vramGB: null }), "ornith-1.5-9b");
   // 32 GB is enough for the 27B's ~17 GB of weights plus a long context's KV
   // cache, and the 27B is the only model here whose tool calling holds up over
   // a long agentic run — so it is what a 48 GB machine is offered.
@@ -180,7 +180,7 @@ test("every chat model says what it is for, not just how big it is", () => {
   }
   const byId = (id: string) => catalog.catalogModels("chat").find((model) => model.id === id);
   // The small ones say plainly that agentic work is not what they are for.
-  for (const id of ["gemma4-e2b", "gemma4-e4b"]) {
+  for (const id of ["gemma4-e2b"]) {
     assert.match(byId(id).role.detail, /[Tt]ool calling is inconsistent|inconsistent/);
   }
   // And the one that is says so.

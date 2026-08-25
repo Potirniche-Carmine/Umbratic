@@ -23,7 +23,7 @@ test("managed local Veil is pointed at the app's own llama-server with its per-r
       settings: {
         mode: "local",
         baseUrl: "",
-        modelId: " gemma4-e4b ",
+        modelId: " gemma4-e2b ",
         secret: "user-facing-token-is-ignored",
         headers: [{ name: "X-Ignored", value: "ignored" }],
       },
@@ -35,7 +35,7 @@ test("managed local Veil is pointed at the app's own llama-server with its per-r
 
     assert.equal(env.VEIL_ADDR, "127.0.0.1:43123");
     assert.equal(env.VEIL_MODE, "local");
-    assert.equal(env.VEIL_MODEL, "gemma4-e4b");
+    assert.equal(env.VEIL_MODEL, "gemma4-e2b");
     assert.equal(env.VEIL_AUTH_TOKEN, "transient-internal-token");
     assert.equal(env.VEIL_ENV_FILE, "-");
     // The sidecar's address and secret, not anything the user typed.
@@ -81,7 +81,7 @@ test("source development gives Go its Windows build-cache root", () => {
   process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
   try {
     const env = localVeil.localVeilEnvironment({
-      settings: { mode: "local", baseUrl: "", modelId: "gemma4-e4b", secret: "", headers: [] },
+      settings: { mode: "local", baseUrl: "", modelId: "gemma4-e2b", secret: "", headers: [] },
       address: "127.0.0.1:43123",
       authToken: "transient-internal-token",
       runtime,
@@ -185,7 +185,7 @@ test("a model that recommends nothing is left on Veil's own local defaults", () 
   assert.equal(catalog.effectiveEffort(asr, "medium"), null);
 
   const env = localVeil.localVeilEnvironment({
-    settings: { mode: "local", baseUrl: "", modelId: "gemma4-e4b", secret: "", headers: [] },
+    settings: { mode: "local", baseUrl: "", modelId: "gemma4-e2b", secret: "", headers: [] },
     address: "127.0.0.1:43123",
     authToken: "transient-internal-token",
     runtime: { ...runtime, reasoningEffort: null, sampling: null },
@@ -197,7 +197,7 @@ test("a model that recommends nothing is left on Veil's own local defaults", () 
 });
 
 test("Gemma samples the same way whether or not it is thinking, and grades nothing", () => {
-  const gemma = catalog.catalogModel("gemma4-e4b");
+  const gemma = catalog.catalogModel("gemma4-e2b");
   assert.ok(gemma);
   assert.deepEqual([...gemma.reasoningEfforts], ["off", "on"]);
   // One standardized set: the card gives the same numbers for every use case.
@@ -213,7 +213,7 @@ test("Gemma samples the same way whether or not it is thinking, and grades nothi
   assert.equal(catalog.effectiveEffort(gemma, "off"), "off");
 
   const env = localVeil.localVeilEnvironment({
-    settings: { mode: "local", baseUrl: "", modelId: "gemma4-e4b", secret: "", headers: [] },
+    settings: { mode: "local", baseUrl: "", modelId: "gemma4-e2b", secret: "", headers: [] },
     address: "127.0.0.1:43123",
     authToken: "transient-internal-token",
     runtime: { ...runtime, reasoningEffort: "on", sampling: catalog.samplingFor(gemma, "on") },

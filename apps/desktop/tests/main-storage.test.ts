@@ -512,12 +512,12 @@ test("endpoint settings default to the local model runtime", () => {
   const savedLocal = storage.writeModelEndpointSettings({
     mode: "local",
     baseUrl: "",
-    modelId: "gemma4-e4b",
+    modelId: "gemma4-e2b",
     secret: "must-not-be-stored",
     headers: [{ name: "X-Ignored", value: "also-not-stored" }],
   });
   assert.equal(savedLocal.mode, "local");
-  assert.equal(savedLocal.modelId, "gemma4-e4b");
+  assert.equal(savedLocal.modelId, "gemma4-e2b");
   assert.equal(savedLocal.secret, "");
   assert.deepEqual(plain(savedLocal.headers), [{ name: "", value: "" }, { name: "", value: "" }]);
   assert.equal(storage.hasStoredModelEndpointSettings(), true);
@@ -538,7 +538,7 @@ test("local model settings remain in SQLite after a switch to a company server",
   storage.writeModelEndpointSettings({
     mode: "local",
     baseUrl: "",
-    modelId: "gemma4-e4b",
+    modelId: "gemma4-e2b",
   });
   storage.writeModelEndpointSettings({
     mode: "server",
@@ -550,13 +550,13 @@ test("local model settings remain in SQLite after a switch to a company server",
   assert.deepEqual(plain(storage.readModelEndpointSettingsForMode("local")), {
     mode: "local",
     baseUrl: "",
-    modelId: "gemma4-e4b",
+    modelId: "gemma4-e2b",
     secret: "",
     headers: [{ name: "", value: "" }, { name: "", value: "" }],
   });
 
   const rawSettings = JSON.parse(readSettingsPayloadText(userData));
-  assert.equal(rawSettings.modelEndpoints.local.modelId, "gemma4-e4b");
+  assert.equal(rawSettings.modelEndpoints.local.modelId, "gemma4-e2b");
   assert.equal(rawSettings.modelEndpoints.server.baseUrl, "https://veil.example.internal");
 });
 

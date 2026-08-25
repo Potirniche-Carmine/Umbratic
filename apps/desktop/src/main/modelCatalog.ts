@@ -242,51 +242,71 @@ export const modelCatalog: readonly CatalogModel[] = [
     ...gemmaReasoning,
   },
   {
-    id: "gemma4-e4b",
+    id: "ornith-1.5-9b",
     kind: "chat",
-    displayName: "Gemma 4 E4B",
-    hfRepo: "unsloth/gemma-4-E4B-it-GGUF",
-    hfRevision: "bfc15c382204943c3a8fff0c750b94ae2364d7a3",
+    displayName: "Ornith 1.5 9B",
+    hfRepo: "ornith-ai/Ornith-1.5-9B-GGUF",
+    hfRevision: "abdd624b12ebf020b767fff532ff44fe552b28c3",
+    // The same four rungs the 35B offers. The BF16 is left out at 18.4 GB, and
+    // so is the vision projector — chat here is text-only.
     quants: [
       {
         quant: "Q4_K_M",
         files: [{
-          name: "gemma-4-E4B-it-Q4_K_M.gguf",
-          bytes: 4_977_171_584,
-          sha256: "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+          name: "Ornith-1.5-9B-Q4_K_M.gguf",
+          bytes: 5_780_090_816,
+          sha256: "70c112196e0b7023803c9762752e46d29e612a92c83f995bc3ba1ceb07e8fab6",
         }],
       },
       {
         quant: "Q5_K_M",
         files: [{
-          name: "gemma-4-E4B-it-Q5_K_M.gguf",
-          bytes: 5_481_798_784,
-          sha256: "a5d6e634db151368d2caa4270fd32ab604d96c2d1291950586989f46d8e17d36",
+          name: "Ornith-1.5-9B-Q5_K_M.gguf",
+          bytes: 6_642_544_576,
+          sha256: "e4d9634a3b6546a5c00a8680568fe1125f6c98c704ee51ae52ba07650fb4247d",
         }],
       },
       {
         quant: "Q6_K",
         files: [{
-          name: "gemma-4-E4B-it-Q6_K.gguf",
-          bytes: 7_074_929_792,
-          sha256: "fd83f3ef44d22e00ff0f638753dde9a66a83e8ccf79c11024f47d383c489531b",
+          name: "Ornith-1.5-9B-Q6_K.gguf",
+          bytes: 7_558_901_696,
+          sha256: "b6f76e74f86245b3caee014b797c10dca931c4dfdaabfb134eab655f81e4154a",
         }],
       },
       {
         quant: "Q8_0",
         files: [{
-          name: "gemma-4-E4B-it-Q8_0.gguf",
-          bytes: 8_192_953_472,
-          sha256: "f8854aa4480df62585a279e7ca0a881554fc18a41c59c4f62642d16a2ae47012",
+          name: "Ornith-1.5-9B-Q8_0.gguf",
+          bytes: 9_786_060_384,
+          sha256: "22086870b009dbe9815ee752c48a82de930118a7c5ce5599590892ae03b8b010",
         }],
       },
     ],
-    // Its Q4_K_M is 5.0 GB, which leaves room for the context on an 8 GB card
-    // rather than needing 12. Asking for 12 marked it a tight fit on hardware
-    // it runs on perfectly well, which is the machine most likely to want it.
+    // The Q4_K_M is 5.8 GB, which leaves room for a working context on an 8 GB
+    // card. This is the model an ordinary machine is pointed at.
     minRamGB: 8,
-    role: chatOnlyRole,
-    ...gemmaReasoning,
+    role: {
+      label: "Light agentic",
+      detail: "Thinks before answering and calls tools. Small enough for a laptop, and fine for short agentic runs.",
+    },
+    // Dense, and the drafting head is inside the weights: the GGUF header at
+    // this revision carries `qwen35.nextn_predict_layers = 1` and no
+    // `expert_count`. Read from the file rather than assumed from the family.
+    mtp: true,
+    reasoning: true,
+    // Its template reads `enable_thinking` and never `reasoning_effort`, so the
+    // choice is binary — the 35B and Gemma are the same.
+    reasoningEfforts: ["off", "on"],
+    // The card's numbers for general tasks, in both slots. Its second set is
+    // for "precise coding" — a distinction about the work rather than about
+    // whether the model is thinking, and this app has no dial that means it.
+    // That set is temperature 0.6 with no presence penalty, if the general
+    // one's penalty of 1.5 ever proves wrong for code here.
+    sampling: {
+      thinking: { temperature: 1.0, topP: 0.95, topK: 20, minP: 0.0, presencePenalty: 1.5, repetitionPenalty: 1.0 },
+      instruct: { temperature: 1.0, topP: 0.95, topK: 20, minP: 0.0, presencePenalty: 1.5, repetitionPenalty: 1.0 },
+    },
   },
   {
     id: "ornith-1.5-35b-a3b",

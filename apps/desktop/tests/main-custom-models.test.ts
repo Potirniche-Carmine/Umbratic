@@ -132,7 +132,7 @@ test("a repository with nothing runnable is refused with a reason", async () => 
   );
   // A catalog repo re-added by reference is already in the collection.
   await assert.rejects(
-    () => module.addCustomModel("unsloth/gemma-4-E4B-it-GGUF", fakeHub([])),
+    () => module.addCustomModel("ornith-ai/Ornith-1.5-9B-GGUF", fakeHub([])),
     /already in the collection/,
   );
 });

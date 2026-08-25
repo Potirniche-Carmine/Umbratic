@@ -83,8 +83,8 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   const downloadEvents = [];
   const stopDownloads = exposedApi.onModelDownloadEvent((event) => downloadEvents.push(event));
   assert.equal(listeners.has("umbratic:model-download"), true);
-  listeners.get("umbratic:model-download")({}, { id: "gemma4-e4b", receivedBytes: 1, totalBytes: 2, state: "downloading" });
-  assert.deepEqual(plain(downloadEvents), [{ id: "gemma4-e4b", receivedBytes: 1, totalBytes: 2, state: "downloading" }]);
+  listeners.get("umbratic:model-download")({}, { id: "gemma4-e2b", receivedBytes: 1, totalBytes: 2, state: "downloading" });
+  assert.deepEqual(plain(downloadEvents), [{ id: "gemma4-e2b", receivedBytes: 1, totalBytes: 2, state: "downloading" }]);
   stopDownloads();
   assert.equal(listeners.has("umbratic:model-download"), false);
 
