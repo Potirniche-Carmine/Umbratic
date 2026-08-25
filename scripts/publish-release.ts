@@ -203,10 +203,11 @@ function r2Config(): R2 {
 
 const emptyHash = crypto.createHash("sha256").update("").digest("hex");
 
-function sha256File(file: string): Promise<string> {
+function sha256File(file: string, offset = 0, length?: number): Promise<string> {
+  const range = length === undefined ? {} : { start: offset, end: offset + length - 1 };
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash("sha256");
-    fs.createReadStream(file).on("error", reject).on("data", (chunk) => hash.update(chunk)).on("end", () => resolve(hash.digest("hex")));
+    fs.createReadStream(file, range).on("error", reject).on("data", (chunk) => hash.update(chunk)).on("end", () => resolve(hash.digest("hex")));
   });
 }
 
@@ -221,12 +222,27 @@ function encodeKey(key: string): string {
 
 type Response = { status: number; headers: Record<string, string | string[] | undefined>; body: string };
 
+/** A whole file, a slice of one, or a small document composed in memory. */
+type Body =
+  | { file: string; size: number; sha256: string; offset?: number }
+  | { buffer: Buffer; sha256: string };
+
+function bodyLength(body: Body): number {
+  return "buffer" in body ? body.buffer.length : body.size;
+}
+
+/** RFC 3986, which is stricter than encodeURIComponent about these six. */
+function encodeStrict(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 function s3Request(
   r2: R2,
-  method: "GET" | "HEAD" | "PUT",
+  method: "GET" | "HEAD" | "PUT" | "POST" | "DELETE",
   key: string,
   extraHeaders: Record<string, string>,
-  body: { file: string; size: number; sha256: string } | null,
+  body: Body | null,
+  query: Record<string, string> = {},
 ): Promise<Response> {
   const host = `${r2.accountId}.r2.cloudflarestorage.com`;
   const canonicalPath = `/${encodeKey(`${r2.bucket}/${key}`)}`;
@@ -240,27 +256,34 @@ function s3Request(
     "x-amz-date": amzDate,
     ...Object.fromEntries(Object.entries(extraHeaders).map(([name, value]) => [name.toLowerCase(), value.trim()])),
   };
-  if (body) headers["content-length"] = String(body.size);
+  if (body) headers["content-length"] = String(bodyLength(body));
+  // Sorted by name, each half encoded: the canonical form SigV4 demands.
+  const canonicalQuery = Object.keys(query).sort().map((name) => `${encodeStrict(name)}=${encodeStrict(query[name])}`).join("&");
   const signedHeaderNames = Object.keys(headers).sort();
   const canonicalHeaders = signedHeaderNames.map((name) => `${name}:${headers[name]}\n`).join("");
   const signedHeaders = signedHeaderNames.join(";");
-  const canonicalRequest = [method, canonicalPath, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const canonicalRequest = [method, canonicalPath, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].join("\n");
   const scope = `${dateStamp}/auto/s3/aws4_request`;
   const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, crypto.createHash("sha256").update(canonicalRequest).digest("hex")].join("\n");
   const signingKey = hmac(hmac(hmac(hmac(`AWS4${r2.secretAccessKey}`, dateStamp), "auto"), "s3"), "aws4_request");
   const signature = hmac(signingKey, stringToSign).toString("hex");
   headers.authorization = `AWS4-HMAC-SHA256 Credential=${r2.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
+  const requestPath = canonicalQuery ? `${canonicalPath}?${canonicalQuery}` : canonicalPath;
   return new Promise((resolve, reject) => {
-    const request = https.request({ host, method, path: canonicalPath, headers }, (response) => {
+    const request = https.request({ host, method, path: requestPath, headers }, (response) => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk) => chunks.push(chunk));
       response.on("end", () => resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
       response.on("error", reject);
     });
     request.on("error", reject);
-    if (body) fs.createReadStream(body.file).on("error", reject).pipe(request);
-    else request.end();
+    if (!body) request.end();
+    else if ("buffer" in body) request.end(body.buffer);
+    else {
+      const start = body.offset ?? 0;
+      fs.createReadStream(body.file, { start, end: start + body.size - 1 }).on("error", reject).pipe(request);
+    }
   });
 }
 
@@ -269,23 +292,145 @@ function describe(response: Response): string {
   return `HTTP ${response.status}${detail ? `: ${detail}` : ""}`;
 }
 
+/**
+ * A long upload over an ordinary connection meets the occasional broken TLS
+ * record or reset socket. None of them mean the release is wrong, and none of
+ * them used to be retried: one blip 160 MB in threw the whole transfer away.
+ */
+const transient = /ECONNRESET|EPIPE|ETIMEDOUT|ECONNABORTED|EAI_AGAIN|ENETDOWN|ENETUNREACH|socket hang up|bad record mac|decryption failed|before secure TLS connection/i;
+
+function isTransient(error: unknown): boolean {
+  const code = (error as { code?: string })?.code ?? "";
+  return transient.test(code) || transient.test(error instanceof Error ? error.message : String(error));
+}
+
+function shortly(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.split("\n")[0].slice(0, 90);
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The same request, up to five times, backing off. Retries a transient network
+ * failure and the statuses that mean "ask again later"; anything else — a 403,
+ * a 404, a refusal — is an answer, and comes straight back.
+ */
+async function s3RequestRetrying(
+  r2: R2,
+  method: "GET" | "HEAD" | "PUT" | "POST" | "DELETE",
+  key: string,
+  extraHeaders: Record<string, string>,
+  body: Body | null,
+  query: Record<string, string> = {},
+  label = key,
+): Promise<Response> {
+  let wait = 1000;
+  for (let attempt = 1; ; attempt += 1) {
+    let failure: unknown;
+    try {
+      const response = await s3Request(r2, method, key, extraHeaders, body, query);
+      if (attempt === 5 || (response.status !== 429 && response.status < 500)) return response;
+      failure = new Error(describe(response));
+    } catch (error) {
+      if (attempt === 5 || !isTransient(error)) throw error;
+      failure = error;
+    }
+    console.log(`    ${label}: ${shortly(failure)} — retrying in ${wait / 1000}s (attempt ${attempt + 1} of 5)`);
+    await sleep(wait);
+    wait = Math.min(wait * 2, 16000);
+  }
+}
+
 async function remoteSize(r2: R2, key: string): Promise<number | null> {
-  const response = await s3Request(r2, "HEAD", key, {}, null);
+  const response = await s3RequestRetrying(r2, "HEAD", key, {}, null);
   if (response.status === 404) return null;
   if (response.status !== 200) throw new Error(`HEAD ${key} failed: ${describe(response)}`);
   return Number(response.headers["content-length"] ?? -1);
 }
 
 async function remoteText(r2: R2, key: string): Promise<string | null> {
-  const response = await s3Request(r2, "GET", key, {}, null);
+  const response = await s3RequestRetrying(r2, "GET", key, {}, null);
   if (response.status === 404) return null;
   if (response.status !== 200) throw new Error(`GET ${key} failed: ${describe(response)}`);
   return response.body;
 }
 
+/**
+ * Big files go up in pieces. One 167 MB PUT is a single all-or-nothing bet on
+ * the connection holding for minutes at a time; sixteen-megabyte parts are a
+ * bet that lasts seconds, and a part that loses is retried on its own instead
+ * of taking the whole transfer with it. Parts already accepted are not sent
+ * again, so a bad line costs the failed piece and nothing else.
+ */
+const partSize = 16 * 1024 * 1024;
+const multipartFrom = 32 * 1024 * 1024;
+
+async function uploadInParts(r2: R2, artifact: Artifact, size: number) {
+  const started = await s3RequestRetrying(
+    r2,
+    "POST",
+    artifact.key,
+    { "content-type": artifact.contentType, "cache-control": artifact.cacheControl },
+    null,
+    { uploads: "" },
+  );
+  if (started.status !== 200) throw new Error(`Starting the upload of ${artifact.key} failed: ${describe(started)}`);
+  const uploadId = started.body.match(/<UploadId>([^<]+)<\/UploadId>/)?.[1];
+  if (!uploadId) throw new Error(`R2 began no upload for ${artifact.key}: ${started.body.slice(0, 200)}`);
+
+  const total = Math.ceil(size / partSize);
+  const parts: { number: number; etag: string }[] = [];
+  try {
+    for (let number = 1; number <= total; number += 1) {
+      const offset = (number - 1) * partSize;
+      const length = Math.min(partSize, size - offset);
+      const response = await s3RequestRetrying(
+        r2,
+        "PUT",
+        artifact.key,
+        {},
+        { file: artifact.file, size: length, sha256: await sha256File(artifact.file, offset, length), offset },
+        { partNumber: String(number), uploadId },
+        `part ${number}/${total}`,
+      );
+      if (response.status !== 200) throw new Error(`Part ${number} of ${artifact.key} failed: ${describe(response)}`);
+      const etag = String(response.headers.etag ?? "").replace(/"/g, "");
+      if (!etag) throw new Error(`Part ${number} of ${artifact.key} came back without an ETag`);
+      parts.push({ number, etag });
+      if (process.stdout.isTTY) process.stdout.write(`\r    part ${number} of ${total} `);
+    }
+    if (process.stdout.isTTY) process.stdout.write("\r".padEnd(24) + "\r");
+
+    const manifest = Buffer.from(
+      `<CompleteMultipartUpload>${parts.map((part) => `<Part><PartNumber>${part.number}</PartNumber><ETag>"${part.etag}"</ETag></Part>`).join("")}</CompleteMultipartUpload>`,
+      "utf8",
+    );
+    const finished = await s3RequestRetrying(
+      r2,
+      "POST",
+      artifact.key,
+      {},
+      { buffer: manifest, sha256: crypto.createHash("sha256").update(manifest).digest("hex") },
+      { uploadId },
+      `${artifact.key} (completing)`,
+    );
+    // A completion can fail with the parts listed and still answer 200, so the
+    // body has to be read rather than trusted.
+    if (finished.status !== 200 || /<Error>/.test(finished.body)) {
+      throw new Error(`Completing ${artifact.key} failed: ${describe(finished)}`);
+    }
+  } catch (error) {
+    // Leave nothing half-uploaded behind: R2 keeps and bills for orphaned parts.
+    await s3Request(r2, "DELETE", artifact.key, {}, null, { uploadId }).catch(() => undefined);
+    throw error;
+  }
+}
+
 async function upload(r2: R2, artifact: Artifact) {
   const size = fs.statSync(artifact.file).size;
-  const response = await s3Request(
+  if (size >= multipartFrom) return uploadInParts(r2, artifact, size);
+  const response = await s3RequestRetrying(
     r2,
     "PUT",
     artifact.key,
