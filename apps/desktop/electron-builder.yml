@@ -70,6 +70,13 @@ dmg:
   contents:
     - { x: 140, y: 220, type: file }
     - { x: 400, y: 220, type: link, path: /Applications }
+    # The two support files Finder shows to anyone browsing with hidden files
+    # on, parked outside the 540pt window so the layout stays clean either
+    # way. dmgbuild places them itself but offers no way to position them, so
+    # each is re-declared as a copy of the identical bytes — the copy lands on
+    # the file dmgbuild already wrote, and the position comes along with it.
+    - { x: 700, y: 130, type: file, path: assets/dmg/background.tiff, name: .background.tiff }
+    - { x: 700, y: 290, type: file, path: assets/icons/icon.icns, name: .VolumeIcon.icns }
 win:
   icon: assets/icons/icon.ico
   # x64 and arm64 are separate builds carrying differently-compiled sidecars,
