@@ -57,8 +57,19 @@ mac:
       arch: [arm64]
     - target: zip
       arch: [arm64]
+# The drag-to-install window: the same dark surface as the app icon and the
+# NSIS wizard, with the drop points pinned where the background's arrow
+# expects them. The background is generated — see generate:dmg-background.
 dmg:
   icon: assets/icons/icon.icns
+  background: assets/dmg/background.tiff
+  window:
+    width: 540
+    height: 380
+  iconSize: 100
+  contents:
+    - { x: 140, y: 220, type: file }
+    - { x: 400, y: 220, type: link, path: /Applications }
 win:
   icon: assets/icons/icon.ico
   # x64 and arm64 are separate builds carrying differently-compiled sidecars,
