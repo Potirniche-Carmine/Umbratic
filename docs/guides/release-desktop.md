@@ -35,6 +35,13 @@ npm run publish:release
    Signs, notarizes (a few minutes — Apple's queue), smoke-tests the package.
    Output lands in `target/release/desktop/`.
 
+   While iterating on the installer itself, skip the identity and the queue:
+   ```bash
+   npm run desktop:release -- --unsigned
+   ```
+   The package is ad-hoc signed — it runs on this machine, and publishing
+   refuses it.
+
 4. **Publish.**
    ```bash
    npm run publish:release

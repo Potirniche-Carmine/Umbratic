@@ -10,6 +10,8 @@
 // both platforms and the config stays valid for everyone else.
 //
 // Extra arguments pass straight through: `npm run package -- --win nsis --x64`.
+// `--unsigned` is ours, not electron-builder's: it skips signing and Apple's
+// notarization queue for a package that is only being looked at.
 
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -19,11 +21,26 @@ import { loadReleaseEnv, windowsSigningConfig } from "../../../scripts/release-e
 
 const require = createRequire(import.meta.url);
 
-loadReleaseEnv();
+const forwarded = process.argv.slice(2).filter((argument) => argument !== "--unsigned");
+const unsigned = forwarded.length < process.argv.length - 2;
 
-const args = ["--config", "electron-builder.yml", "--publish", "never", ...process.argv.slice(2)];
+if (unsigned) {
+  // The release identity stays untouched in the keychain; electron-builder is
+  // told not to go looking for it, and notarization is switched off below
+  // rather than left to whatever APPLE_* variables the shell carries. The
+  // fuse flip still re-signs ad hoc, so the package runs on this machine —
+  // it just must never be published.
+  process.env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+  console.log("Unsigned package: skipping signing and notarization. For local iteration only.");
+} else {
+  loadReleaseEnv();
+}
 
-if (process.platform === "win32") {
+const args = ["--config", "electron-builder.yml", "--publish", "never", ...forwarded];
+
+if (unsigned) {
+  args.push("-c.mac.notarize=false");
+} else if (process.platform === "win32") {
   const signing = windowsSigningConfig();
   if (signing) {
     args.push(
