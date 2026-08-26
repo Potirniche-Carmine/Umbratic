@@ -1,7 +1,7 @@
 {
   "name": "@umbratic/desktop",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Private AI workbench for local and company-managed models",
   "author": "Umbratic",
   "packageManager": "npm@11.16.0",
