@@ -125,10 +125,12 @@ function get(url: string, headers: Record<string, string>, signal: AbortSignal, 
   });
 }
 
-// Four ranges in flight cut a large transfer to a fraction of one stream's
-// time without soaking the machine's connection; 48 MB per range keeps the
+// Eight ranges in flight — what hf_transfer and aria2 settle on — cut a large
+// transfer to a fraction of one stream's time: the CDN caps each connection
+// well below what a home link carries, so the download scales with the
+// connection count until the link itself is full. 48 MB per range keeps the
 // resume sidecar coarse enough to stay tiny.
-const rangeConnections = 4;
+const rangeConnections = 8;
 const rangeBytes = 48 * 1024 * 1024;
 
 type ChunkLedger = { bytes: number; rangeBytes: number; done: number[] };
@@ -292,7 +294,7 @@ export async function downloadLocalModel(dataRoot: string, model: CatalogModel, 
   const abort = new AbortController();
   active = { id, abort };
   let completedBytes = 0;
-  // Four connections report often enough to flood the channel; a progress
+  // Eight connections report often enough to flood the channel; a progress
   // reading every ~100ms is as smooth as any bar can show.
   let lastProgressAt = 0;
   const publishProgress = (received: number) => {

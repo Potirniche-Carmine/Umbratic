@@ -124,6 +124,9 @@ const umbraticApi = {
   getReasoningEffort: () => invoke("umbratic:get-reasoning-effort"),
   saveReasoningEffort: (input: ReasoningEffort) => invoke("umbratic:save-reasoning-effort", input),
   saveShowThinking: (input: boolean) => invoke("umbratic:save-show-thinking", input),
+  saveSendOnEnter: (input: boolean) => invoke("umbratic:save-send-on-enter", input),
+  getLaunchAtLogin: () => invoke("umbratic:get-launch-at-login", undefined),
+  saveLaunchAtLogin: (input: boolean) => invoke("umbratic:save-launch-at-login", input),
   getModelEndpointSettings: (input?: { mode?: "local" | "server" }) =>
     invoke("umbratic:get-model-endpoint-settings", input),
   getDictationSettings: () => invoke("umbratic:get-dictation-settings"),

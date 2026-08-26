@@ -10,6 +10,7 @@
  * `customModels.ts` and are pinned the same way, at the moment they are added.
  */
 
+import { resolveReasoningEffort } from "../shared/desktopApi";
 import type { ReasoningEffort } from "../shared/desktopApi";
 
 export type CatalogModelKind = "chat" | "dictation";
@@ -603,18 +604,12 @@ export function samplingFor(model: CatalogModel, effort: ReasoningEffort): Sampl
  * "off" forces thinking off, and turning a dial nobody was offered into a
  * thinking switch is the one outcome a user could not have intended.
  *
- * A stored level this model does not offer falls back to one it does, keeping
- * whether the user wanted thinking at all. Only the degree fails to survive a
- * model that grades it differently: someone on "medium" who switches to a
- * model that only knows on and off means on, and taking the first offered
- * level instead would quietly turn their thinking off.
+ * The fallback for a level this model does not offer lives in the shared
+ * resolver, so the composer's menu checks the same row this starts the model
+ * with.
  */
 export function effectiveEffort(model: CatalogModel, effort: ReasoningEffort): ReasoningEffort | null {
-  const offered = model.reasoningEfforts;
-  if (!offered || offered.length === 0) return null;
-  if (offered.includes(effort)) return effort;
-  const wantsThinking = effort !== "off";
-  return offered.find((level) => (level !== "off") === wantsThinking) ?? offered[0];
+  return resolveReasoningEffort(model.reasoningEfforts, effort);
 }
 
 /** The quantization a model comes as when nobody chooses one. */

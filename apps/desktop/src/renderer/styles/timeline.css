@@ -263,21 +263,12 @@
   transform-origin: 50% 0;
 }
 
-/* Answer: plain. Narration: status line — no rail, muted, aligned with Working. */
-/* Colour on the markdown body: paragraphs set their own colour. Size stays body. */
-.timelineMessage.assistantProgress,
-.timelineMessage.assistantProgress .markdownContent,
-.timelineMessage.assistantProgress .markdownContent p,
-.timelineMessage.assistantProgress .markdownContent li {
-  color: var(--faint);
-}
+/* Every prose passage renders alike — demoting the ones between rounds of
+   work to muted text made them read like broken replies. Only the action row
+   under the run's last passage marks the answer. */
 
-.timelineMessage.assistantProgress::before {
-  content: none;
-}
-
-/* Prose before work stays put; close the gap so it reads with the Working block. */
-.timelineMessage.assistantProgress:has(+ .timelineActivity) {
+/* Prose followed by work reads with the block that follows it. */
+.timelineMessage.assistantMessage:has(+ .timelineActivity) {
   margin-bottom: calc(0px - clamp(20px, 3vh, 34px) + 9px);
 }
 
@@ -363,6 +354,20 @@
   align-items: baseline;
   color: inherit;
   font-weight: inherit;
+}
+
+/* The collapsed row's live signal: what the run is doing right now. Muted
+   beside the "Working" label, and the first thing to give way when narrow. */
+.activityHeaderHint {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 400;
 }
 
 .activityDots {

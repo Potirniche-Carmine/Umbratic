@@ -73,6 +73,7 @@ import {
   writeContextLengthSetting,
   writeLocalMtpSetting,
   writeReasoningEffortSetting,
+  writeSendOnEnterSetting,
   writeShowThinkingSetting,
   writeDictationSettings,
   writeModelEndpointSettings,
@@ -319,7 +320,28 @@ export async function saveReasoningEffortSetting(input: unknown) {
 }
 
 export function saveShowThinkingSetting(input: unknown) {
-  return writeShowThinkingSetting(input === true);
+  return writeShowThinkingSetting(input !== false);
+}
+
+export function saveSendOnEnterSetting(input: unknown) {
+  return writeSendOnEnterSetting(input !== false);
+}
+
+/**
+ * Whether the app starts with the OS session. Read from the OS rather than
+ * stored: the login-items list is the truth and can be edited outside the app.
+ */
+export function launchAtLoginStatus(): { enabled: boolean; available: boolean } {
+  const available = process.platform === "darwin" || process.platform === "win32";
+  if (!available) return { enabled: false, available };
+  return { enabled: app.getLoginItemSettings().openAtLogin, available };
+}
+
+export function saveLaunchAtLoginSetting(input: unknown): { enabled: boolean; available: boolean } {
+  const status = launchAtLoginStatus();
+  if (!status.available) return status;
+  app.setLoginItemSettings({ openAtLogin: input === true });
+  return launchAtLoginStatus();
 }
 
 export async function saveContextLengthSetting(input: unknown) {

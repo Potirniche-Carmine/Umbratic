@@ -138,8 +138,12 @@ test("the shortcuts that fire and the shortcuts that are documented are one tabl
   // On capture, because the composer textarea has focus almost all the time.
   assert.match(main, /addEventListener\("keydown", runShortcut, true\)/);
   // Never past a dialog to a window the user cannot see, and never on the
-  // auto-repeat of a held key.
-  assert.match(main, /if \(shortcutsBlockedRef\.current \|\| event\.repeat \|\| event\.isComposing\) return/);
+  // auto-repeat of a held key. The one exception: the settings chord still
+  // lands behind the settings dialog itself, where it toggles the dialog
+  // closed.
+  assert.match(main, /if \(event\.repeat \|\| event\.isComposing\) return/);
+  assert.match(main, /if \(shortcutsBlockedRef\.current\) \{/);
+  assert.match(main, /blockedShortcut\?\.id === "app\.settings" && settingsToggleAllowedRef\.current/);
   assert.match(main, /shortcutsBlockedRef\.current = modalOpen/);
   // The actions are read through a ref and rewritten every render, so the one
   // listener always calls today's closures rather than the render it

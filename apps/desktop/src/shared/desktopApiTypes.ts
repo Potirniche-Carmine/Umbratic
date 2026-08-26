@@ -90,6 +90,7 @@ export type DesktopStartupSettings = {
   reasoningEffort: ReasoningEffort;
   /** Live model thinking in the Working block. Off until the user asks. */
   showThinking: boolean;
+  sendOnEnter: boolean;
   /** Composer Web toggle. Off until the user turns it on. */
   webTools: boolean;
 };
@@ -227,6 +228,32 @@ export const DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium";
 
 export function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return typeof value === "string" && (REASONING_EFFORTS as readonly string[]).includes(value);
+}
+
+/**
+ * The level a model actually runs at, out of the ones it offers, or null when
+ * it offers none.
+ *
+ * The stored effort is one setting across every model, but each model grades
+ * thinking its own way, so the stored level is often not one this model reads.
+ * It falls back to a level this model does offer, keeping whether the user
+ * wanted thinking at all: someone on "medium" who switches to a model that
+ * only knows on and off means on, and taking the first offered level instead
+ * would quietly turn their thinking off.
+ *
+ * Both sides resolve through here — the runtime, to decide what to start the
+ * model with, and the menu, to decide which row is checked. Resolving in one
+ * place is what keeps the checkmark on the level the model is really using
+ * rather than on nothing at all.
+ */
+export function resolveReasoningEffort(
+  offered: readonly ReasoningEffort[] | undefined,
+  effort: ReasoningEffort,
+): ReasoningEffort | null {
+  if (!offered || offered.length === 0) return null;
+  if (offered.includes(effort)) return effort;
+  const wantsThinking = effort !== "off";
+  return offered.find((level) => (level !== "off") === wantsThinking) ?? offered[0];
 }
 
 export type LocalModelProvider = {
@@ -779,6 +806,9 @@ export type DesktopApi = {
     status: BackendStatus;
   }>;
   saveShowThinking(input: boolean): Promise<boolean>;
+  saveSendOnEnter(input: boolean): Promise<boolean>;
+  getLaunchAtLogin(): Promise<{ enabled: boolean; available: boolean }>;
+  saveLaunchAtLogin(input: boolean): Promise<{ enabled: boolean; available: boolean }>;
   getModelEndpointSettings(input?: {
     mode?: ModelEndpointMode;
   }): Promise<PublicModelEndpointSettings>;
@@ -970,7 +1000,7 @@ export type DesktopApi = {
   /** Sends one slice of 16 kHz mono 16-bit PCM to the open stream. */
   sendDictationAudio(input: { chunk: Uint8Array }): Promise<void>;
   /** Ends the recording and waits for the last transcript. */
-  stopDictation(): Promise<void>;
+  stopDictation(): Promise<{ stopping: boolean }>;
   /** Abandons the recording without waiting for a transcript. */
   cancelDictation(): Promise<void>;
   getAppUpdateStatus(): Promise<AppUpdateStatus>;

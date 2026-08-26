@@ -40,6 +40,7 @@ type RawSettings = {
   contextLength?: unknown;
   reasoningEffort?: unknown;
   showThinking?: unknown;
+  sendOnEnter?: unknown;
   localMtp?: unknown;
   permissionMode?: unknown;
   companyCredential?: unknown;
@@ -401,14 +402,26 @@ export function writeLocalMtpSetting(value: unknown): boolean {
   return localMtp;
 }
 
+// On unless switched off: the model's live thinking is part of the account of
+// the work, and hiding it by default made the Working block a blank wait.
 export function readShowThinkingSetting(): boolean {
-  return readRawSettings().showThinking === true;
+  return readRawSettings().showThinking !== false;
 }
 
 export function writeShowThinkingSetting(value: unknown): boolean {
-  const showThinking = value === true;
+  const showThinking = value !== false;
   writeRawSettings({ ...readRawSettings(), showThinking });
   return showThinking;
+}
+
+export function readSendOnEnterSetting(): boolean {
+  return readRawSettings().sendOnEnter !== false;
+}
+
+export function writeSendOnEnterSetting(value: unknown): boolean {
+  const sendOnEnter = value !== false;
+  writeRawSettings({ ...readRawSettings(), sendOnEnter });
+  return sendOnEnter;
 }
 
 export function writeContextLengthSetting(value: unknown): number {
@@ -572,7 +585,8 @@ export function readStartupSettings(): DesktopStartupSettings {
     harnessProfile: isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId,
     contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),
     reasoningEffort: isReasoningEffort(settings.reasoningEffort) ? settings.reasoningEffort : DEFAULT_REASONING_EFFORT,
-    showThinking: settings.showThinking === true,
+    showThinking: settings.showThinking !== false,
+    sendOnEnter: settings.sendOnEnter !== false,
     webTools: webToolsEnabled(toolSettingsFromRaw(settings)),
   };
 }

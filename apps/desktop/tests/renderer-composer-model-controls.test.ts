@@ -66,26 +66,13 @@ test("effort levels are the selected model's own, shown inside its menu", () => 
   // reads no effort, rather than offering a choice its template would ignore.
   assert.match(controls, /efforts\.length > 0 \? \(/);
   assert.match(controls, /<p className="modelMenuHeading">Effort<\/p>/);
-  assert.match(controls, /Show thinking/);
-  assert.match(controls, /effort !== "off"/);
-  assert.match(controls, /className="modelMenuCheck/);
-  assert.match(controls, /className="modelMenuCheckBox"/);
-  assert.match(declarations(".modelMenuCheck"), /display:\s*flex/);
-  assert.match(declarations(".modelMenuCheck"), /justify-content:\s*space-between/);
-  assert.match(declarations(".modelMenuCheck input"), /opacity:\s*0/);
-  assert.match(declarations(".modelMenuCheckBox"), /border-radius:\s*4px/);
+  // Show thinking lives in General settings now, not in the model menu: it is
+  // an app preference, not a property of the selected model.
+  assert.doesNotMatch(controls, /Show thinking/);
   assert.match(declarations(".modelMenuHeading"), /text-transform:\s*uppercase/);
   assert.match(declarations(".modelMenu button"), /color:\s*var\(--text\)/);
   assert.match(controls, /<p className="modelMenuHeading">Model<\/p>/);
-  assert.ok(
-    controls.indexOf("modelMenuHeading\">Effort") < controls.indexOf("Show thinking")
-      && controls.indexOf("Show thinking") < controls.indexOf("className=\"modelMenuCheckBox\"")
-      && controls.indexOf("Show thinking") < controls.indexOf("modelMenuHeading\">Model"),
-    "Show thinking sits under Effort, with its tick after the words",
-  );
   assert.match(main, /efforts=\{modelReasoningEfforts\}/);
-  assert.match(main, /showThinking=\{showThinking\}/);
-  assert.match(main, /onToggleShowThinking=\{\(next\) => void updateShowThinking\(next\)\}/);
   // The model list is a step in from the main page, not a wall of rows under
   // the levels.
   assert.match(controls, /setPage\("models"\)/);
@@ -98,6 +85,46 @@ test("effort levels are the selected model's own, shown inside its menu", () => 
   // so Back still works.
   assert.match(controls, /if \(placedRef\.current \|\| !unchosen \|\| models\.length === 0\) return;/);
   assert.match(controls, /placedRef\.current = true;\s*\n\s*setPage\("models"\);/);
+});
+
+test("the checked level is the one the model is really thinking at", () => {
+  // The stored effort is one setting across every model while each model
+  // grades thinking its own way, so the stored level is often not one the
+  // selected model reads — "medium" on a model that only knows on and off.
+  // Passing it straight to the menu checked no row at all, leaving the
+  // composer silent about whether the thing was thinking. Both sides resolve
+  // through the same shared helper the runtime starts the model with.
+  assert.match(main, /resolveReasoningEffort\(modelReasoningEfforts, reasoningEffort\) \?\? reasoningEffort/);
+  assert.match(main, /effort=\{activeReasoningEffort\}/);
+  assert.doesNotMatch(main, /effort=\{reasoningEffort\}/);
+  const shared = readFileSync(new URL("../src/shared/desktopApiTypes.ts", import.meta.url), "utf8");
+  assert.match(shared, /export function resolveReasoningEffort\(/);
+  // One resolver, so the menu can never check a level the runtime is not using.
+  const modelCatalog = readFileSync(new URL("../src/main/modelCatalog.ts", import.meta.url), "utf8");
+  assert.match(modelCatalog, /return resolveReasoningEffort\(model\.reasoningEfforts, effort\);/);
+
+  // Pressing the level already in force is not a change: saving it would
+  // restart the local stack for nothing and would write this model's coarser
+  // grading over a level another model reads more finely.
+  assert.match(controls, /if \(level === effort\) return;/);
+});
+
+test("controls this chat can never use are gone, not greyed out", () => {
+  // A chat that started without a folder can never be given one, and a chat
+  // that has started keeps the host it started on. Both used to sit in the
+  // rail dimmed and padlocked — a dead button is a question the user keeps
+  // re-asking.
+  assert.match(main, /\{chatStartedWithoutFolder \? null : \(/);
+  assert.match(main, /\{task \? null : \(\s*\n\s*<RemoteHostPicker/);
+  // The host is still named where it matters, above the messages.
+  assert.match(main, /<RemoteChatBadge name=\{remoteBadge\.name\}/);
+  // Nothing is left behind to draw a padlock with.
+  const remote = readFileSync(new URL("../src/renderer/RemoteControls.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(remote, /locked/);
+  assert.doesNotMatch(remote, /Lock/);
+  // A run is different: it lifts in a moment, and a control that vanished for
+  // its length would move every other control in the row twice.
+  assert.match(main, /className="workspaceControl"[\s\S]*?disabled=\{busy\}/);
 });
 
 test("the model name carries no icon and no context window", () => {

@@ -24,9 +24,11 @@
    the prompt box stays put and the conversation above it does not reflow. */
 .composerPendingTray {
   position: absolute;
-  left: 50%;
+  left: 0;
   bottom: calc(100% + 8px);
   z-index: 32;
+  /* The controls row is the containing block, and it is exactly as wide as
+     the prompt box — so the tray is too, instead of ruling across the pane. */
   width: 100%;
   min-width: 0;
   display: flex;
@@ -35,7 +37,7 @@
   gap: 6px;
   opacity: 0;
   pointer-events: none;
-  transform: translateX(-50%) translateY(5px);
+  transform: translateY(5px);
   transition:
     opacity 150ms ease,
     transform 170ms ease;
@@ -44,7 +46,7 @@
 .composerPendingTray.hasPending {
   opacity: 1;
   pointer-events: auto;
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(0);
 }
 
 /* A pill, not a bar: it stays its own width in a column of full-width rows. */

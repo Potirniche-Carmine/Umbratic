@@ -105,6 +105,56 @@ function verifyLlamaServer(directory: string) {
     }
     console.warn(`UMBRATIC_LLAMA_CPU_ONLY=1: accepting a build with no ${expectedGpuBackend} backend. Do not release it.`);
   }
+  if (process.platform === "darwin") {
+    for (const name of shipped) {
+      verifyMachOResolvesBesideItself(path.join(directory, name), new Set(shipped));
+    }
+  }
+}
+
+/**
+ * Proves a packaged Mach-O file resolves every library from the package
+ * itself, with no reach back into the machine that built it.
+ *
+ * Running the binary cannot prove this here: the build tree the binaries came
+ * from still exists on the release machine, so an LC_RPATH pointing into
+ * .llama-cache resolves during verification and then fails as "Library not
+ * loaded" on every other Mac, at first model load. The load commands are the
+ * ground truth, so they are what is checked: every rpath must be relative to
+ * the binary, and every @rpath dependency must name a file that shipped.
+ */
+function verifyMachOResolvesBesideItself(file: string, shipped: Set<string>) {
+  const name = path.basename(file);
+  const loadCommands = spawnSync("otool", ["-l", file], { encoding: "utf8" });
+  if (loadCommands.error || loadCommands.status !== 0) {
+    throw new Error(`Unable to read load commands of packaged ${name}: ${loadCommands.error?.message || loadCommands.stderr}`);
+  }
+  const lines = loadCommands.stdout.split(/\r?\n/);
+  lines.forEach((line, index) => {
+    if (!/\bcmd LC_RPATH\b/.test(line)) return;
+    const recorded = lines.slice(index + 1, index + 4)
+      .map((candidate) => candidate.match(/^\s*path (.+) \(offset \d+\)$/)?.[1])
+      .find((value) => value !== undefined);
+    if (recorded && !recorded.startsWith("@loader_path") && !recorded.startsWith("@executable_path")) {
+      throw new Error(
+        `Packaged ${name} records the rpath ${recorded}, which only exists on the build machine.\n`
+        + "  prepare-package rewrites rpaths to @loader_path; delete apps/desktop/.package and repackage.",
+      );
+    }
+  });
+  const dependencies = spawnSync("otool", ["-L", file], { encoding: "utf8" });
+  if (dependencies.error || dependencies.status !== 0) {
+    throw new Error(`Unable to read dependencies of packaged ${name}: ${dependencies.error?.message || dependencies.stderr}`);
+  }
+  for (const line of dependencies.stdout.split(/\r?\n/)) {
+    const dependency = line.match(/^\s+@rpath\/(\S+)/)?.[1];
+    if (dependency && !shipped.has(dependency)) {
+      throw new Error(
+        `Packaged ${name} needs @rpath/${dependency}, which is not in the package.\n`
+        + "  The build tree covers that name with a symlink; the package must carry the file under it.",
+      );
+    }
+  }
 }
 
 function normalizeText(value: string) {

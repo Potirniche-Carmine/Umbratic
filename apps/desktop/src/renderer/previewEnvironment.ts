@@ -368,6 +368,7 @@ let previewLocalMtp = true;
     contextLength: readPreviewContextLength(),
     reasoningEffort: readPreviewReasoningEffort(),
     showThinking: readPreviewShowThinking(),
+    sendOnEnter: true,
     webTools: previewWebTools,
   }),
   getCapabilityProbes: async () => previewCapabilityReport(),
@@ -393,6 +394,10 @@ let previewLocalMtp = true;
     writePreviewShowThinking(input === true);
     return readPreviewShowThinking();
   },
+  saveSendOnEnter: async (input) => input !== false,
+  // The preview has no OS session to attach to.
+  getLaunchAtLogin: async () => ({ enabled: false, available: false }),
+  saveLaunchAtLogin: async () => ({ enabled: false, available: false }),
   getContextLength: async () => readPreviewContextLength(),
   saveContextLength: async (input) => {
     const contextLength = normalizeContextLength(input);
@@ -528,7 +533,10 @@ let previewLocalMtp = true;
   requestMicrophoneAccess: async () => ({ granted: true }),
   startDictation: async () => previewDictation.start(),
   sendDictationAudio: async () => undefined,
-  stopDictation: async () => previewDictation.stop(),
+  stopDictation: async () => {
+    previewDictation.stop();
+    return { stopping: true };
+  },
   cancelDictation: async () => previewDictation.cancel(),
   onDictationEvent: (callback) => previewDictation.subscribe(callback),
   // `?indexing` holds the first-index status on so it can be seen without

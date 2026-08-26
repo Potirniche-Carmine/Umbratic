@@ -1,7 +1,7 @@
 import { getMainWindow } from "./mainRuntime";
 import { setMainWindow, setPermissionModeValue } from "./mainRuntime";
 import { onWorkspaceIndexProgress } from "./indexerService";
-import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveLocalMtpSetting, saveReasoningEffortSetting, saveShowThinkingSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
+import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, launchAtLoginStatus, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveLaunchAtLoginSetting, saveLocalMtpSetting, saveReasoningEffortSetting, saveSendOnEnterSetting, saveShowThinkingSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
 import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
 import { clearUnsavedDraft, readUnsavedDraft, writeUnsavedDraft } from "./unsavedDrafts";
 import { createCheckpoint, deleteCheckpoint, forkCheckpoint, listTaskCheckpoints, restoreCheckpoint, setCheckpointPinned } from "./checkpointActions";
@@ -487,6 +487,9 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     getReasoningEffort: () => readReasoningEffortSetting(),
     saveReasoningEffort: (input) => saveReasoningEffortSetting(input),
     saveShowThinking: (input) => saveShowThinkingSetting(input),
+    saveSendOnEnter: (input) => saveSendOnEnterSetting(input),
+    getLaunchAtLogin: () => launchAtLoginStatus(),
+    saveLaunchAtLogin: (input) => saveLaunchAtLoginSetting(input),
     exportTelemetry: () => exportTelemetryBundle(),
     exportLocalDiagnostics: () => exportLocalDiagnostics(),
     clearLocalDiagnostics: () => clearLocalDiagnosticLogs(),

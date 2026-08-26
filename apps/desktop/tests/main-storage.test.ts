@@ -870,10 +870,14 @@ test("everything else the app boots with survives a relaunch too", () => {
   assert.equal(relaunched.harnessProfile, "marketing");
   assert.equal(relaunched.contextLength, 128000);
   assert.equal(relaunched.reasoningEffort, "high");
-  assert.equal(relaunched.showThinking, false);
+  // On until switched off: live thinking is part of the account of the work.
+  assert.equal(relaunched.showThinking, true);
+  assert.equal(relaunched.sendOnEnter, true);
   assert.equal(relaunched.webTools, false);
-  storage.writeShowThinkingSetting(true);
-  assert.equal(loadStorage(userData).readStartupSettings().showThinking, true);
+  storage.writeShowThinkingSetting(false);
+  assert.equal(loadStorage(userData).readStartupSettings().showThinking, false);
+  storage.writeSendOnEnterSetting(false);
+  assert.equal(loadStorage(userData).readStartupSettings().sendOnEnter, false);
   storage.writeWebToolsSetting(true);
   assert.equal(loadStorage(userData).readStartupSettings().webTools, true);
 });

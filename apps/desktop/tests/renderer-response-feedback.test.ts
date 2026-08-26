@@ -36,6 +36,7 @@ function renderAnswer(overrides = {}) {
   const element = AssistantMessage({
     item: { type: "assistant", id: "message-1", text: "The answer.", final: true },
     settled: true,
+    canRate: true,
     rating: undefined,
     copyText: "The answer.",
     onCopy: () => {},
