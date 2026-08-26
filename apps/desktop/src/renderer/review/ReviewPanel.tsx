@@ -58,6 +58,7 @@ export function ReviewPanel({
   canUseWorktreeScope,
   canOpenIde,
   canUndoFile,
+  undoUnavailableReason,
   selectedIdeLabel,
   onClose,
   onUndoFile,
@@ -78,6 +79,8 @@ export function ReviewPanel({
   canUseWorktreeScope: boolean;
   canOpenIde: boolean;
   canUndoFile: boolean;
+  /** Why undo is off, said in the button's tooltip instead of leaving it grey and mute. */
+  undoUnavailableReason: string;
   selectedIdeLabel: string;
   onClose(): void;
   onUndoFile(path: string): void;
@@ -433,7 +436,7 @@ export function ReviewPanel({
                     than as inapplicable. */}
                 {!selectedFileIsDocument && splitFits && selectedFile.status !== "added" ? <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={effectiveViewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} title="Side by side"><Columns2 size={14} /><span>Side by side</span></button><button type="button" className={effectiveViewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} title="Unified"><Rows3 size={14} /><span>Unified</span></button></span> : null}
                 {!selectedFileIsDocument ? <button className={`reviewIconButton ${wrap ? "isActive" : ""}`} type="button" onClick={toggleWrap} title={wrap ? "Disable line wrapping" : "Wrap long lines"}><WrapText size={15} /></button> : null}
-                <button className="reviewIconButton" type="button" onClick={() => onUndoFile(selectedFile.path)} disabled={!canUndoFile} title={`Undo changes to ${splitReviewPath(selectedFile.path).name}`} aria-label={`Undo changes to ${selectedFile.path}`}><Undo2 size={15} /></button>
+                <button className="reviewIconButton" type="button" onClick={() => onUndoFile(selectedFile.path)} disabled={!canUndoFile} title={canUndoFile ? `Undo changes to ${splitReviewPath(selectedFile.path).name}` : undoUnavailableReason} aria-label={`Undo changes to ${selectedFile.path}`}><Undo2 size={15} /></button>
                 <button className="reviewIconButton" type="button" onClick={() => onOpenFile(selectedFile.path)} disabled={!canOpenIde || selectedFile.status === "deleted"} title={`Open in ${selectedIdeLabel}`}><ExternalLink size={15} /></button>
               </div>
             </header>

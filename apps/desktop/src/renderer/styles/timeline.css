@@ -240,6 +240,13 @@
   width: 100%;
   max-width: 980px;
   padding: 0 0 0 18px;
+  /* The negative margins below pull a passage up under the work above it. A
+     grid track cannot size below zero, so on a passage shorter than those
+     margins the track collapsed and the stretched item was handed the whole
+     36px back — a box half again as tall as its one line of text, with the
+     rail drawn down the side of the empty part. Sized to its own content, the
+     box ends where the words do. */
+  align-self: start;
   /* One rise on mount, never per token: the element persists across streaming
      re-renders, so the animation runs exactly once, when the message first
      appears — the answer's first token, whether or not work came before it. */
@@ -258,9 +265,30 @@
   width: 1px;
   border-radius: 999px;
   content: "";
-  background: linear-gradient(180deg, transparent, var(--accent), rgba(178, 186, 197, 0.54), transparent);
+  /* The bright stop sits a third of the way down a long answer, where the
+     rail lights up as the prose begins. On a one-line message a third of the
+     way down is above the text's own middle, and the rail read as hung too
+     high beside it — so the stop is also held at the halfway mark, which only
+     binds once the rail is short enough for the two to cross (around three
+     lines). Longer answers keep the third they always had. */
+  background: linear-gradient(
+    180deg,
+    transparent,
+    var(--accent) min(50%, calc(33% + 5px)),
+    rgba(178, 186, 197, 0.54) 66%,
+    transparent
+  );
   opacity: 0.8;
   transform-origin: 50% 0;
+}
+
+/* The copy and rating buttons are chrome, not prose, and the rail marks the
+   prose. Running it past them gave a one-line answer a rail two and a half
+   times the length of the line it belongs to, with its bright point down among
+   the buttons. 38px is that row — a 26px icon button under its 10px lead-in —
+   plus the 2px the rail is already inset by. */
+.timelineMessage.assistantMessage:has(> .responseFeedbackControls)::before {
+  bottom: 38px;
 }
 
 /* Every prose passage renders alike — demoting the ones between rounds of

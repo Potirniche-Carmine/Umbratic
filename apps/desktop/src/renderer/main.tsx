@@ -298,6 +298,11 @@ const reviewDefaultWidth = 440;
 const reviewOpenWidthRatio = 0.65;
 const reviewMaxWidthRatio = 0.95;
 const sidebarMaxRatio = 0.28;
+/// Every control that opens the review panel. A pointerdown on one of these is
+/// not a click away from the panel: the button's own click lands after the
+/// pointerdown, so closing here would only make it reopen what had just
+/// started sliding out.
+const reviewOpeningControls = ".composerReviewToggle, .reviewSummaryCard, .documentResponseLink, .reviewReferenceToken";
 
 function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const initialHarnessProfile = isHarnessProfileId(startupSettings.harnessProfile) ? startupSettings.harnessProfile : defaultHarnessProfileId;
@@ -650,8 +655,21 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const canQueue = hasComposerMessage && isGenerating && !busy && !steerPending && !closedChatNotice;
   // Per file, never per turn: undo puts one reviewed file back, and taking
   // back more than that is a thing to ask the model for.
+  //
+  // A finished turn still has the checkpoint it was taken from, and a turn
+  // that was stopped part-way — which also lands on "completed" — is the one
+  // people most want back, so both undo as readily as a review that is
+  // waiting. What is genuinely out of reach is work that has already left the
+  // task: approved, merged, or rejected.
   const canUndoFile =
-    !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
+    !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && !busy;
+  // A grey button with no reason reads as broken. Every state that turns undo
+  // off says which one it is in, in the button's own tooltip.
+  const undoUnavailableReason = !task
+    ? "Undo restores a file to how a turn found it, and this review is of the folder rather than of a turn."
+    : busy
+      ? "Another action is still finishing."
+      : `This turn's work has already been ${task.state === "merged" ? "merged" : task.state === "rejected" ? "rejected" : "approved"}.`;
   const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
   const approvalPending = task?.state === "awaiting_worktree_approval" || !!pendingPermission;
   const reviewEmptyLabel = !task
@@ -2960,6 +2978,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     openReviewPanel();
   }
 
+  // The panel is a look at the diff beside the conversation, not a mode to be
+  // dismissed by hand: going back to the composer puts it away, the same as
+  // every menu above. Held in a ref because closing reads the current width —
+  // a listener captured at open time would animate to a width the user has
+  // since dragged away from, and leave a sliver of panel on screen.
+  const closeReviewPanelRef = useRef(closeReviewPanel);
+  closeReviewPanelRef.current = closeReviewPanel;
+  useEffect(() => {
+    if (!reviewOpen || reviewClosing) return undefined;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target || target.closest(`.reviewSidebar, ${reviewOpeningControls}`)) return;
+      closeReviewPanelRef.current();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [reviewOpen, reviewClosing]);
+
   async function openReviewFile(filePath: string) {
     if (!canOpenIde || !task) return;
     setError(null);
@@ -4607,6 +4643,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           canUseWorktreeScope={repository?.kind === "git" || task?.workspaceKind === "git"}
           canOpenIde={canOpenIde}
           canUndoFile={canUndoFile}
+          undoUnavailableReason={undoUnavailableReason}
           selectedIdeLabel={selectedIde.label}
           onClose={closeReviewPanel}
           onUndoFile={(filePath) => void undoReviewFile(filePath)}
