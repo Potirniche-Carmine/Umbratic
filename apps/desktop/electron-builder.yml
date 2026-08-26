@@ -67,9 +67,13 @@ dmg:
     width: 540
     height: 380
   iconSize: 100
+  # Finder paints labels black over any background picture, invisible on this
+  # surface, so the background carries white wordmarks instead and the real
+  # labels are kept at the smallest size Finder allows.
+  iconTextSize: 10
   contents:
-    - { x: 140, y: 220, type: file }
-    - { x: 400, y: 220, type: link, path: /Applications }
+    - { x: 140, y: 190, type: file }
+    - { x: 400, y: 190, type: link, path: /Applications }
     # The two support files Finder shows to anyone browsing with hidden files
     # on, parked outside the 540pt window so the layout stays clean either
     # way. dmgbuild places them itself but offers no way to position them, so

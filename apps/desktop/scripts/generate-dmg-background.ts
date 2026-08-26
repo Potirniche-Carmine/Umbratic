@@ -4,26 +4,36 @@ import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const maskPath = path.join(desktopRoot, "assets/brand/Umbratic/umbratic-icon-no-padding-transparent.png");
 const outPath = path.join(desktopRoot, "assets/dmg/background.tiff");
+// White wordmarks baked under each drop point. Finder paints its own labels
+// black whenever a window has a background picture — there is no color in the
+// view options — so on this surface they vanish, and these stand in for them.
+// Rendered once from the system font by AppKit (56px = 14pt at master scale);
+// regenerate with: swift script over NSAttributedString, white on transparent.
+const labelPaths = {
+  app: path.join(desktopRoot, "assets/dmg/label-umbratic.png"),
+  applications: path.join(desktopRoot, "assets/dmg/label-applications.png"),
+};
 
 // Same surface as the app icon tile and the NSIS wizard: the drag-to-install
-// window should read as the app it installs, not as Finder's stock gray.
+// window should read as the app it installs, not as Finder's stock gray. No
+// brand mark beyond that — a large logo on the background reads as a third
+// item to drag. The app icon is the mark, and the spotlight behind its drop
+// point says which item moves.
 const background = { r: 11, g: 13, b: 16 };
 const steel = { r: 236, g: 239, b: 243 };
-// A faint steel-tinted lift behind the mark, so the shield sits in a glow
-// rather than floating on flat black.
-const glowColor = { r: 30, g: 34, b: 41 };
+const spotColor = { r: 32, g: 36, b: 43 };
 
 // Logical geometry, in the window's point coordinates. The window size and the
 // icon drop points must agree with the dmg section of electron-builder.yml:
-// the arrow below is drawn between the two icons Finder will pin there.
+// the spotlight and arrow below are drawn around the icons Finder pins there.
 const window = { width: 540, height: 380 };
-const iconY = 220;
+const iconY = 190;
 const appIconX = 140;
 const applicationsX = 400;
-const shieldTop = 36;
-const shieldHeight = 84;
+// Below the icon (bottom edge at 240) and below the strip where Finder puts
+// its invisible label, so the two never overlap.
+const labelY = 264;
 // Rendered at 4x and box-reduced, so every edge lands anti-aliased without a
 // separate coverage pass; 2x and 1x are successive halvings of the same frame.
 const master = 4;
@@ -101,23 +111,6 @@ function decodePng(data: Buffer, label: string): RgbaImage {
   return { width, height, pixels };
 }
 
-function sampleAlpha(image: RgbaImage, x: number, y: number): number {
-  if (x < 0 || y < 0 || x >= image.width || y >= image.height) return 0;
-  return image.pixels[(y * image.width + x) * 4 + 3] ?? 0;
-}
-
-function sampleAlphaBilinear(image: RgbaImage, x: number, y: number): number {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const tx = x - x0;
-  const ty = y - y0;
-  const a00 = sampleAlpha(image, x0, y0);
-  const a10 = sampleAlpha(image, x0 + 1, y0);
-  const a01 = sampleAlpha(image, x0, y0 + 1);
-  const a11 = sampleAlpha(image, x0 + 1, y0 + 1);
-  return (a00 * (1 - tx) + a10 * tx) * (1 - ty) + (a01 * (1 - tx) + a11 * tx) * ty;
-}
-
 function capsuleDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const abx = bx - ax;
   const aby = by - ay;
@@ -148,31 +141,39 @@ function arrowCoverage(x: number, y: number): number {
   return Math.min(Math.max(halfThickness + 0.5 - distance, 0), 1);
 }
 
-function renderMaster(mask: RgbaImage): FloatImage {
+/**
+ * Alpha of the baked wordmarks at a master pixel. The label PNGs are already
+ * rendered at master scale, so this is a direct read, centered on the drop
+ * point's x with the label's vertical center on labelY.
+ */
+function labelCoverage(labels: { image: RgbaImage; centerX: number }[], x: number, y: number): number {
+  let coverage = 0;
+  for (const { image, centerX } of labels) {
+    const left = Math.round(centerX * master - image.width / 2);
+    const top = Math.round(labelY * master - image.height / 2);
+    if (x >= left && x < left + image.width && y >= top && y < top + image.height) {
+      coverage = Math.max(coverage, (image.pixels[((y - top) * image.width + (x - left)) * 4 + 3] ?? 0) / 255);
+    }
+  }
+  return coverage;
+}
+
+function renderMaster(labels: { image: RgbaImage; centerX: number }[]): FloatImage {
   const width = window.width * master;
   const height = window.height * master;
   const rgb = new Float32Array(width * height * 3);
-  const shieldTargetHeight = shieldHeight * master;
-  const shieldTargetWidth = (shieldTargetHeight * mask.width) / mask.height;
-  const shieldLeft = (width - shieldTargetWidth) / 2;
-  const shieldTopPx = shieldTop * master;
-  const glowCenterX = width / 2;
-  const glowCenterY = (shieldTop + shieldHeight / 2) * master;
-  const glowRadius = 150 * master;
+  const spotCenterX = appIconX * master;
+  const spotCenterY = iconY * master;
+  const spotRadius = 120 * master;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
-      const glow = 0.35 * Math.exp(-((x - glowCenterX) ** 2 + (y - glowCenterY) ** 2) / (glowRadius * glowRadius));
-      let r = background.r + (glowColor.r - background.r) * glow;
-      let g = background.g + (glowColor.g - background.g) * glow;
-      let b = background.b + (glowColor.b - background.b) * glow;
-      let shield = 0;
-      if (x >= shieldLeft && x < shieldLeft + shieldTargetWidth && y >= shieldTopPx && y < shieldTopPx + shieldTargetHeight) {
-        const u = ((x - shieldLeft + 0.5) * mask.width) / shieldTargetWidth - 0.5;
-        const v = ((y - shieldTopPx + 0.5) * mask.height) / shieldTargetHeight - 0.5;
-        shield = sampleAlphaBilinear(mask, u, v) / 255;
-      }
+      const spot = 0.6 * Math.exp(-((x - spotCenterX) ** 2 + (y - spotCenterY) ** 2) / (spotRadius * spotRadius));
+      let r = background.r + (spotColor.r - background.r) * spot;
+      let g = background.g + (spotColor.g - background.g) * spot;
+      let b = background.b + (spotColor.b - background.b) * spot;
       // The arrow stays a hint rather than a signpost: half-strength steel.
-      const ink = Math.min(shield + arrowCoverage(x, y) * 0.5, 1);
+      // The wordmarks are the labels, so they get full-strength steel.
+      const ink = Math.min(arrowCoverage(x, y) * 0.5 + labelCoverage(labels, x, y), 1);
       r += (steel.r - r) * ink;
       g += (steel.g - g) * ink;
       b += (steel.b - b) * ink;
@@ -204,8 +205,8 @@ function halve(image: FloatImage): FloatImage {
 }
 
 /**
- * Deterministic per-pixel noise in [-0.5, 0.5), so the glow quantizes without
- * banding and the file still builds byte-identical every run.
+ * Deterministic per-pixel noise in [-0.5, 0.5), so the spotlight quantizes
+ * without banding and the file still builds byte-identical every run.
  */
 function ditherNoise(x: number, y: number, channel: number): number {
   let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(channel, 2246822519)) >>> 0;
@@ -303,8 +304,11 @@ function writeTiff(pages: TiffPage[]): Buffer {
   return file;
 }
 
-const mask = readPng(maskPath);
-const retina = halve(renderMaster(mask));
+const labels = [
+  { image: readPng(labelPaths.app), centerX: appIconX },
+  { image: readPng(labelPaths.applications), centerX: applicationsX },
+];
+const retina = halve(renderMaster(labels));
 const base = halve(retina);
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(
