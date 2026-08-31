@@ -111,8 +111,60 @@ func containsPrefix(values []string, prefix string) bool {
 	return false
 }
 
+// The docker wrapper is argv too, so it is asserted exactly: loopback publish,
+// container-side rebind to 0.0.0.0, cache mount, and the model as --model.
+func TestDockerRunArgsAreExactAndLoopbackPublished(t *testing.T) {
+	t.Setenv("HF_TOKEN", "secret-token")
+	t.Setenv("VLLM_USE_V2_MODEL_RUNNER", "0")
+	// The other forwardable names must be absent for the argv to be exact;
+	// t.Setenv registers the restore, then the variable is removed outright.
+	for _, name := range []string{"HUGGING_FACE_HUB_TOKEN", "VLLM_WORKER_MULTIPROC_METHOD"} {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := dockerRunArgs("vllm/vllm-openai:v0.28.0", managedModel())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"run", "--rm",
+		"--name", "umbratic-model-qwen3-32b",
+		"--gpus", "all",
+		"--ipc", "host",
+		"-v", home + "/.cache/huggingface:/root/.cache/huggingface",
+		"-p", "127.0.0.1:8001:8001",
+		"--env", "HF_TOKEN",
+		"--env", "VLLM_USE_V2_MODEL_RUNNER",
+		"vllm/vllm-openai:v0.28.0",
+		"--model", "Qwen/Qwen3-32B",
+		"--host", "0.0.0.0",
+		"--port", "8001",
+		"--served-model-name", "qwen3-32b",
+		"--max-model-len", "32768",
+		"--gpu-memory-utilization", "0.45",
+		"--kv-cache-dtype", "fp8",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("docker argv is %#v, want %#v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("docker argv[%d] is %q, want %q", index, got[index], want[index])
+		}
+	}
+	for _, token := range got {
+		if strings.Contains(token, "secret-token") {
+			t.Fatal("the token value must be passed by name, never in argv")
+		}
+	}
+}
+
 func TestUnconfiguredSupervisorRefusesToStart(t *testing.T) {
-	models := NewModelSupervisor("")
+	models := NewModelSupervisor("", "")
 	if models.Configured() {
 		t.Fatal("no binary means not configured")
 	}
@@ -159,7 +211,7 @@ func freePort(t *testing.T) int {
 // starts and never serves must reach starting, and Stop must reap it.
 func TestStartAndStopLifecycleWithAStubBinary(t *testing.T) {
 	binary := writeStubRuntime(t)
-	models := NewModelSupervisor(binary)
+	models := NewModelSupervisor(binary, "")
 	model := managedModel()
 	model = withPort(model, freePort(t))
 
@@ -192,7 +244,7 @@ func TestStartAndStopLifecycleWithAStubBinary(t *testing.T) {
 
 func TestStopAllReapsEveryChild(t *testing.T) {
 	binary := writeStubRuntime(t)
-	models := NewModelSupervisor(binary)
+	models := NewModelSupervisor(binary, "")
 	first, second := managedModel(), managedModel()
 	first, second = withPort(first, freePort(t)), withPort(second, freePort(t))
 	second.ID = "small"
@@ -278,7 +330,7 @@ func writeTreeRuntime(t *testing.T) (string, string) {
 // sat out the full kill deadline while the GPU stayed occupied.
 func TestStoppingAModelReapsItsWholeProcessTree(t *testing.T) {
 	binary, marker := writeTreeRuntime(t)
-	models := NewModelSupervisor(binary)
+	models := NewModelSupervisor(binary, "")
 	model := managedModel()
 	model = withPort(model, freePort(t))
 

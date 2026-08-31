@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=7">
-  <link rel="stylesheet" href="/assets/style.css?v=12">
-  <link rel="stylesheet" href="/assets/controls.css?v=2">
-  <script defer src="/assets/console.js?v=13"></script>
+  <link rel="stylesheet" href="/assets/style.css?v=13">
+  <link rel="stylesheet" href="/assets/controls.css?v=3">
+  <script defer src="/assets/console.js?v=14"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -26,12 +26,6 @@
         <span>Connect at</span>
         <strong>{{.VeilURL}}</strong>
       </div>
-      {{if .Models.Registered}}
-      <div class="service-endpoint">
-        <span>Models</span>
-        <strong><a href="/models">{{.Models.Running}} running / {{.Models.Registered}} registered</a></strong>
-      </div>
-      {{end}}
       {{if not .Configured}}
         <p class="empty-copy">A model runtime is not configured.</p>
         <a class="button primary" href="/settings">Configure</a>

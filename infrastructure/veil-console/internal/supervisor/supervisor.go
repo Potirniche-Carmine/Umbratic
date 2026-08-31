@@ -228,16 +228,26 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 	s.status = Status{Running: true, PID: cmd.Process.Pid, Message: "Starting"}
 	s.stateMu.Unlock()
 	go s.wait(cmd)
+	// The gate for a successful start is the process accepting connections, not
+	// the model runtime answering: models are started and stopped while Veil
+	// stays up, and availability is live on /api/models. Requiring /api/health
+	// here meant Veil could never start before its default model was serving —
+	// including the automatic start after every Console boot.
 	healthCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if err := waitForHealth(healthCtx, s.veilAddress, healthToken); err != nil {
+	if err := waitForLive(healthCtx, s.veilAddress); err != nil {
 		_ = s.stopLocked(context.Background())
 		return errors.New("Veil health check failed")
 	}
+	healthy := healthProbe(healthCtx, s.veilAddress, healthToken)
 	s.stateMu.Lock()
 	if s.cmd == cmd {
-		s.status.Healthy = true
-		s.status.Message = "Healthy"
+		if healthy {
+			s.status.Healthy = true
+			s.status.Message = "Healthy"
+		} else {
+			s.status.Message = "Running — model runtime unavailable"
+		}
 	}
 	s.stateMu.Unlock()
 	return nil
@@ -417,14 +427,15 @@ func (s *Supervisor) Apply(ctx context.Context, candidate config.Veil, previous 
 	return errors.New("candidate failed; the known-good configuration was restored")
 }
 
-func waitForHealth(ctx context.Context, address, token string) error {
-	endpoint := "http://" + address + "/api/health"
+// waitForLive polls Veil's unauthenticated /livez until the process accepts
+// connections. It says nothing about the model runtime, which is deliberate.
+func waitForLive(ctx context.Context, address string) error {
+	endpoint := "http://" + address + "/livez"
 	client := &http.Client{Timeout: 2 * time.Second}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		req.Header.Set("Authorization", "Bearer "+token)
 		resp, err := client.Do(req)
 		if err == nil {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
@@ -439,6 +450,25 @@ func waitForHealth(ctx context.Context, address, token string) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+// healthProbe asks /api/health once: whether Veil can currently reach its
+// configured runtime. It colors the status line, never the start outcome.
+func healthProbe(ctx context.Context, address, token string) bool {
+	endpoint := "http://" + address + "/api/health"
+	client := &http.Client{Timeout: 2 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	_ = resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // FetchOpsMetrics returns administrator-safe Veil operational counters.
@@ -567,6 +597,11 @@ func (s Status) String() string {
 		return fmt.Sprintf("Healthy (PID %d)", s.PID)
 	}
 	if s.Running {
+		// A running process with an unavailable runtime says so, rather than
+		// claiming to still be starting.
+		if s.Message != "" && s.Message != "Starting" {
+			return fmt.Sprintf("%s (PID %d)", s.Message, s.PID)
+		}
 		return fmt.Sprintf("Starting (PID %d)", s.PID)
 	}
 	if s.Message != "" {

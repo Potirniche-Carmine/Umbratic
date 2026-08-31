@@ -7,10 +7,16 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// dockerImageReference accepts registry/repository:tag@digest shapes and
+// nothing else — no flags, no paths, no whitespace — because the value is
+// spliced into a docker run argument list.
+var dockerImageReference = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
 
 type Startup struct {
 	Listen     string
@@ -20,7 +26,12 @@ type Startup struct {
 	// VLLMBinary is the vLLM executable Console launches managed models with.
 	// Optional: without it the Models page renders read-only, because there is
 	// nothing to start.
-	VLLMBinary      string
+	VLLMBinary string
+	// VLLMDockerImage launches managed models as `docker run` of this vLLM
+	// OpenAI-server image instead of a host binary. The card command stays the
+	// single source of truth; Console wraps it with the GPU, cache-mount, and
+	// loopback port-publish flags. Mutually exclusive with VLLMBinary.
+	VLLMDockerImage string
 	VeilAddress     string
 	EntitlementPath string
 	TrustedOrigin   string
@@ -115,6 +126,15 @@ func ValidateStartup(cfg *Startup) error {
 	cfg.VeilBinary = filepath.Clean(binary)
 	if err := validateOptionalBinary(&cfg.VLLMBinary, "vLLM binary"); err != nil {
 		return err
+	}
+	cfg.VLLMDockerImage = strings.TrimSpace(cfg.VLLMDockerImage)
+	if cfg.VLLMDockerImage != "" {
+		if cfg.VLLMBinary != "" {
+			return errors.New("choose either --vllm-binary or --vllm-docker-image, not both")
+		}
+		if len(cfg.VLLMDockerImage) > 256 || !dockerImageReference.MatchString(cfg.VLLMDockerImage) {
+			return errors.New("vLLM Docker image must be a plain image reference such as vllm/vllm-openai:v0.28.0")
+		}
 	}
 	if cfg.EntitlementPath != "" {
 		entitlementPath, err := filepath.Abs(cfg.EntitlementPath)

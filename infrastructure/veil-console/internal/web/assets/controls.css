@@ -234,15 +234,22 @@
   to position itself, at the same top and the same left as every other one, so
   a page with two of them drew them over each other.
 */
+/*
+  Centered without a transform: translateX(-50%) was also what reduced-motion's
+  blanket transform reset used to strip, which shoved every toast half a page to
+  the right. Margins cannot be stripped. Above the topbar and every menu, so an
+  error is never read from under something else.
+*/
 .banner-stack {
   position: fixed;
   top: 82px;
-  left: 50%;
-  z-index: 40;
+  left: 0;
+  right: 0;
+  z-index: 60;
   display: grid;
   gap: 0.55rem;
-  width: min(calc(100% - 2rem), 900px);
-  transform: translateX(-50%);
+  width: min(calc(100% - 2rem), 640px);
+  margin-inline: auto;
   pointer-events: none;
 }
 

@@ -379,6 +379,25 @@
       "--kv-cache-dtype fp8",
     ].join("\n");
 
+    /*
+      Custom's command follows what is typed. The box is seeded with a template
+      whenever it still holds what this script last wrote — a hand-edited
+      command is never clobbered — and the served id field rewrites its own
+      --served-model-name flag in place as it changes, so the command and the
+      id cannot quietly disagree.
+    */
+    const customId = addModel.querySelector('[data-custom-fields] input[name="id"]');
+    const customTemplate = (id) => [
+      "serve your-org/your-model",
+      "--host 127.0.0.1",
+      `--port ${port}`,
+      `--served-model-name ${id || "model-id"}`,
+      "--max-model-len 32768",
+      "--gpu-memory-utilization 0.85",
+      "--kv-cache-dtype fp8",
+    ].join("\n");
+    let generated = "";
+
     const apply = () => {
       const entry = entryFor(keyInput?.value);
       const custom = !entry;
@@ -396,6 +415,10 @@
       if (commandDisclosure) commandDisclosure.open = custom;
       if (custom) {
         if (keyLabel) keyLabel.textContent = "Custom";
+        if (commandBox && (commandBox.value.trim() === "" || commandBox.value === generated)) {
+          commandBox.value = customTemplate(customId?.value.trim());
+          generated = commandBox.value;
+        }
         return;
       }
       if (keyLabel) keyLabel.textContent = entry.DisplayName;
@@ -423,8 +446,22 @@
       if (commandBox && chosenVariant && chosenContext) {
         const repo = entry.Variants.find((item) => item.Key === chosenVariant.value).Repo;
         commandBox.value = buildCommand(entry, repo, chosenContext.value);
+        generated = commandBox.value;
       }
     };
+
+    customId?.addEventListener("input", () => {
+      if (!commandBox || entryFor(keyInput?.value)) return;
+      const id = customId.value.trim() || "model-id";
+      const flag = /(--served-model-name[ \t]+)\S*/;
+      const wasGenerated = commandBox.value === generated;
+      if (flag.test(commandBox.value)) {
+        commandBox.value = commandBox.value.replace(flag, (match, lead) => lead + id);
+      } else {
+        commandBox.value = `${commandBox.value.trimEnd()}\n--served-model-name ${id}`;
+      }
+      if (wasGenerated) generated = commandBox.value;
+    });
 
     keyInput?.addEventListener("change", apply);
     apply();

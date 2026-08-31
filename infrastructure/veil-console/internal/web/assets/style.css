@@ -955,13 +955,20 @@ pre {
   }
 }
 
+/*
+  Reduced motion means no movement, not no geometry: the chevrons and the
+  checkbox tick are drawn from rotated borders, so a blanket transform: none
+  flattened them into bare corners. Only the animation of transforms goes.
+*/
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     scroll-behavior: auto !important;
     transition-duration: 120ms !important;
-    transform: none !important;
+    transition-property: color, background-color, border-color, opacity, box-shadow !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 

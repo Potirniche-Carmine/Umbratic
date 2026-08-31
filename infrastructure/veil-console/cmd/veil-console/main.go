@@ -30,6 +30,7 @@ func main() {
 	flag.StringVar(&startup.StateDir, "state-dir", "/var/lib/veil-console", "Console state directory")
 	flag.StringVar(&startup.VeilBinary, "veil-binary", "./veil", "fixed Veil executable path")
 	flag.StringVar(&startup.VLLMBinary, "vllm-binary", "", "vLLM executable used to launch managed models")
+	flag.StringVar(&startup.VLLMDockerImage, "vllm-docker-image", "", "vLLM OpenAI-server Docker image used to launch managed models, e.g. vllm/vllm-openai:v0.28.0")
 	flag.StringVar(&startup.VeilAddress, "veil-address", "127.0.0.1:8080", "fixed loopback Veil address")
 	flag.StringVar(&startup.EntitlementPath, "entitlement", "", "signed customer entitlement path")
 	flag.StringVar(&startup.TrustedOrigin, "trusted-origin", "", "exact HTTPS reverse-proxy origin")

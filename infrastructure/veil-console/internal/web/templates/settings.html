@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=9">
-  <link rel="stylesheet" href="/assets/style.css?v=13">
-  <link rel="stylesheet" href="/assets/controls.css?v=3">
+  <link rel="stylesheet" href="/assets/style.css?v=14">
+  <link rel="stylesheet" href="/assets/controls.css?v=4">
   <link rel="stylesheet" href="/assets/settings.css?v=12">
-  <script defer src="/assets/console.js?v=14"></script>
+  <script defer src="/assets/console.js?v=15"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -36,18 +36,20 @@
       <section class="panel">
         <div class="section-heading">
           <h2>Serving</h2>
-          {{if .Models.Registered}}<span><a href="/models">{{.Models.Registered}} registered</a></span>{{end}}
         </div>
 
         {{if .DefaultModelName}}
         <div class="default-model">
           <span>Default model</span>
           <strong>{{.DefaultModelName}}</strong>
-          {{if .ContextLabel}}<em>{{.ContextLabel}} context</em>{{end}}
           <a class="text-button" href="/models">Change on Models</a>
         </div>
         {{else}}
+        {{if .Models.Registered}}
+        <p class="inline-note">No default model is chosen yet. Use <strong>Make default</strong> on one of the <a href="/models">registered models</a>.</p>
+        {{else}}
         <p class="inline-note">No model is registered yet. <a href="/models">Add one</a>, then make it the default from its card.</p>
+        {{end}}
         {{end}}
 
         <div class="field-grid">

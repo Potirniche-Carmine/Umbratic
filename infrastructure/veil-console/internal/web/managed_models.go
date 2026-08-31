@@ -386,9 +386,16 @@ func (s *Server) modelsDefault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, ok, err := s.store.Configuration(r.Context(), "current")
-	if err != nil || !ok {
-		s.modelActionResult(w, r, errors.New("Veil is not configured yet"), "model.default")
+	if err != nil {
+		s.modelActionResult(w, r, errors.New("the active configuration could not be read"), "model.default")
 		return
+	}
+	if !ok {
+		// The first default on a fresh deployment. Settings can no longer name a
+		// model, so refusing here left no way to ever configure Veil: the
+		// baseline is the same defaults Settings starts from, and choosing the
+		// default is what creates the first configuration.
+		cfg = config.DefaultVeil()
 	}
 	cfg.Model = chosen.ID
 	cfg.ProviderBaseURL = fmt.Sprintf("http://127.0.0.1:%d/v1", facts.Port)

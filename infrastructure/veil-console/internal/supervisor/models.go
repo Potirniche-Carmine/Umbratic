@@ -75,7 +75,11 @@ const modelStopDeadline = 10 * time.Second
 // registry is configuration rather than liveness.
 type ModelSupervisor struct {
 	binary string
-	mu     sync.Mutex
+	// dockerImage switches launches to `docker run` of this vLLM OpenAI-server
+	// image. The card command is still the single source of truth: Console
+	// derives the container flags from it rather than storing them twice.
+	dockerImage string
+	mu          sync.Mutex
 	// perModel serializes start and stop for one id, so two clicks cannot race
 	// into two processes on one port.
 	perModel  map[string]*sync.Mutex
@@ -86,19 +90,22 @@ type ModelSupervisor struct {
 	crashes map[string][]time.Time
 }
 
-func NewModelSupervisor(binary string) *ModelSupervisor {
+func NewModelSupervisor(binary, dockerImage string) *ModelSupervisor {
 	return &ModelSupervisor{
-		binary:    binary,
-		perModel:  map[string]*sync.Mutex{},
-		processes: map[string]*managedProcess{},
-		crashes:   map[string][]time.Time{},
+		binary:      binary,
+		dockerImage: dockerImage,
+		perModel:    map[string]*sync.Mutex{},
+		processes:   map[string]*managedProcess{},
+		crashes:     map[string][]time.Time{},
 	}
 }
 
-// Configured reports whether Console was started with a vLLM binary. Without
-// one the Models page renders read-only rather than offering buttons that
-// cannot work.
-func (m *ModelSupervisor) Configured() bool { return m != nil && m.binary != "" }
+// Configured reports whether Console was started with a way to launch models —
+// a vLLM binary or a vLLM Docker image. Without either the Models page renders
+// read-only rather than offering buttons that cannot work.
+func (m *ModelSupervisor) Configured() bool {
+	return m != nil && (m.binary != "" || m.dockerImage != "")
+}
 
 // vllmArgs is the entire argument surface. The command is parsed and validated
 // into a token list here and executed directly — no shell is involved, so no
@@ -112,6 +119,82 @@ func vllmArgs(model config.ManagedModel) ([]string, error) {
 	return facts.Args, nil
 }
 
+// containerName is the deterministic docker name for one model, so a stale
+// container from a hard kill can be removed before the next start claims the
+// port. Served ids are already limited to [A-Za-z0-9._-], which docker accepts.
+func containerName(id string) string { return "umbratic-model-" + id }
+
+// dockerRunArgs wraps the card's own argument list into a docker run of the
+// vLLM OpenAI-server image. The transformation is small and mechanical:
+//
+//   - the container binds 0.0.0.0 so the published port can reach it, and the
+//     publish flag pins the host side to 127.0.0.1, so exposure is loopback
+//     exactly as it is with a host binary;
+//   - the positional model after `serve` becomes --model, which is what the
+//     image's entrypoint takes;
+//   - the Hugging Face cache is mounted so weights survive the container;
+//   - tokens are passed by name (--env HF_TOKEN), so the docker client reads
+//     the value from its own environment and no secret lands in argv.
+func dockerRunArgs(image string, model config.ManagedModel) ([]string, error) {
+	facts, err := model.Parse()
+	if err != nil {
+		return nil, err
+	}
+	// facts.Args is ["serve", "<model>", flags...]; Parse guarantees the shape.
+	flags := append([]string(nil), facts.Args[2:]...)
+	hostRewritten := false
+	for index := 0; index < len(flags); index++ {
+		if flags[index] == "--host" && index+1 < len(flags) {
+			flags[index+1] = "0.0.0.0"
+			hostRewritten = true
+		}
+		if strings.HasPrefix(flags[index], "--host=") {
+			flags[index] = "--host=0.0.0.0"
+			hostRewritten = true
+		}
+	}
+	if !hostRewritten {
+		flags = append(flags, "--host", "0.0.0.0")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, errors.New("the home directory for the Hugging Face cache could not be resolved")
+	}
+	args := []string{
+		"run", "--rm",
+		"--name", containerName(model.ID),
+		"--gpus", "all",
+		"--ipc", "host",
+		"-v", home + "/.cache/huggingface:/root/.cache/huggingface",
+		"-p", fmt.Sprintf("127.0.0.1:%d:%d", facts.Port, facts.Port),
+	}
+	// Passed by name, so the docker client reads each value from its own
+	// environment and no secret or setting lands in argv. The vLLM knobs let a
+	// deployment adapt the runtime to its host — WSL, for one, has no UVA and
+	// needs VLLM_USE_V2_MODEL_RUNNER=0 — without baking that host's quirk in.
+	for _, name := range []string{
+		"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN",
+		"VLLM_USE_V2_MODEL_RUNNER", "VLLM_WORKER_MULTIPROC_METHOD",
+	} {
+		if _, ok := os.LookupEnv(name); ok {
+			args = append(args, "--env", name)
+		}
+	}
+	args = append(args, image, "--model", facts.ModelPath)
+	return append(args, flags...), nil
+}
+
+// removeStaleContainer clears a container a hard-killed docker client left
+// behind. Best effort: when there is nothing to remove, docker says so and the
+// next start proceeds.
+func removeStaleContainer(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "rm", "--force", containerName(id))
+	cmd.Env = childEnvironment()
+	_ = cmd.Run()
+}
+
 // childEnvironment is an allowlist, never the parent environment. A GPU runtime
 // needs its CUDA and Hugging Face variables and nothing else; inheriting
 // wholesale would hand a child every secret Console was started with.
@@ -119,7 +202,7 @@ var childEnvironmentAllowlist = []string{
 	"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER",
 	"CUDA_HOME", "CUDA_VISIBLE_DEVICES", "LD_LIBRARY_PATH", "NVIDIA_VISIBLE_DEVICES",
 	"HF_HOME", "HF_HUB_CACHE", "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "TRANSFORMERS_CACHE",
-	"VLLM_CACHE_ROOT", "VLLM_WORKER_MULTIPROC_METHOD", "TORCH_HOME",
+	"VLLM_CACHE_ROOT", "VLLM_WORKER_MULTIPROC_METHOD", "VLLM_USE_V2_MODEL_RUNNER", "TORCH_HOME",
 }
 
 func childEnvironment() []string {
@@ -148,7 +231,7 @@ func (m *ModelSupervisor) lockFor(id string) *sync.Mutex {
 // the page back now.
 func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 	if !m.Configured() {
-		return errors.New("no vLLM binary is configured")
+		return errors.New("no vLLM binary or Docker image is configured")
 	}
 	if err := model.Validate(); err != nil {
 		return err
@@ -166,12 +249,23 @@ func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 	}
 	m.mu.Unlock()
 
-	args, err := vllmArgs(model)
-	if err != nil {
-		return err
+	var cmd *exec.Cmd
+	if m.dockerImage != "" {
+		args, err := dockerRunArgs(m.dockerImage, model)
+		if err != nil {
+			return err
+		}
+		// A previous hard kill can leave a named container holding the port.
+		removeStaleContainer(model.ID)
+		cmd = exec.Command("docker", args...)
+	} else {
+		args, err := vllmArgs(model)
+		if err != nil {
+			return err
+		}
+		cmd = exec.Command(m.binary, args...)
 	}
 	logs := newSafeBuffer(modelLogLimit)
-	cmd := exec.Command(m.binary, args...)
 	configureModelProcess(cmd)
 	cmd.Env = childEnvironment()
 	cmd.Stdout, cmd.Stderr = logs, logs
@@ -379,6 +473,11 @@ func (m *ModelSupervisor) stopNow(id string) error {
 	select {
 	case <-process.exited:
 	case <-time.After(5 * time.Second):
+	}
+	// Killing the docker client leaves the container itself running; the
+	// daemon has to be told, or the GPU and the port stay claimed.
+	if m.dockerImage != "" {
+		removeStaleContainer(id)
 	}
 	return nil
 }

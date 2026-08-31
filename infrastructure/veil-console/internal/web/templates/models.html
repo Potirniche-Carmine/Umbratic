@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
-  <link rel="stylesheet" href="/assets/style.css?v=13">
-  <link rel="stylesheet" href="/assets/controls.css?v=3">
+  <link rel="stylesheet" href="/assets/style.css?v=14">
+  <link rel="stylesheet" href="/assets/controls.css?v=4">
   <link rel="stylesheet" href="/assets/models.css?v=8">
-  <script defer src="/assets/console.js?v=14"></script>
+  <script defer src="/assets/console.js?v=15"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -140,7 +140,7 @@
         <button class="button primary" type="submit">Add model</button>
       </form>
       {{end}}
-      {{if not .Models.Configured}}<p class="panel-footnote">Console was started without <code>--vllm-binary</code>. Models can be registered and will reach Veil, but none can be started from here.</p>{{end}}
+      {{if and (not .Models.Configured) (not .Models.IsDictation)}}<p class="panel-footnote">Console was started without <code>--vllm-binary</code> or <code>--vllm-docker-image</code>. Models can be registered and will reach Veil, but none can be started from here.</p>{{end}}
       <script type="application/json" data-model-catalog>{{.Models.CatalogJSON}}</script>
     </section>
 
@@ -197,7 +197,7 @@
           <button class="button" type="submit" formaction="/models/{{.ID}}/restart">Restart</button>
           <button class="button danger" type="submit" formaction="/models/{{.ID}}/stop">Stop</button>
           {{else}}
-          <button class="button" type="submit" formaction="/models/{{.ID}}/start" {{if not $.Models.Configured}}disabled title="Console was started without --vllm-binary"{{end}}>Start</button>
+          <button class="button" type="submit" formaction="/models/{{.ID}}/start" {{if not $.Models.Configured}}disabled title="Console was started without --vllm-binary or --vllm-docker-image"{{end}}>Start</button>
           <button class="button danger" type="submit" formaction="/models/{{.ID}}/delete">Remove</button>
           {{end}}
         </div>

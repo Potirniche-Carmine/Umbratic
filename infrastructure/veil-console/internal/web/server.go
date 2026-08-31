@@ -117,7 +117,7 @@ func New(startup config.Startup, store *state.Store, secrets state.Secrets, proc
 	}))
 	return &Server{
 		startup: startup, store: store, secrets: secrets, supervisor: process, corpus: corpus,
-		models:    supervisor.NewModelSupervisor(startup.VLLMBinary),
+		models:    supervisor.NewModelSupervisor(startup.VLLMBinary, startup.VLLMDockerImage),
 		access:    access.NewClient(startup.VeilAddress, secrets.ControlToken),
 		templates: templates, throttle: newLoginThrottle(), crossOrigin: crossOrigin,
 	}, nil
