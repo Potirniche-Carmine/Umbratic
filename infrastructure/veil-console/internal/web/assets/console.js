@@ -39,7 +39,10 @@
     const activityChannel = "BroadcastChannel" in window
       ? new BroadcastChannel("veil-console-session")
       : null;
-    const signOut = () => logoutForm.requestSubmit();
+    const signOut = () => {
+      if (document.querySelector('[data-model-import][aria-busy="true"]')) { resetIdleTimer(); return; }
+      logoutForm.requestSubmit();
+    };
     const resetIdleTimer = () => {
       window.clearTimeout(idleTimer);
       idleTimer = window.setTimeout(signOut, idleTimeout);
@@ -160,23 +163,6 @@
   }
 
   /*
-    Errors clear themselves after five seconds. Nothing else reaches the banner
-    stack any more, so this is only ever an error being retired — a click
-    retires it sooner.
-  */
-  for (const banner of document.querySelectorAll("[data-dismiss-after]")) {
-    const dismiss = () => {
-      banner.classList.add("is-dismissed");
-      banner.addEventListener("transitionend", () => banner.remove(), { once: true });
-    };
-    const timer = window.setTimeout(dismiss, Number(banner.dataset.dismissAfter) || 5000);
-    banner.addEventListener("click", () => {
-      window.clearTimeout(timer);
-      dismiss();
-    });
-  }
-
-  /*
     The segmented control. It writes into a hidden input rather than being one,
     because "on" and "off" as two buttons is the readable version of a checkbox
     and a form still needs a value to post.
@@ -272,199 +258,91 @@
     render();
   }
 
-  /*
-    The add-model form, driven by the catalog rendered into the page.
-
-    Choosing a model fills the precision menu, the served id and the command.
-    None of it is trusted: the server rebuilds the command from the same
-    reviewed row before anything is executed. This is here so the box shows what
-    is about to be registered rather than making someone imagine it.
-  */
-  const addModel = document.querySelector("[data-add-model]");
-  const catalogSource = document.querySelector("[data-model-catalog]");
-  if (addModel && catalogSource) {
-    const catalog = JSON.parse(catalogSource.textContent);
-    const port = Number(addModel.querySelector('[name="port"]')?.value) || 8001;
-    const keyInput = addModel.querySelector("[data-catalog-choice] [data-choice-input]");
-    const keyLabel = addModel.querySelector("[data-catalog-choice] [data-choice-label]");
-    const servedField = addModel.querySelector("[data-served-field]");
-    const servedReadout = addModel.querySelector("[data-served-readout]");
-    const customFields = addModel.querySelector("[data-custom-fields]");
-    const commandBox = addModel.querySelector("[data-command-box]");
-    const commandDisclosure = addModel.querySelector("[data-command-disclosure]");
-
-    // The precision and context menus are built from the chosen model, so they
-    // are empty in the markup and the generic [data-choice] wiring skips them.
-    // Each one owns its trigger, its rows and its outside-click here.
-    const menu = (selector, render) => {
-      const root = addModel.querySelector(selector);
-      if (!root) return null;
-      const input = root.querySelector("[data-choice-input]");
-      const label = root.querySelector("[data-choice-label]");
-      const list = root.querySelector("[data-choice-menu]");
-      const trigger = root.querySelector("[data-choice-trigger]");
-      const close = () => {
-        list.hidden = true;
-        trigger.setAttribute("aria-expanded", "false");
-      };
-      trigger.addEventListener("click", () => {
-        const opening = list.hidden;
-        list.hidden = !opening;
-        trigger.setAttribute("aria-expanded", String(opening));
-      });
-      document.addEventListener("pointerdown", (event) => {
-        if (!root.contains(event.target)) close();
-      });
-      return { root, input, label, list, trigger, close, render };
-    };
-
-    const variant = menu("[data-variant-choice]");
-    const context = menu("[data-context-choice]");
-    const variantField = addModel.querySelector("[data-variant-field]");
-    const contextField = addModel.querySelector("[data-context-field]");
-
-    // A menu with one option is not a choice. It is hidden rather than
-    // rendered as a control that cannot change anything.
-    const fill = (control, options, selected, onPick, field) => {
-      if (!control) return null;
-      if (field) field.hidden = options.length < 2;
-      const chosen = options.find((item) => String(item.value) === String(selected)) || options[0];
-      control.list.replaceChildren();
-      for (const option of options) {
-        const row = document.createElement("button");
-        row.type = "button";
-        row.setAttribute("role", "option");
-        row.dataset.choiceValue = String(option.value);
-        row.setAttribute("aria-selected", String(option.value === chosen.value));
-        const head = document.createElement("span");
-        head.className = "option-row";
-        const title = document.createElement("span");
-        title.className = "option-title";
-        title.textContent = option.label;
-        head.append(title);
-        if (option.aside) {
-          const aside = document.createElement("span");
-          aside.className = "option-size";
-          aside.textContent = option.aside;
-          head.append(aside);
-        }
-        row.append(head);
-        if (option.detail) {
-          const detail = document.createElement("span");
-          detail.className = "option-detail";
-          detail.textContent = option.detail;
-          row.append(detail);
-        }
-        row.addEventListener("click", () => {
-          control.input.value = String(option.value);
-          control.close();
-          onPick();
-        });
-        control.list.append(row);
-      }
-      control.input.value = String(chosen.value);
-      control.label.textContent = chosen.label;
-      return chosen;
-    };
-
-    const entryFor = (key) => catalog.find((model) => model.Key === key) || null;
-
-    const buildCommand = (entry, repo, tokens) => [
-      `serve ${repo}`,
-      "--host 127.0.0.1",
-      `--port ${port}`,
-      `--served-model-name ${entry.ServedID}`,
-      `--max-model-len ${tokens}`,
-      `--gpu-memory-utilization ${entry.GPUMemoryUtilization}`,
-      "--kv-cache-dtype fp8",
-    ].join("\n");
-
-    /*
-      Custom's command follows what is typed. The box is seeded with a template
-      whenever it still holds what this script last wrote — a hand-edited
-      command is never clobbered — and the served id field rewrites its own
-      --served-model-name flag in place as it changes, so the command and the
-      id cannot quietly disagree.
-    */
-    const customId = addModel.querySelector('[data-custom-fields] input[name="id"]');
-    const customTemplate = (id) => [
-      "serve your-org/your-model",
-      "--host 127.0.0.1",
-      `--port ${port}`,
-      `--served-model-name ${id || "model-id"}`,
-      "--max-model-len 32768",
-      "--gpu-memory-utilization 0.85",
-      "--kv-cache-dtype fp8",
-    ].join("\n");
-    let generated = "";
-
-    const apply = () => {
-      const entry = entryFor(keyInput?.value);
-      const custom = !entry;
-      if (customFields) customFields.hidden = !custom;
-      if (custom) {
-        if (variantField) variantField.hidden = true;
-        if (contextField) contextField.hidden = true;
-      }
-      if (servedField) servedField.hidden = custom;
-      // A hidden required field blocks submission with a validation message
-      // nobody can see, so Custom's fields are only required while shown.
-      for (const field of addModel.querySelectorAll("[data-custom-required]")) {
-        field.toggleAttribute("required", custom);
-      }
-      if (commandDisclosure) commandDisclosure.open = custom;
-      if (custom) {
-        if (keyLabel) keyLabel.textContent = "Custom";
-        if (commandBox && (commandBox.value.trim() === "" || commandBox.value === generated)) {
-          commandBox.value = customTemplate(customId?.value.trim());
-          generated = commandBox.value;
-        }
-        return;
-      }
-      if (keyLabel) keyLabel.textContent = entry.DisplayName;
-
-      const chosenVariant = fill(
-        variant,
-        entry.Variants.map((item) => ({
-          value: item.Key,
-          label: item.Label,
-          aside: `${item.VRAMGiB} GB`,
-          detail: item.Repo,
-        })),
-        variant?.input.value,
-        apply,
-        variantField,
-      );
-      const chosenContext = fill(
-        context,
-        entry.Contexts.map((item) => ({ value: item.Tokens, label: `${item.Label} tokens` })),
-        context?.input.value,
-        apply,
-        contextField,
-      );
-      if (servedReadout) servedReadout.textContent = entry.ServedID;
-      if (commandBox && chosenVariant && chosenContext) {
-        const repo = entry.Variants.find((item) => item.Key === chosenVariant.value).Repo;
-        commandBox.value = buildCommand(entry, repo, chosenContext.value);
-        generated = commandBox.value;
-      }
-    };
-
-    customId?.addEventListener("input", () => {
-      if (!commandBox || entryFor(keyInput?.value)) return;
-      const id = customId.value.trim() || "model-id";
-      const flag = /(--served-model-name[ \t]+)\S*/;
-      const wasGenerated = commandBox.value === generated;
-      if (flag.test(commandBox.value)) {
-        commandBox.value = commandBox.value.replace(flag, (match, lead) => lead + id);
-      } else {
-        commandBox.value = `${commandBox.value.trimEnd()}\n--served-model-name ${id}`;
-      }
-      if (wasGenerated) generated = commandBox.value;
+  const directory = document.querySelector("[data-model-directory]");
+  const copyDirectory = document.querySelector("[data-copy-model-directory]");
+  copyDirectory?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(directory.textContent.trim());
+      copyDirectory.textContent = "Copied";
+    } catch { copyDirectory.textContent = "Select and copy the path"; }
+  });
+  const localModel = document.querySelector("[data-local-model]");
+  if (localModel) {
+    const folder = localModel.elements.folder;
+    const name = localModel.elements.display_name;
+    const id = localModel.elements.id;
+    folder.addEventListener("change", () => {
+      name.value = folder.value;
+      id.value = folder.value.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 128) || "model";
     });
-
-    keyInput?.addEventListener("change", apply);
-    apply();
   }
-
+  const importer = document.querySelector("[data-model-import]");
+  if (importer) {
+    const input = importer.querySelector("[data-model-files]");
+    const browse = importer.querySelector("[data-model-browse]");
+    const cancel = importer.querySelector("[data-model-cancel]");
+    const progress = importer.querySelector("[data-model-progress]");
+    const status = importer.querySelector("[data-model-import-status]");
+    let request = null;
+    const upload = (files) => {
+      if (request || !files.length) return;
+      if (files.length > 10000 || files.reduce((n, item) => n + item.file.size, 0) >= 256 * 1024 ** 3) {
+        status.textContent = "The folder exceeds 256 GiB or 10,000 files. Copy it on the server instead."; return;
+      }
+      const body = new FormData();
+      for (const item of files) body.append(item.path, item.file, item.file.name);
+      request = new XMLHttpRequest();
+      request.open("POST", "/models/import");
+      request.setRequestHeader("X-CSRF-Token", importer.dataset.csrf);
+      browse.disabled = true;
+      importer.setAttribute("aria-busy", "true");
+      const heartbeat = window.setInterval(() => {
+        void fetch("/session/touch", { credentials: "same-origin", cache: "no-store" }).catch(() => {});
+      }, 60000);
+      cancel.hidden = false;
+      progress.hidden = false;
+      progress.value = 0;
+      status.textContent = "Importing folder… Keep this page open.";
+      request.upload.onprogress = (event) => { if (event.lengthComputable) progress.value = event.loaded / event.total * 100; };
+      request.onload = () => {
+        if (request.status === 200 && !request.responseURL.includes("/login")) {
+          status.textContent = "Folder imported. Updating the model list…";
+          request = null;
+          window.location.reload();
+        } else { status.textContent = request.responseURL.includes("/login") ? "Your session ended. Sign in and try again." : request.responseText || "Import failed. Try again."; }
+      };
+      request.onerror = () => { status.textContent = "Connection lost. Refresh folders before you try again."; };
+      request.onabort = () => { status.textContent = "Import cancelled. No model was added."; };
+      request.onloadend = () => { window.clearInterval(heartbeat); importer.removeAttribute("aria-busy"); request = null; browse.disabled = false; cancel.hidden = true; input.value = ""; };
+      request.send(body);
+    };
+    browse.addEventListener("click", () => input.click());
+    cancel.addEventListener("click", () => request?.abort());
+    input.addEventListener("change", () => upload([...input.files].map((file) => ({ file, path: file.webkitRelativePath }))));
+    const readEntry = async (entry, files) => {
+      if (files.length >= 10000) throw new Error("The folder has too many files.");
+      if (entry.isFile) {
+        const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+        files.push({ file, path: entry.fullPath.replace(/^\//, "") });
+      } else if (entry.isDirectory) {
+        const reader = entry.createReader();
+        while (true) {
+          const entries = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+          if (!entries.length) break;
+          for (const child of entries) await readEntry(child, files);
+        }
+      }
+    };
+    for (const eventName of ["dragenter", "dragover"]) importer.addEventListener(eventName, (event) => { event.preventDefault(); importer.classList.add("is-dragging"); });
+    importer.addEventListener("dragleave", () => importer.classList.remove("is-dragging"));
+    importer.addEventListener("drop", async (event) => {
+      event.preventDefault(); importer.classList.remove("is-dragging");
+      if (request) return;
+      const entries = [...event.dataTransfer.items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
+      if (entries.length !== 1 || !entries[0].isDirectory) { status.textContent = "Drop one complete model folder, including config.json."; return; }
+      try { const files = []; await readEntry(entries[0], files); upload(files); }
+      catch (error) { status.textContent = error.message || "The folder could not be read. Use Choose folder."; }
+    });
+    window.addEventListener("beforeunload", (event) => { if (request) event.preventDefault(); });
+  }
 })();

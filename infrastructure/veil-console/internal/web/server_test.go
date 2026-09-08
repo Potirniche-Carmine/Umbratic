@@ -289,8 +289,8 @@ func TestWrongLoginUsesFloatingErrorAndRequiresRetryDelay(t *testing.T) {
 	server.render(emptyPage, "login.html", pageData{Title: "Sign in", CSRF: "csrf"})
 	if body := emptyPage.Body.String(); !strings.Contains(body, `class="error auth-error is-empty"`) ||
 		!strings.Contains(body, `data-retry-after="0"`) ||
-		!strings.Contains(body, `/assets/style.css?v=9`) ||
-		!strings.Contains(body, `/assets/console.js?v=9`) {
+		!strings.Contains(body, `/assets/style.css?v=17`) ||
+		!strings.Contains(body, `/assets/console.js?v=17`) {
 		t.Fatalf("login page did not render the hidden error and current assets: %s", body)
 	}
 

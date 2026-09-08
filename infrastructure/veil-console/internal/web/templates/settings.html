@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=9">
-  <link rel="stylesheet" href="/assets/style.css?v=14">
+  <link rel="stylesheet" href="/assets/style.css?v=17">
   <link rel="stylesheet" href="/assets/controls.css?v=4">
   <link rel="stylesheet" href="/assets/settings.css?v=12">
-  <script defer src="/assets/console.js?v=15"></script>
+  <script defer src="/assets/console.js?v=17"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -17,7 +17,7 @@
   <div class="page">
     <header class="page-header">
       <h1>Settings</h1>
-      <p class="page-subtitle">How much work this deployment admits at once, and how long it waits.</p>
+      <p class="page-subtitle">Set request limits and timeouts.</p>
     </header>
 
     {{template "banners" .}}
@@ -56,12 +56,12 @@
           <label class="field">
             <span>Requests at once</span>
             <input type="number" name="max_concurrent_requests" value="{{.Config.MaxConcurrentRequests}}" min="1" required>
-            <small>Across the whole deployment. Anything past it queues.</small>
+            <small>Additional requests wait in the queue.</small>
           </label>
           <label class="field">
             <span>Request timeout</span>
             <input name="request_timeout" value="{{.Config.RequestTimeout}}" required>
-            <small>How long one answer may take before it is given up on.</small>
+            <small>Maximum time for one response, for example 75s or 2m.</small>
           </label>
         </div>
       </section>

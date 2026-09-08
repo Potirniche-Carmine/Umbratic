@@ -2,12 +2,14 @@ package supervisor
 
 import (
 	"context"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -132,9 +134,8 @@ func containerName(id string) string { return "umbratic-model-" + id }
 //     exactly as it is with a host binary;
 //   - the positional model after `serve` becomes --model, which is what the
 //     image's entrypoint takes;
-//   - the Hugging Face cache is mounted so weights survive the container;
-//   - tokens are passed by name (--env HF_TOKEN), so the docker client reads
-//     the value from its own environment and no secret lands in argv.
+//   - the selected local folder is mounted read-only at the same path;
+//   - offline mode blocks model downloads and no Hub tokens are passed.
 func dockerRunArgs(image string, model config.ManagedModel) ([]string, error) {
 	facts, err := model.Parse()
 	if err != nil {
@@ -156,16 +157,22 @@ func dockerRunArgs(image string, model config.ManagedModel) ([]string, error) {
 	if !hostRewritten {
 		flags = append(flags, "--host", "0.0.0.0")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, errors.New("the home directory for the Hugging Face cache could not be resolved")
+	if !filepath.IsAbs(facts.ModelPath) {
+		return nil, errors.New("select a local model folder; downloads are disabled")
 	}
+	var mount strings.Builder
+	writer := csv.NewWriter(&mount)
+	if err := writer.Write([]string{"type=bind", "src=" + facts.ModelPath, "dst=" + facts.ModelPath, "readonly"}); err != nil {
+		return nil, err
+	}
+	writer.Flush()
 	args := []string{
 		"run", "--rm",
 		"--name", containerName(model.ID),
 		"--gpus", "all",
 		"--ipc", "host",
-		"-v", home + "/.cache/huggingface:/root/.cache/huggingface",
+		"--mount", strings.TrimSuffix(mount.String(), "\n"),
+		"--env", "HF_HUB_OFFLINE=1", "--env", "TRANSFORMERS_OFFLINE=1",
 		"-p", fmt.Sprintf("127.0.0.1:%d:%d", facts.Port, facts.Port),
 	}
 	// Passed by name, so the docker client reads each value from its own
@@ -173,7 +180,6 @@ func dockerRunArgs(image string, model config.ManagedModel) ([]string, error) {
 	// deployment adapt the runtime to its host — WSL, for one, has no UVA and
 	// needs VLLM_USE_V2_MODEL_RUNNER=0 — without baking that host's quirk in.
 	for _, name := range []string{
-		"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN",
 		"VLLM_USE_V2_MODEL_RUNNER", "VLLM_WORKER_MULTIPROC_METHOD",
 	} {
 		if _, ok := os.LookupEnv(name); ok {
@@ -201,7 +207,7 @@ func removeStaleContainer(id string) {
 var childEnvironmentAllowlist = []string{
 	"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER",
 	"CUDA_HOME", "CUDA_VISIBLE_DEVICES", "LD_LIBRARY_PATH", "NVIDIA_VISIBLE_DEVICES",
-	"HF_HOME", "HF_HUB_CACHE", "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "TRANSFORMERS_CACHE",
+	"HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE",
 	"VLLM_CACHE_ROOT", "VLLM_WORKER_MULTIPROC_METHOD", "VLLM_USE_V2_MODEL_RUNNER", "TORCH_HOME",
 }
 
@@ -212,7 +218,7 @@ func childEnvironment() []string {
 			values = append(values, name+"="+value)
 		}
 	}
-	return values
+	return append(values, "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1")
 }
 
 func (m *ModelSupervisor) lockFor(id string) *sync.Mutex {
@@ -236,6 +242,18 @@ func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 	if err := model.Validate(); err != nil {
 		return err
 	}
+	facts, err := model.Parse()
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(facts.ModelPath) {
+		return errors.New("select a local model folder; downloads are disabled")
+	}
+	info, err := os.Stat(facts.ModelPath)
+	if err != nil || !info.IsDir() {
+		return errors.New("the local model folder is missing or cannot be read")
+	}
+
 	lock := m.lockFor(model.ID)
 	if !lock.TryLock() {
 		return ErrBusy

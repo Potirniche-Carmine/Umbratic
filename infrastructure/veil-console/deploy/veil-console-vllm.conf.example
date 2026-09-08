@@ -1,0 +1,9 @@
+# Native vLLM needs GPU devices and runtime code generation.
+# Install as /etc/systemd/system/veil-console.service.d/vllm.conf.
+# Also replace ExecStart with the full installed command plus
+# --vllm-binary /opt/vllm/bin/vllm. Keep all existing Console arguments.
+[Service]
+PrivateDevices=false
+MemoryDenyWriteExecute=false
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1

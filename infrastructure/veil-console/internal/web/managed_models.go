@@ -1,12 +1,11 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -42,16 +41,9 @@ type modelsView struct {
 	// Veil takes one speech endpoint, so the add form says so rather than
 	// letting the submission fail.
 	DictationTaken bool
-	// Catalog is the reviewed list the add form offers, and CatalogJSON is the
-	// same data for the script that keeps the served id, the context and the
-	// command in step with the menu. One source, rendered twice, rather than a
-	// list in Go and a copy of it in JavaScript.
-	Catalog     []config.ServingModel
-	CatalogJSON template.JS
-	// SuggestedPort is what a new model is offered, and what the browser
-	// rebuilds each catalog command around.
-	SuggestedPort int
-	CustomKey     string
+	Folders        []string
+	ModelsDir      string
+	SuggestedPort  int
 }
 
 type modelRow struct {
@@ -83,44 +75,16 @@ type modelForm struct {
 	DisplayName string
 	Command     string
 	Role        string
-	// CatalogKey names the catalog row this model is being created from, or
-	// CustomCatalogKey when the administrator is typing a command themselves.
-	CatalogKey string
-	// Variant is the precision chosen for that row.
-	Variant string
-	// Context is the context length chosen for it, in tokens.
-	Context int
+	Folder      string
 }
-
-// CustomCatalogKey is the "not on the list" option. It is what the add form was
-// before the catalog existed: three text fields and a command box. Nothing is
-// taken away by having a list — a repository this build has never reviewed is
-// still registrable, just deliberately rather than by default.
-const CustomCatalogKey = "custom"
-
-// Selected reports whether this catalog row is the chosen one, for the menu.
-func (f modelForm) Selected(key string) bool {
-	if strings.TrimSpace(f.CatalogKey) == "" {
-		return key == CustomCatalogKey
-	}
-	return f.CatalogKey == key
-}
-
-// IsCustom drives whether the form opens on the command box.
-func (f modelForm) IsCustom() bool {
-	return f.Selected(CustomCatalogKey)
-}
-
-// SpeechSelected drives the add form's role control, so a rejected submission
-// comes back with the role the administrator picked rather than the default.
-func (f modelForm) SpeechSelected() bool { return f.Role == config.RoleSpeech }
 
 func (s *Server) modelsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "models.html", s.modelsData(r, "", "", nil))
 }
 
 // IsChat and IsDictation drive the tab bar.
-func (v modelsView) IsChat() bool      { return v.Kind != config.KindDictation }
+func (v modelsView) IsChat() bool      { return v.Kind == config.KindChat }
+func (v modelsView) IsEmbedding() bool { return v.Kind == config.KindEmbedding }
 func (v modelsView) IsDictation() bool { return v.Kind == config.KindDictation }
 
 func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string, form *modelForm) pageData {
@@ -135,36 +99,24 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 	}
 
 	port := state.NextFreeManagedPort(models, s.startup.Port, s.veilPort())
-	catalog := config.CatalogFor(kind)
-	catalogJSON, _ := json.Marshal(catalog)
-	dictationTaken := false
+	folders, folderErr := localModelFolders(s.modelsDirectory())
+	if folderErr != nil && errorMessage == "" {
+		errorMessage = folderErr.Error()
+	}
+	view := modelsView{
+		Configured: s.models.Configured(), Registered: len(models), Kind: kind,
+		Folders: folders, ModelsDir: s.modelsDirectory(), SuggestedPort: port,
+	}
 	for _, model := range models {
 		if model.IsSpeech() {
-			dictationTaken = true
+			view.DictationTaken = true
 		}
-	}
-	first := catalog[0]
-	view := modelsView{
-		Configured:     s.models.Configured(),
-		Registered:     len(models),
-		Kind:           kind,
-		DictationTaken: dictationTaken,
-		Catalog:        catalog,
-		CatalogJSON:    template.JS(catalogJSON),
-		SuggestedPort:  port,
-		CustomKey:      CustomCatalogKey,
-		Form: modelForm{
-			CatalogKey: first.Key,
-			Variant:    first.Variants[0].Key,
-			Context:    first.DefaultContext,
-			Command:    config.CatalogCommand(first, first.Variants[0], port, first.DefaultContext),
-		},
 	}
 	if form != nil {
 		view.Form = *form
 	}
 	for _, model := range models {
-		if (config.KindDictation == kind) != model.IsSpeech() {
+		if kind.Role() != config.NormalizeRole(model.Role) {
 			continue
 		}
 		status := s.models.Status(model.ID)
@@ -272,11 +224,11 @@ func (s *Server) veilPort() int {
 	return parsed
 }
 
-// catalogPort is the port a catalog command is built around. It arrives from
+// suggestedModelPort is the port a catalog command is built around. It arrives from
 // the form because the page is what knows which ports are already taken, and it
 // is bounded here and collision-checked by ValidateManagedModels afterwards —
 // exactly the path a hand-typed --port takes.
-func catalogPort(r *http.Request) int {
+func suggestedModelPort(r *http.Request) int {
 	port, err := strconv.Atoi(strings.TrimSpace(r.FormValue("port")))
 	if err != nil || port < config.MinManagedPort || port > config.MaxManagedPort {
 		return config.SuggestedPortStart
@@ -290,26 +242,10 @@ func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm)
 		DisplayName: strings.TrimSpace(r.FormValue("display_name")),
 		Command:     strings.TrimSpace(r.FormValue("command")),
 		Role:        config.NormalizeRole(r.FormValue("role")),
-		CatalogKey:  strings.TrimSpace(r.FormValue("catalog_key")),
-		Variant:     strings.TrimSpace(r.FormValue("variant")),
+		Folder:      strings.TrimSpace(r.FormValue("folder")),
 	}
-	// A catalog row decides the identity and the command. The browser fills the
-	// same three values into the form as the menu changes, but they arrive from
-	// a client and are rebuilt here rather than trusted: what gets executed is
-	// always assembled from the reviewed row on this side.
-	if entry, ok := config.CatalogEntry(form.CatalogKey); ok {
-		variant := entry.Variant(form.Variant)
-		context, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("context")))
-		context = entry.ClampContext(context)
-		form.Variant = variant.Key
-		form.Context = context
-		form.ID = entry.ServedID
-		form.DisplayName = entry.DisplayName
-		form.Command = config.CatalogCommand(entry, variant, catalogPort(r), context)
-		// The tab the form was submitted from decides the role. A dictation
-		// model registered as chat would be published in the model picker and
-		// fail every message sent to it.
-		form.Role = entry.Kind.Role()
+	if id == "" {
+		form.Role = requestKind(r).Role()
 	}
 	if id != "" {
 		form.ID = id
@@ -327,6 +263,28 @@ func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm)
 
 func (s *Server) modelsCreate(w http.ResponseWriter, r *http.Request) {
 	model, form := parseModelForm(r, "")
+	folder, err := resolveLocalModel(s.modelsDirectory(), form.Folder)
+	if err != nil {
+		s.renderModelFormError(w, r, form, err)
+		return
+	}
+	if model.DisplayName == "" {
+		model.DisplayName = filepath.Base(folder)
+	}
+	if model.ID == "" {
+		model.ID = localModelID(filepath.Base(folder))
+	}
+	if model.Command == "" {
+		model.Command = config.FormatCommand([]string{"serve", folder, "--host", "127.0.0.1", "--port", strconv.Itoa(suggestedModelPort(r)), "--served-model-name", model.ID})
+		if model.Role == config.RoleEmbedding {
+			model.Command += "\n--runner pooling"
+		}
+	}
+	facts, parseErr := model.Parse()
+	if parseErr != nil || facts.ModelPath != folder {
+		s.renderModelFormError(w, r, form, errors.New("the command must use the selected local model folder"))
+		return
+	}
 	if err := model.Validate(); err != nil {
 		s.renderModelFormError(w, r, form, err)
 		return
@@ -376,8 +334,8 @@ func (s *Server) modelsDefault(w http.ResponseWriter, r *http.Request) {
 		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.default")
 		return
 	}
-	if chosen.IsSpeech() {
-		s.modelActionResult(w, r, errors.New("a dictation model cannot answer chat requests"), "model.default")
+	if config.NormalizeRole(chosen.Role) != config.RoleChat {
+		s.modelActionResult(w, r, errors.New("only a chat model can be the chat default"), "model.default")
 		return
 	}
 	facts, err := chosen.Parse()
@@ -533,6 +491,9 @@ func requestKind(r *http.Request) config.ServingKind {
 
 // modelsPath is the page for one tab.
 func modelsPath(kind config.ServingKind) string {
+	if kind == config.KindEmbedding {
+		return "/models?kind=embedding"
+	}
 	if kind == config.KindDictation {
 		return "/models?kind=dictation"
 	}

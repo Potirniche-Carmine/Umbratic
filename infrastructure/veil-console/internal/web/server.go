@@ -32,19 +32,20 @@ import (
 var content embed.FS
 
 type Server struct {
-	startup      config.Startup
-	store        *state.Store
-	secretsMu    sync.RWMutex
-	secrets      state.Secrets
-	supervisor   *supervisor.Supervisor
-	models       *supervisor.ModelSupervisor
-	corpus       *rag.Corpus
-	access       *access.Client
-	templates    *template.Template
-	throttle     *loginThrottle
-	crossOrigin  *http.CrossOriginProtection
-	restartMu    sync.Mutex
-	restartAfter time.Time
+	startup       config.Startup
+	store         *state.Store
+	secretsMu     sync.RWMutex
+	secrets       state.Secrets
+	supervisor    *supervisor.Supervisor
+	models        *supervisor.ModelSupervisor
+	corpus        *rag.Corpus
+	access        *access.Client
+	templates     *template.Template
+	throttle      *loginThrottle
+	crossOrigin   *http.CrossOriginProtection
+	modelImportMu sync.Mutex
+	restartMu     sync.Mutex
+	restartAfter  time.Time
 }
 
 const restartCooldown = 5 * time.Second
@@ -144,6 +145,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /veil/stop", s.requireSession(http.HandlerFunc(s.veilStop)))
 	mux.Handle("POST /veil/restart", s.requireSession(http.HandlerFunc(s.veilRestart)))
 	mux.Handle("GET /models", s.requireSession(http.HandlerFunc(s.modelsPage)))
+	mux.Handle("POST /models/import", s.requireSession(http.HandlerFunc(s.modelsImport)))
+	mux.Handle("POST /models/open-folder", s.requireSession(http.HandlerFunc(s.modelsOpenFolder)))
 	mux.Handle("POST /models/create", s.requireSession(http.HandlerFunc(s.modelsCreate)))
 	mux.Handle("POST /models/{model_id}/default", s.requireSession(http.HandlerFunc(s.modelsDefault)))
 	mux.Handle("POST /models/{model_id}/update", s.requireSession(http.HandlerFunc(s.modelsUpdate)))
@@ -213,12 +216,17 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			return
 		}
 		if r.Method == http.MethodPost {
-			if err := s.validateFormRequest(w, r); err != nil {
-				http.Error(w, err.Error(), http.StatusForbidden)
-				return
+			csrf := r.Header.Get("X-CSRF-Token")
+			if r.URL.Path != "/models/import" {
+				if err := s.validateFormRequest(w, r); err != nil {
+					http.Error(w, err.Error(), http.StatusForbidden)
+					return
+				}
+				csrf = r.FormValue("csrf")
 			}
+
 			csrfCookie, err := r.Cookie("veil_console_csrf")
-			if err != nil || subtle.ConstantTimeCompare(auth.HashToken(r.FormValue("csrf")), session.CSRFHash) != 1 || subtle.ConstantTimeCompare([]byte(r.FormValue("csrf")), []byte(csrfCookie.Value)) != 1 {
+			if err != nil || subtle.ConstantTimeCompare(auth.HashToken(csrf), session.CSRFHash) != 1 || subtle.ConstantTimeCompare([]byte(csrf), []byte(csrfCookie.Value)) != 1 {
 				http.Error(w, "request verification failed", http.StatusForbidden)
 				return
 			}

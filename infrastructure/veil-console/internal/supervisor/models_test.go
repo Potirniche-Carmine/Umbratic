@@ -122,11 +122,10 @@ func TestDockerRunArgsAreExactAndLoopbackPublished(t *testing.T) {
 		t.Setenv(name, "")
 		os.Unsetenv(name)
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := dockerRunArgs("vllm/vllm-openai:v0.28.0", managedModel())
+	folder := t.TempDir()
+	model := managedModel()
+	model.Command = strings.Replace(model.Command, "Qwen/Qwen3-32B", "\""+folder+"\"", 1)
+	got, err := dockerRunArgs("vllm/vllm-openai:v0.28.0", model)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,12 +134,12 @@ func TestDockerRunArgsAreExactAndLoopbackPublished(t *testing.T) {
 		"--name", "umbratic-model-qwen3-32b",
 		"--gpus", "all",
 		"--ipc", "host",
-		"-v", home + "/.cache/huggingface:/root/.cache/huggingface",
+		"--mount", "type=bind,src=" + folder + ",dst=" + folder + ",readonly",
+		"--env", "HF_HUB_OFFLINE=1", "--env", "TRANSFORMERS_OFFLINE=1",
 		"-p", "127.0.0.1:8001:8001",
-		"--env", "HF_TOKEN",
 		"--env", "VLLM_USE_V2_MODEL_RUNNER",
 		"vllm/vllm-openai:v0.28.0",
-		"--model", "Qwen/Qwen3-32B",
+		"--model", folder,
 		"--host", "0.0.0.0",
 		"--port", "8001",
 		"--served-model-name", "qwen3-32b",
@@ -214,6 +213,7 @@ func TestStartAndStopLifecycleWithAStubBinary(t *testing.T) {
 	models := NewModelSupervisor(binary, "")
 	model := managedModel()
 	model = withPort(model, freePort(t))
+	model.Command = strings.Replace(model.Command, "Qwen/Qwen3-32B", `"`+t.TempDir()+`"`, 1)
 
 	if err := models.Start(model); err != nil {
 		t.Fatal(err)
@@ -247,6 +247,8 @@ func TestStopAllReapsEveryChild(t *testing.T) {
 	models := NewModelSupervisor(binary, "")
 	first, second := managedModel(), managedModel()
 	first, second = withPort(first, freePort(t)), withPort(second, freePort(t))
+	first.Command = strings.Replace(first.Command, "Qwen/Qwen3-32B", `"`+t.TempDir()+`"`, 1)
+	second.Command = strings.Replace(second.Command, "Qwen/Qwen3-32B", `"`+t.TempDir()+`"`, 1)
 	second.ID = "small"
 	second.Command = strings.Replace(second.Command, "--served-model-name qwen3-32b", "--served-model-name small", 1)
 
@@ -272,6 +274,7 @@ func TestStopAllReapsEveryChild(t *testing.T) {
 func TestReadinessRequiresTheServedNameInTheListing(t *testing.T) {
 	model := managedModel()
 	model = withPort(model, freePort(t))
+	model.Command = strings.Replace(model.Command, "Qwen/Qwen3-32B", `"`+t.TempDir()+`"`, 1)
 	listing := map[string]any{"data": []any{map[string]any{"id": model.ID}}}
 	payload, _ := json.Marshal(listing)
 	server := &http.Server{
@@ -333,6 +336,7 @@ func TestStoppingAModelReapsItsWholeProcessTree(t *testing.T) {
 	models := NewModelSupervisor(binary, "")
 	model := managedModel()
 	model = withPort(model, freePort(t))
+	model.Command = strings.Replace(model.Command, "Qwen/Qwen3-32B", `"`+t.TempDir()+`"`, 1)
 
 	if err := models.Start(model); err != nil {
 		t.Fatal(err)

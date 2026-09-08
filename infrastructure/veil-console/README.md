@@ -2,7 +2,7 @@
 
 Veil Console is the local administration service for Veil. It binds only to loopback, stores its state in SQLite, and starts one fixed Veil executable with a complete allowlisted environment.
 
-Development runs natively on Windows, macOS, and Linux. The production release target stays Ubuntu 24.04 LTS on `amd64`. Run the release smoke test on an Ubuntu 24.04 LTS VM or VPS before production use.
+Development runs natively on Windows, macOS, and Linux. The production release targets are Ubuntu 24.04 LTS on `amd64` and `arm64` (including DGX Spark). Run the release smoke test on an Ubuntu 24.04 LTS VM or VPS before production use.
 
 ## Development
 
@@ -75,7 +75,7 @@ npm run veil-console:release -- --version 0.1.0 --seats 30 --signing-key-file "$
 - `veil-console:dev` builds and starts Console with persistent native development state.
 - `veil-console:smoke` runs the Ubuntu release smoke environment. On Windows, it uses Ubuntu WSL.
 - `veil-console:test` runs the normal Console tests as part of `npm run test:all`.
-- `veil-console:release` builds one reviewed Ubuntu `amd64` customer installation zip. It requires a positive seat limit and a protected Ed25519 signing key. The device limit defaults to two devices for each assigned user.
+- `veil-console:release` builds one reviewed Ubuntu customer installation zip (`--arch amd64` or `--arch arm64`). It requires a positive seat limit and a protected Ed25519 signing key. The device limit defaults to two devices for each assigned user.
 
 To select another development state directory for one start:
 
@@ -137,13 +137,48 @@ page. Without it the page still lists and edits registered models — Veil route
 to whatever is already running on those ports — but Start is unavailable,
 because there is nothing for Console to run.
 
+### Import local models
+
+Use **Choose folder** or drop one complete model folder onto **Models**. The
+folder must include `config.json`, its tokenizer or processor files, and all
+weight files. Console accepts the files without a weight-format allowlist.
+BF16, FP16, FP8, NVFP4, AWQ, GPTQ, and other formats still require a compatible
+vLLM build, model architecture, and GPU. Import does not convert or start a model.
+
+The upload limit is 256 GiB per request and 10,000 files. Transfers stream to a
+private temporary folder. A failed transfer is removed. An existing folder is
+never replaced. Keep the page open until the import finishes. **Cancel import**
+stops a transfer before completion. Refresh folders after a connection failure
+to check whether the server finished the import.
+
+For a large model, use **Open models folder** and copy or drag the folder there
+with the computer's file manager. Then select **Refresh folders**. On a remote
+or headless server, use **Copy path** on the Console computer, or use the browser
+upload. The service account must be able to read copied files. A symlink inside
+the models folder can refer to a model on another local disk.
+
+Select the folder in Chat, Dictation, or Embedding. Console uses the folder name
+for the display name and creates a valid model ID from it. Both fields can be
+changed before registration. The library can hold multiple dictation folders;
+Veil currently uses one registered dictation runtime. Removing a registration
+leaves its files intact.
+
+The Documents page uses registered local embedding models. Start an embedding
+model first, select it on Documents, then enable retrieval. Console probes the
+vector width before it saves the setting. Retrieval starts disabled on a new
+installation until a local model is selected.
+
+Both native and Docker model processes run with `HF_HUB_OFFLINE=1` and
+`TRANSFORMERS_OFFLINE=1`. Docker receives a read-only mount of the selected local
+folder. Model downloads and Hugging Face access tokens are not used.
+
 ### The command
 
 Each card carries the argument list its model is started with, editable in
 place:
 
 ```text
-serve Qwen/Qwen3-32B --host 127.0.0.1 --port 8001 --served-model-name qwen3-32b   --max-model-len 32768 --gpu-memory-utilization 0.45 --kv-cache-dtype fp8
+serve /var/lib/veil-console/models/Qwen3-32B --host 127.0.0.1 --port 8001 --served-model-name qwen3-32b   --max-model-len 32768 --gpu-memory-utilization 0.45 --kv-cache-dtype fp8
 ```
 
 It reads like a command line and is not one. Console tokenizes it into argv and
@@ -174,8 +209,7 @@ model, `--max-model-len` is the window Veil publishes, and both are read back
 out of the command rather than stored a second time and allowed to drift.
 `--port` and `--served-model-name` are therefore required, and the served name
 must keep matching the model's id — clients already use that name, so changing
-it is a remove and an add. `fp8` is vLLM's 8-bit KV cache and the default here;
-there is no literal `q8`.
+it is a remove and an add. New models use vLLM's precision and context defaults. Set precision, cache, or quantization flags only when the model and GPU support them.
 
 Because an administrator chooses the flags, an administrator can choose a
 dangerous one: `--trust-remote-code` runs code from the model repository. That
@@ -199,9 +233,7 @@ or removing a model changes the registry, and the page says so: restart Veil
 from Overview to apply it. Console signals each model's whole process group on
 shutdown, so no worker outlives the Console that started it.
 
-Registered models also become the **Default model** choices on Settings. The
-default has to be one of them: a default naming anything else would point Veil
-at a process nobody starts.
+Use **Make default** on a chat model card. Settings shows the selected model. Dictation and embedding models are not published as chat choices.
 
 The Models page asks for the owner password nowhere. Console is a loopback
 surface behind a session, and re-confirming a password on every click bought
@@ -269,7 +301,7 @@ Allow the Veil HTTPS port only from the company VPN or an exact list of approved
 
 ### Requirements
 
-- Ubuntu 24.04 LTS on `amd64`.
+- Ubuntu 24.04 LTS on `amd64` or `arm64`.
 - A DNS record for the Veil domain.
 - Caddy installed from its supported Ubuntu package.
 - vLLM on a private address.
@@ -359,3 +391,35 @@ to the desktop enrollment flow.
 
 For entitlement reissue, key rotation, backup, and recovery steps, see
 [`../../docs/guides/operate-server.md`](../../docs/guides/operate-server.md).
+
+## DGX Spark and ARM64
+
+DGX Spark uses Ubuntu 24.04 and an ARM64 CPU. The source launcher builds Go
+binaries for the host architecture. Use an installed vLLM build or an NVIDIA
+container that supports Spark's GB10 GPU; an AMD64 vLLM image will not work.
+
+```sh
+VEIL_CONSOLE_VLLM_BINARY=/opt/vllm/bin/vllm \
+  bash infrastructure/veil-console/scripts/run-wsl.sh start
+```
+
+Alternatively set `VEIL_CONSOLE_VLLM_DOCKER_IMAGE` to the installed, reviewed
+ARM64 vLLM image. The script also detects `vllm` on PATH. Additional Console
+flags can follow an explicit state directory. No model weights are downloaded.
+
+Release builds accept `--arch arm64`. Build on ARM64 to avoid a cross-linker
+requirement for the Rust PDF extractor. The bundle contains ARM64 Go binaries,
+the ARM64 PDF extractor, and the pinned ARM64 Qdrant binary. The installer checks
+the bundle architecture and all recorded checksums before it installs files.
+The ARM64 Qdrant digest is from the official v1.19.0 GitHub release asset.
+
+For a native vLLM process under systemd, install the runtime outside `/home`
+and add the supplied `deploy/veil-console-vllm.conf.example` settings as a
+service override. The base unit hides devices and blocks executable memory;
+those restrictions prevent GPU access and runtime code generation. Keep the
+Console listener on loopback. Docker mode needs an administrator-configured
+Docker socket and NVIDIA Container Toolkit instead.
+
+References: [NVIDIA Spark platform](https://docs.nvidia.com/dgx/dgx-spark-porting-guide/overview.html),
+[NVIDIA vLLM setup](https://build.nvidia.com/spark/vllm),
+[vLLM format support](https://docs.vllm.ai/en/stable/features/quantization/index.html).

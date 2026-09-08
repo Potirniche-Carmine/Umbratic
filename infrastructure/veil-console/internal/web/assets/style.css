@@ -10,7 +10,7 @@
   --control-hover: #222a34;
   --text: #f1f3f5;
   --muted: #a1a8b2;
-  --faint: #737b87;
+  --faint: #9aa3af;
   --line: rgba(230, 235, 242, 0.1);
   --line-strong: rgba(230, 235, 242, 0.18);
   --blue: #0a84ff;
@@ -33,6 +33,7 @@
 
 html {
   min-width: 320px;
+  scrollbar-gutter: stable;
   min-height: 100%;
   background: var(--bg);
 }
@@ -67,7 +68,8 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible,
-summary:focus-visible {
+summary:focus-visible,
+textarea:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -518,7 +520,8 @@ button:disabled,
   background: rgba(230, 235, 242, 0.025);
 }
 
-.disclosure summary:focus-visible {
+.disclosure summary:focus-visible,
+textarea:focus-visible {
   border-radius: calc(var(--radius) - 1px);
   box-shadow: inset 0 0 0 2px rgba(10, 132, 255, 0.78);
 }
@@ -860,15 +863,15 @@ pre {
   }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 760px) {
   .topbar {
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.5rem;
-    padding-left: 10px;
+    padding: 10px;
   }
 
   .brand > span:last-child {
-    display: none;
+    display: inline;
   }
 
   .brand-mark {
@@ -876,8 +879,10 @@ pre {
     height: 25px;
   }
 
+  .signout { grid-column: 2; grid-row: 1; }
   .nav-links {
-    justify-self: center;
+    grid-column: 1 / -1; grid-row: 2;
+    flex-wrap: wrap; justify-content: center; width: 100%;
   }
 
   .nav-links a,
@@ -955,11 +960,6 @@ pre {
   }
 }
 
-/*
-  Reduced motion means no movement, not no geometry: the chevrons and the
-  checkbox tick are drawn from rotated borders, so a blanket transform: none
-  flattened them into bare corners. Only the animation of transforms goes.
-*/
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

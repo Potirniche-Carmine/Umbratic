@@ -1,8 +1,6 @@
 package web
 
 import (
-	"encoding/json"
-	"html/template"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -26,15 +24,13 @@ func TestRenderPreviewPages(t *testing.T) {
 
 	chat := config.CatalogFor(config.KindChat)
 	dictation := config.CatalogFor(config.KindDictation)
-	catalogJSON, _ := json.Marshal(chat)
-	dictationJSON, _ := json.Marshal(dictation)
 	uploaded := time.Date(2026, 8, 20, 14, 5, 0, 0, time.UTC)
 	settings := config.DefaultRAG()
 
 	docsBase := func(all []state.Document, total int) pageData {
 		return pageData{
 			Title: "Documents", CSRF: "preview", Username: "owner", RAG: settings,
-			EmbeddingChoices: config.EmbeddingChoices,
+			EmbeddingChoices: []config.EmbeddingChoice{{Model: "local-embedding", Label: "Local embedding model"}},
 			RouteChoices:     routeChoices(),
 			Corpus: documentsView{
 				All: all, Documents: total, Chunks: 412,
@@ -54,13 +50,10 @@ func TestRenderPreviewPages(t *testing.T) {
 		Title: "Models", CSRF: "preview", Username: "owner",
 		Models: modelsView{
 			Configured: false, Registered: 2, Running: 1,
-			Kind: config.KindChat, Catalog: chat, CatalogJSON: template.JS(catalogJSON),
-			SuggestedPort: 8001, CustomKey: CustomCatalogKey,
+			Kind: config.KindChat, Folders: []string{"Qwen3-BF16", "Whisper"}, ModelsDir: "/var/lib/veil-console/models",
+			SuggestedPort: 8001,
 			Form: modelForm{
-				CatalogKey: chat[0].Key,
-				Variant:    chat[0].Variants[0].Key,
-				Context:    chat[0].DefaultContext,
-				Command:    config.CatalogCommand(chat[0], chat[0].Variants[0], 8001, 65536),
+				Command: config.CatalogCommand(chat[0], chat[0].Variants[0], 8001, 65536),
 			},
 			Rows: []modelRow{
 				{
@@ -84,14 +77,9 @@ func TestRenderPreviewPages(t *testing.T) {
 	}
 	modelsDictation := models
 	modelsDictation.Models.Kind = config.KindDictation
-	modelsDictation.Models.Catalog = dictation
-	modelsDictation.Models.CatalogJSON = template.JS(dictationJSON)
 	modelsDictation.Models.Rows = nil
 	modelsDictation.Models.Form = modelForm{
-		CatalogKey: dictation[0].Key,
-		Variant:    dictation[0].Variants[0].Key,
-		Context:    dictation[0].DefaultContext,
-		Command:    config.CatalogCommand(dictation[0], dictation[0].Variants[0], 8003, dictation[0].DefaultContext),
+		Command: config.CatalogCommand(dictation[0], dictation[0].Variants[0], 8003, dictation[0].DefaultContext),
 	}
 
 	modelsEmpty := models
@@ -123,10 +111,24 @@ func TestRenderPreviewPages(t *testing.T) {
 	errored := filled
 	errored.Error = "The embedding runtime at http://127.0.0.1:8001/v1 did not answer."
 
+	management := pageData{
+		Title: "Management", CSRF: "preview", Configured: true, Running: true, EnterpriseEnabled: true,
+		Access: accessView{Available: true, OrgName: "Example workspace", SeatsAssigned: 2, SeatsAvailable: 8, MaxAuthorizedUsers: 10, DevicesEnrolled: 1, MaxDevicesPerUser: 2, Filter: "active",
+			Users: []accessUserView{
+				{UID: "preview-user-1", Label: "Example administrator", StatusLabel: "Active", LastSeenRelative: "5 minutes ago", EnrolledDevices: 1, DevicesAvailable: 1, MaxDevicesPerUser: 2, CanManageDevices: true, Devices: []accessDeviceView{{UID: "preview-device-1", Label: "Workstation", LastSeenRelative: "5 minutes ago"}}},
+				{UID: "preview-user-2", Label: "Example teammate", StatusLabel: "Awaiting enrollment", AwaitingEnrollment: true, DevicesAvailable: 2, MaxDevicesPerUser: 2},
+			},
+		},
+	}
 	pages := []struct {
 		file, tmpl string
 		data       pageData
 	}{
+		{"management.html", "access.html", management},
+		{"setup.html", "setup.html", pageData{Title: "Create owner", CSRF: "preview"}},
+		{"login.html", "login.html", pageData{Title: "Sign in", CSRF: "preview"}},
+		{"token.html", "token.html", pageData{Title: "Client token", Token: "EXAMPLE-ONLY-NOT-A-VALID-TOKEN"}},
+		{"enrollment.html", "enrollment-code-created.html", pageData{Title: "Enrollment code", CSRF: "preview", EnrollmentCode: "EXAMPLE-ONLY", EnrollmentExpires: "in 15 minutes"}},
 		{"documents.html", "documents.html", filled},
 		{"documents-empty.html", "documents.html", empty},
 		{"documents-error.html", "documents.html", errored},

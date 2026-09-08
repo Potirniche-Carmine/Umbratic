@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
-  <link rel="stylesheet" href="/assets/style.css?v=14">
+  <link rel="stylesheet" href="/assets/style.css?v=17">
   <link rel="stylesheet" href="/assets/controls.css?v=4">
-  <link rel="stylesheet" href="/assets/models.css?v=8">
-  <script defer src="/assets/console.js?v=15"></script>
+  <link rel="stylesheet" href="/assets/models.css?v=18">
+  <script defer src="/assets/console.js?v=17"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -16,132 +16,72 @@
   <div class="page">
     <header class="page-header">
       <h1>Models</h1>
-      <p class="page-subtitle">The runtimes Console starts, and what Veil routes to.</p>
+      <p class="page-subtitle">Manage local models for chat, dictation, and document search.</p>
     </header>
 
     {{template "banners" .}}
 
-    <!--
-      Chat and dictation are different enough to be different lists: one answers
-      messages and the other answers the microphone, and a transcription runtime
-      in the chat picker fails every message sent to it. The tab is also what
-      decides the role, which is why the add form no longer asks.
-    -->
     <nav class="tabs" aria-label="Model kind">
       <a href="/models" {{if .Models.IsChat}}aria-current="page"{{end}}>Chat</a>
       <a href="/models?kind=dictation" {{if .Models.IsDictation}}aria-current="page"{{end}}>Dictation</a>
+      <a href="/models?kind=embedding" {{if .Models.IsEmbedding}}aria-current="page"{{end}}>Embedding</a>
     </nav>
-
-    <!--
-      The add form is always the first panel, in both tabs and whether or not
-      anything is registered. It used to be at the foot of the page behind a
-      button that scrolled to it, so the page moved under the reader whenever a
-      model was added or removed.
-    -->
-    <section class="panel model-form" id="add-model">
-      <div class="section-heading">
-        <h2>Add {{if .Models.IsDictation}}a dictation model{{else}}a chat model{{end}}</h2>
+    <details class="panel model-library disclosure" {{if not .Models.Folders}}open{{end}}>
+      <summary><strong>Import model files</strong><span class="disclosure-mark" aria-hidden="true"></span></summary>
+      <div class="model-library-body">
+      <p>Copy complete model folders from your drive into this folder on the Console computer. Keep the weights, configuration, and tokenizer files together.</p>
+      <div class="model-import" data-model-import data-csrf="{{.CSRF}}">
+        <p><strong>Drop a model folder here</strong></p>
+        <p>Or choose a folder from your computer. Up to 256 GiB and 10,000 files.</p>
+        <input class="visually-hidden" type="file" webkitdirectory multiple data-model-files aria-label="Choose model folder">
+        <button class="button secondary" type="button" data-model-browse>Choose folder</button>
+        <button class="button secondary" type="button" data-model-cancel hidden>Cancel import</button>
+        <progress max="100" value="0" data-model-progress aria-label="Import progress" hidden></progress>
+        <p class="import-status" role="status" data-model-import-status>Folder imports do not start a model.</p>
       </div>
+      <code data-model-directory>{{.Models.ModelsDir}}</code>
+      <div class="model-library-actions">
+        <form method="post" action="/models/open-folder">
+          <input type="hidden" name="csrf" value="{{.CSRF}}">
+          <input type="hidden" name="kind" value="{{.Models.Kind}}">
+          <button class="button secondary" type="submit">Open models folder</button>
+        </form>
+        <button class="button secondary" type="button" data-copy-model-directory>Copy path</button>
+        <a class="button secondary" href="{{if .Models.IsDictation}}/models?kind=dictation{{else if .Models.IsEmbedding}}/models?kind=embedding{{else}}/models{{end}}">Refresh folders</a>
+      </div>
+      <p class="panel-footnote">Models stay local. BF16, FP16, FP8, NVFP4, and other formats depend on your vLLM build and GPU. Console does not download or convert weights.</p>
+      </div>
+    </details>
+    <section class="panel model-form" id="add-model">
+      <div class="section-heading"><h2>Add {{if .Models.IsDictation}}a dictation model{{else if .Models.IsEmbedding}}an embedding model{{else}}a chat model{{end}}</h2></div>
       {{if .Models.FormError}}<p class="form-error" role="alert">{{.Models.FormError}}</p>{{end}}
       {{if and .Models.IsDictation .Models.DictationTaken}}
-      <p class="panel-footnote no-rule">Veil takes one dictation runtime. Remove the registered one to add another.</p>
+      <p class="panel-footnote no-rule">One dictation model can be registered at a time. Stop and remove it to select another. Model files stay in the folder.</p>
       {{else}}
-      <form method="post" action="/models/create" data-add-model>
+      <form method="post" action="/models/create" data-local-model>
         <input type="hidden" name="csrf" value="{{.CSRF}}">
         <input type="hidden" name="port" value="{{.Models.SuggestedPort}}">
         <input type="hidden" name="kind" value="{{.Models.Kind}}">
-
-        <div class="field-grid add-model-grid">
-          <div class="field field-wide">
-            <span id="catalog-label">Model</span>
-            <div class="choice" data-choice data-catalog-choice>
-              <input type="hidden" name="catalog_key" value="{{if .Models.Form.CatalogKey}}{{.Models.Form.CatalogKey}}{{else}}{{.Models.CustomKey}}{{end}}" data-choice-input>
-              <button class="choice-trigger" type="button" aria-labelledby="catalog-label catalog-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
-                <span id="catalog-value" data-choice-label>Choose a model</span>
-                <span class="choice-chevron" aria-hidden="true"></span>
-              </button>
-              <div class="choice-menu" role="listbox" aria-labelledby="catalog-label" data-choice-menu hidden>
-                {{range .Models.Catalog}}
-                <button type="button" role="option" data-choice-value="{{.Key}}" aria-selected="{{$.Models.Form.Selected .Key}}">
-                  <span class="option-row">
-                    <span class="option-title">{{.DisplayName}}{{if .Uncensored}} <span class="option-tag">Uncensored</span>{{end}}</span>
-                    <span class="option-size">from {{.SuggestedVRAM}} GB</span>
-                  </span>
-                  <span class="option-detail">{{.Detail}}</span>
-                </button>
-                {{end}}
-                <button type="button" role="option" data-choice-value="{{.Models.CustomKey}}" aria-selected="{{.Models.Form.IsCustom}}">
-                  <span class="option-row"><span class="option-title">Custom</span></span>
-                  <span class="option-detail">Any Hugging Face reference, with the vLLM arguments written by hand.</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="field" data-variant-field>
-            <span id="variant-label">Precision</span>
-            <div class="choice" data-choice data-variant-choice>
-              <input type="hidden" name="variant" value="{{.Models.Form.Variant}}" data-choice-input>
-              <button class="choice-trigger" type="button" aria-labelledby="variant-label variant-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
-                <span id="variant-value" data-choice-label></span>
-                <span class="choice-chevron" aria-hidden="true"></span>
-              </button>
-              <div class="choice-menu" role="listbox" aria-labelledby="variant-label" data-choice-menu hidden></div>
-            </div>
-          </div>
-
-          <!--
-            Context is a property of this runtime, not of the deployment: it
-            sizes the KV cache, so the number that fits depends on which weights
-            at which precision are on which card. It was a slider on Settings
-            applied to every model at once.
-          -->
-          <div class="field" data-context-field>
-            <span id="context-label">Context length</span>
-            <div class="choice" data-choice data-context-choice>
-              <input type="hidden" name="context" value="{{.Models.Form.Context}}" data-choice-input>
-              <button class="choice-trigger" type="button" aria-labelledby="context-label context-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
-                <span id="context-value" data-choice-label></span>
-                <span class="choice-chevron" aria-hidden="true"></span>
-              </button>
-              <div class="choice-menu" role="listbox" aria-labelledby="context-label" data-choice-menu hidden></div>
-            </div>
-          </div>
-
-          <div class="field" data-served-field>
-            <span>Served id</span>
-            <output class="field-readout" data-served-readout></output>
-          </div>
+        <div class="field-grid">
+          <label class="field field-wide"><span>Model folder</span>
+            <span class="select-control"><select name="folder" required>
+              <option value="">Choose a local folder</option>
+              {{range .Models.Folders}}<option value="{{.}}" {{if eq $.Models.Form.Folder .}}selected{{end}}>{{.}}</option>{{end}}
+            </select><span class="select-mark" aria-hidden="true"></span></span>
+          </label>
+          <label class="field"><span>Model name</span><input name="display_name" value="{{.Models.Form.DisplayName}}" maxlength="120" placeholder="Uses the folder name"></label>
+          <label class="field"><span>Model ID</span><input name="id" value="{{.Models.Form.ID}}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" placeholder="Uses the folder name"></label>
         </div>
-
-        <!--
-          Custom's own fields. Hidden rather than absent, so a rejected
-          submission comes back with what was typed.
-        -->
-        <div class="field-grid" data-custom-fields hidden>
-          <label class="field">
-            <span>Display name</span>
-            <input name="display_name" value="{{.Models.Form.DisplayName}}" maxlength="120" data-custom-required>
-          </label>
-          <label class="field">
-            <span>Served id</span>
-            <input name="id" value="{{.Models.Form.ID}}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" data-custom-required>
-          </label>
-        </div>
-
-        <details class="disclosure compact" data-command-disclosure>
-          <summary><strong>Command</strong><span class="disclosure-mark" aria-hidden="true"></span></summary>
-          <label class="field field-wide">
-            <span class="visually-hidden">Command</span>
-            <textarea name="command" rows="8" spellcheck="false" autocapitalize="off" autocomplete="off" required data-command-box>{{.Models.Form.Command}}</textarea>
-          </label>
+        <details class="disclosure compact">
+          <summary><strong>Advanced options</strong><span class="disclosure-mark" aria-hidden="true"></span></summary>
+          <p class="panel-footnote no-rule">Leave this blank to use the model defaults. Set vLLM options here only when the model needs them.</p>
+          <label class="field"><span>vLLM arguments</span><textarea name="command" rows="8" spellcheck="false" autocomplete="off">{{.Models.Form.Command}}</textarea></label>
         </details>
-
-        <button class="button primary" type="submit">Add model</button>
+        <button class="button primary" type="submit" {{if not .Models.Folders}}disabled{{end}}>Add model</button>
+        {{if not .Models.Folders}}<p class="panel-footnote">No model folders found. Copy a complete folder, then select Refresh folders.</p>{{end}}
       </form>
       {{end}}
-      {{if and (not .Models.Configured) (not .Models.IsDictation)}}<p class="panel-footnote">Console was started without <code>--vllm-binary</code> or <code>--vllm-docker-image</code>. Models can be registered and will reach Veil, but none can be started from here.</p>{{end}}
-      <script type="application/json" data-model-catalog>{{.Models.CatalogJSON}}</script>
+      {{if not .Models.Configured}}<p class="panel-footnote">Runtime not configured. Set <code>--vllm-binary</code> or <code>--vllm-docker-image</code> when you start Console to enable model startup.</p>{{end}}
     </section>
 
     {{range .Models.Rows}}
@@ -156,6 +96,8 @@
           <code>{{.ID}}</code>
           {{if .IsSpeech}}
           <span class="model-default is-default">Dictation</span>
+          {{else if $.Models.IsEmbedding}}
+          <span class="model-default is-default">Embedding</span>
           {{else if .IsDefault}}
           <span class="model-default is-default">Default</span>
           {{else}}

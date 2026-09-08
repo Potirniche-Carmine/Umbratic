@@ -35,6 +35,16 @@ for command in caddy systemctl install useradd curl sha256sum; do
 done
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+case "$(uname -m)" in
+  x86_64) host_architecture=amd64 ;;
+  aarch64|arm64) host_architecture=arm64 ;;
+  *) echo "This host architecture is not supported." >&2; exit 1 ;;
+esac
+if [[ ! -f "$script_dir/ARCHITECTURE" ]] || [[ "$(cat "$script_dir/ARCHITECTURE")" != "$host_architecture" ]]; then
+  echo "Use a Console bundle built for $host_architecture." >&2
+  exit 1
+fi
+(cd "$script_dir" && sha256sum --check --status SHA256SUMS)
 work_dir="$(mktemp -d)"
 trap 'rm -rf -- "$work_dir"' EXIT
 

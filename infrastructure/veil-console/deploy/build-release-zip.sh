@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/../../.." && pwd)"
 version="dev"
+architecture="$(go env GOARCH)"
 output_dir="$repo_root/artifacts/releases"
 seats=""
 devices_per_user=2
@@ -15,6 +16,7 @@ positional=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --arch) architecture="${2:-}"; shift 2 ;;
     --version) version="${2:-}"; shift 2 ;;
     --output-dir) output_dir="${2:-}"; shift 2 ;;
     --seats) seats="${2:-}"; shift 2 ;;
@@ -41,6 +43,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+case "$architecture" in
+  amd64) rust_target=x86_64-unknown-linux-gnu; qdrant_target=x86_64-unknown-linux-musl; qdrant_sha256=9ec667456443463eee390e43cd36988af6b730c6db807b4e39f57c303d0264a3 ;;
+  arm64) rust_target=aarch64-unknown-linux-gnu; qdrant_target=aarch64-unknown-linux-musl; qdrant_sha256=8986afbbff9ac32d6e2dbe5cabec80565f613f777126096a461ba066573d3245 ;;
+  *) echo "--arch must be amd64 or arm64." >&2; exit 2 ;;
+esac
 
 if [[ ! "$version" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "The version is invalid." >&2
@@ -75,7 +83,7 @@ fi
 # any customer's, identical for every bundle we build, and so it belongs to the
 # release machine the same way the publishing credentials do: taken from the
 # environment, and otherwise from the one assignment for it in
-# ~/.umbratic/release.env. The file is read line by line and never sourced — it
+# ~/.umbratic/release.env. The file is read line by line and never sourced â€” it
 # holds credentials, not commands, and sourcing it would run whatever a stray
 # line happened to contain.
 read_release_env_value() {
@@ -92,7 +100,7 @@ read_release_env_value() {
     value="${value#"${value%%[![:space:]]*}"}"
     value="${value%"${value##*[![:space:]]}"}"
     # Quotes around a value are allowed and stripped, so the file reads the way
-    # it would in a shell — the same rule the desktop release's reader applies.
+    # it would in a shell â€” the same rule the desktop release's reader applies.
     if (( ${#value} >= 2 )) && [[ ( "$value" == \"*\" ) || ( "$value" == \'*\' ) ]]; then
       value="${value:1:${#value}-2}"
     fi
@@ -110,7 +118,7 @@ fi
 
 work_dir="$(mktemp -d)"
 trap 'rm -rf -- "$work_dir"' EXIT
-bundle_name="umbratic-veil-console-$version-linux-amd64"
+bundle_name="umbratic-veil-console-$version-linux-$architecture"
 bundle_dir="$work_dir/$bundle_name"
 mkdir -p "$bundle_dir" "$output_dir"
 
@@ -135,33 +143,33 @@ entitlement_public_key="$(printf '%s\n' "$entitlement_output" | sed -n 1p)"
 feed_key="$(printf '%s\n' "$entitlement_output" | sed -n 2p)"
 
 # The subscription key read above is the third baked-in value. It goes into the
-# veil binary and nowhere else — not into the bundle directory, not into
+# veil binary and nowhere else â€” not into the bundle directory, not into
 # SHA256SUMS, not into Console's environment, and never onto a log line.
 veil_ldflags="-X umbratic-veil/internal/entitlement.TrustedPublicKey=$entitlement_public_key -X umbratic-veil/internal/updatefeed.CustomerKey=$feed_key"
 if [[ -n "$search_key" ]]; then
   veil_ldflags+=" -X umbratic-veil/internal/websearch.SubscriptionKey=$search_key"
 fi
 
-(cd "$repo_root/infrastructure/veil" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+(cd "$repo_root/infrastructure/veil" && CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath \
   -ldflags "$veil_ldflags" \
   -o "$bundle_dir/veil" ./cmd/veil)
-(cd "$repo_root/infrastructure/veil-console" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+(cd "$repo_root/infrastructure/veil-console" && CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath \
   -ldflags "-X umbratic-veil-console/internal/entitlement.TrustedPublicKey=$entitlement_public_key" \
   -o "$bundle_dir/veil-console" ./cmd/veil-console)
 
 # The PDF extractor Console spawns for `.pdf` uploads. It is the same crate the
 # desktop already ships, built for the server target.
-(cd "$repo_root" && cargo build --locked --release --target x86_64-unknown-linux-gnu -p umbratic-pdf)
-install -m 0755 "$repo_root/target/x86_64-unknown-linux-gnu/release/umbratic-pdf" "$bundle_dir/umbratic-pdf"
+(cd "$repo_root" && cargo build --locked --release --target "$rust_target" -p umbratic-pdf)
+install -m 0755 "$repo_root/target/$rust_target/release/umbratic-pdf" "$bundle_dir/umbratic-pdf"
 
-# Qdrant is fetched here, at build time, and verified against a pinned digest —
+# Qdrant is fetched here, at build time, and verified against a pinned digest â€”
 # never downloaded by install.sh. That keeps an install reproducible, immune to
 # an upstream retag, and possible on a box with no route to GitHub.
 qdrant_version="1.19.0"
-qdrant_sha256="9ec667456443463eee390e43cd36988af6b730c6db807b4e39f57c303d0264a3"
+
 qdrant_archive="$work_dir/qdrant.tar.gz"
 curl --fail --location --silent --show-error --max-time 300 \
-  "https://github.com/qdrant/qdrant/releases/download/v${qdrant_version}/qdrant-x86_64-unknown-linux-musl.tar.gz" \
+  "https://github.com/qdrant/qdrant/releases/download/v${qdrant_version}/qdrant-${qdrant_target}.tar.gz" \
   -o "$qdrant_archive"
 if ! echo "$qdrant_sha256  $qdrant_archive" | sha256sum --check --status; then
   echo "The qdrant download does not match the pinned digest for ${qdrant_version}." >&2
@@ -173,6 +181,7 @@ install -m 0644 "$script_dir/qdrant-config.yaml.template" "$bundle_dir/qdrant-co
 install -m 0644 "$script_dir/qdrant.service.template" "$bundle_dir/qdrant.service.template"
 
 printf '%s\n' "$version" >"$bundle_dir/VERSION"
+printf '%s\n' "$architecture" >"$bundle_dir/ARCHITECTURE"
 install -m 0755 "$script_dir/bundle/install.sh" "$bundle_dir/install.sh"
 install -m 0755 "$script_dir/render-production-config.sh" "$bundle_dir/render-production-config.sh"
 install -m 0644 "$script_dir/veil-console.production.service.template" "$bundle_dir/veil-console.production.service.template"
@@ -180,6 +189,6 @@ install -m 0644 "$script_dir/Caddyfile.template" "$bundle_dir/Caddyfile.template
 install -m 0644 "$repo_root/infrastructure/veil-console/README.md" "$bundle_dir/README.md"
 
 (cd "$bundle_dir" && sha256sum veil veil-console umbratic-pdf qdrant entitlement.json install.sh \
-  qdrant-config.yaml.template qdrant.service.template VERSION >SHA256SUMS)
+  qdrant-config.yaml.template qdrant.service.template VERSION ARCHITECTURE >SHA256SUMS)
 (cd "$repo_root/infrastructure/veil-console" && go run ./cmd/bundle-zip "$bundle_dir" "$output_dir/$bundle_name.zip")
 printf '%s\n' "$output_dir/$bundle_name.zip"

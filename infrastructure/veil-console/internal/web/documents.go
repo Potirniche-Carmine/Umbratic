@@ -76,6 +76,13 @@ func (s *Server) documentsData(r *http.Request, errorMessage, noticeMessage stri
 	}
 	totalDocuments, totalChunks, _ := s.store.CorpusTotals(r.Context())
 	settings := s.corpus.Settings().WithDefaults()
+	models, _ := s.store.ManagedModels(r.Context())
+	choices := []config.EmbeddingChoice{}
+	for _, model := range models {
+		if config.NormalizeRole(model.Role) == config.RoleEmbedding {
+			choices = append(choices, config.EmbeddingChoice{Model: model.ID, Label: model.DisplayName})
+		}
+	}
 	view := documentsView{
 		All:       documents,
 		Documents: totalDocuments, Chunks: totalChunks,
@@ -85,7 +92,7 @@ func (s *Server) documentsData(r *http.Request, errorMessage, noticeMessage stri
 	return pageData{
 		Title: "Documents", CSRF: csrfCookie(r), RAG: settings, Corpus: view,
 		RouteChoices:     routeChoices(),
-		EmbeddingChoices: config.EmbeddingChoices,
+		EmbeddingChoices: choices,
 		Error:            errorMessage, Notice: noticeMessage,
 	}
 }
@@ -169,7 +176,7 @@ func (s *Server) documentsSettingsApply(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	previous := s.corpus.Settings().WithDefaults()
-	settings, err := parseRAGSettings(r, previous)
+	settings, err := s.parseRAGSettings(r, previous)
 	if err != nil {
 		s.renderStatus(w, "documents.html", http.StatusBadRequest, s.documentsData(r, err.Error(), ""))
 		return
@@ -181,7 +188,7 @@ func (s *Server) documentsSettingsApply(w http.ResponseWriter, r *http.Request) 
 		dimension, probeErr := rag.Probe(r.Context(), settings)
 		if probeErr != nil {
 			s.store.Audit(r.Context(), "documents.settings", "failure", time.Now())
-			s.renderStatus(w, "documents.html", http.StatusBadGateway, s.documentsData(r, probeErr.Error(), ""))
+			s.renderStatus(w, "documents.html", http.StatusBadGateway, s.documentsSettingsError(r, settings, "Embedding model check failed: "+probeErr.Error()+". Check its status on Models."))
 			return
 		}
 		settings.Dimension = dimension
@@ -256,15 +263,21 @@ func (s *Server) confirmDocumentsPassword(w http.ResponseWriter, r *http.Request
 // parseRAGSettings reads the only two retrieval decisions the page still
 // offers. Everything else is a constant, refilled by WithDefaults so a stored
 // row written when they were editable cannot pin an old value.
-func parseRAGSettings(r *http.Request, current config.RAG) (config.RAG, error) {
+func (s *Server) parseRAGSettings(r *http.Request, current config.RAG) (config.RAG, error) {
 	settings := current.WithDefaults()
 	settings.Enabled = checkboxValue(r.FormValue("rag_enabled"))
-	if model := strings.TrimSpace(r.FormValue("embedding_model")); model != "" {
-		if config.EmbeddingDimension(model) == 0 {
-			return settings, errors.New("choose one of the offered embedding models")
-		}
-		settings.EmbeddingModel = model
-		settings.Dimension = config.EmbeddingDimension(model)
+	id := strings.TrimSpace(r.FormValue("embedding_model"))
+	if id == "" && !settings.Enabled {
+		return settings, nil
+	}
+	model, ok, err := s.store.ManagedModel(r.Context(), id)
+	if err != nil || !ok || config.NormalizeRole(model.Role) != config.RoleEmbedding {
+		return settings, errors.New("add and start a local embedding model on Models first")
+	}
+	settings.EmbeddingModel = model.ID
+	settings.EmbeddingBaseURL = model.ProviderBaseURL()
+	if id != current.EmbeddingModel {
+		settings.Dimension = 0
 	}
 	return settings, nil
 }
@@ -276,4 +289,10 @@ func checkboxValue(value string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Server) documentsSettingsError(r *http.Request, settings config.RAG, message string) pageData {
+	data := s.documentsData(r, message, "")
+	data.RAG = settings
+	return data
 }

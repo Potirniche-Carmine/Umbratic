@@ -40,7 +40,8 @@ const (
 	RoleChat = "chat"
 	// RoleSpeech is the transcription runtime that backs dictation. Veil takes
 	// one speech endpoint, so at most one model may hold this role.
-	RoleSpeech = "speech"
+	RoleSpeech    = "speech"
+	RoleEmbedding = "embedding"
 )
 
 // IsSpeech reports whether this model backs dictation rather than chat.
@@ -49,6 +50,9 @@ func (m ManagedModel) IsSpeech() bool { return NormalizeRole(m.Role) == RoleSpee
 // NormalizeRole maps an empty or unknown role onto chat. The value arrives from
 // a form, and a typo must not silently promote a model into the speech slot.
 func NormalizeRole(value string) string {
+	if strings.TrimSpace(value) == RoleEmbedding {
+		return RoleEmbedding
+	}
 	if strings.TrimSpace(value) == RoleSpeech {
 		return RoleSpeech
 	}

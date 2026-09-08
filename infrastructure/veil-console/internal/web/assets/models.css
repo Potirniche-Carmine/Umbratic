@@ -526,3 +526,22 @@
   border-top: 0;
   margin-top: 0;
 }
+
+.model-library p { color: var(--muted); font-size: .85rem; }
+.model-library-body > code { display: block; overflow-wrap: anywhere; padding: .8rem; background: var(--bg); border-radius: 8px; font-size: .8rem; }
+.model-library-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+.model-library-actions .button { min-width: 8rem; }
+.model-log-tail { grid-column: 1 / -1; }
+.model-form .field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 40rem) { .model-form .field-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.model-import { border: 1px dashed var(--line-strong); border-radius: 12px; padding: 1rem; margin: 1rem 0; text-align: center; }
+.model-import.is-dragging { border-color: var(--blue); background: var(--control); }
+.model-import p { margin: 0 0 .6rem; }
+.model-import progress { width: 100%; margin-top: .8rem; accent-color: var(--blue); }
+.model-import .import-status { min-height: 2.6em; margin: .8rem 0 0; }
+
+.model-library { display: block; }
+.model-library-body > p { margin: .7rem 0; }
+
+.model-library-body { padding: 0 clamp(1.2rem, 3.5vw, 1.65rem) 1.65rem; }
