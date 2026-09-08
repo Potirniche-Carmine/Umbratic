@@ -145,7 +145,7 @@
   "allowedCargoProcMacroPackages": [
     "defmt-macros@1.1.1",
     "displaydoc@0.2.6",
-    "futures-macro@0.3.33",
+    "futures-macro@0.3.34",
     "jiff-static@0.2.35",
     "phf_macros@0.14.0",
     "rustversion@1.0.23",
