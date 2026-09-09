@@ -260,6 +260,7 @@ func TestModelsEnvJSONMatchesVeilsContract(t *testing.T) {
 	}
 
 	reasoning := validModel()
+	reasoning.ReasoningEfforts = "off,on"
 	plain := ManagedModel{
 		ID: "small", DisplayName: "Small",
 		Command: "serve Qwen/Qwen3-4B --port 8002 --served-model-name small --max-model-len 32768",
@@ -286,11 +287,11 @@ func TestModelsEnvJSONMatchesVeilsContract(t *testing.T) {
 	// Console does not guess whether a model thinks: the chat-template kwarg
 	// that controls it is named differently per family, so the administrator
 	// sets it in the command and the client may still override per request.
-	if entries[0]["reasoning"] != true || entries[1]["reasoning"] != true {
+	if entries[0]["reasoning"] != true || entries[1]["reasoning"] != false {
 		t.Fatalf("managed models leave the thinking choice to the command and the client: %#v", entries)
 	}
 	// Exactly the five keys Veil's strict parser accepts.
-	if len(first) != 5 {
+	if len(first) != 6 {
 		t.Fatalf("VEIL_MODELS entries carry exactly the contract keys: %#v", first)
 	}
 }
@@ -306,8 +307,8 @@ func TestDefaultCommandIsValidForANewModel(t *testing.T) {
 	if model.Port() != 8003 {
 		t.Fatalf("the suggested port must reach the command: %d", model.Port())
 	}
-	if !strings.Contains(model.Command, "\n--kv-cache-dtype fp8") {
-		t.Fatalf("fp8 is the default 8-bit KV cache: %q", model.Command)
+	if strings.Contains(model.Command, "--kv-cache-dtype") || strings.Contains(model.Command, "--gpu-memory-utilization") {
+		t.Fatalf("new models must leave precision and allocation to the runtime profile: %q", model.Command)
 	}
 }
 

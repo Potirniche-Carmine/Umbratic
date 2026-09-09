@@ -14,6 +14,7 @@ test("company enrollment stores only the encrypted-device input and renews opaqu
       stored = value;
       return value;
     },
+    readCompanyCertificate() { return stored; },
     readCompanyDeviceCredential() {
       return stored;
     },

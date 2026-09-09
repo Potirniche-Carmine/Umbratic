@@ -27,6 +27,12 @@ type futureHarnessFixture struct {
 
 func TestFutureHarnessChatRequestsAllSucceed(t *testing.T) {
 	fixtures := []futureHarnessFixture{
+		{name: "custom reasoning level", body: `{"input":"hello","thinking":"ultra"}`, check: func(t *testing.T, input ChatInput) {
+			if input.Thinking != "ultra" {
+				t.Fatal("bounded custom reasoning must reach model policy")
+			}
+		}},
+
 		{
 			name: "unknown tool schema keywords",
 			// oneOf, $defs, pattern, format, and a 6-deep nesting are all things

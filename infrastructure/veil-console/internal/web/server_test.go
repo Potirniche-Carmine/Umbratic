@@ -237,48 +237,21 @@ func TestSetupLoginAndAuthenticatedPage(t *testing.T) {
 			sessionCSRF = cookie.Value
 		}
 	}
-	settingsForm := url.Values{
-		"csrf":                             {sessionCSRF},
-		"provider_base_url":                {"http://127.0.0.1:8000/v1"},
-		"model":                            {"local-model"},
-		"context_length":                   {"65536"},
-		"max_output_tokens":                {"8192"},
-		"temperature":                      {"0.2"},
-		"top_p":                            {"0.95"},
-		"reasoning_effort":                 {"none"},
-		"parallel_tool_calls":              {"true"},
-		"max_concurrent_requests":          {"32"},
-		"max_concurrent_requests_per_user": {"4"},
-		"queue_timeout":                    {"30s"},
-		"model_timeout":                    {"1m"},
-		"request_timeout":                  {"1m15s"},
-		"max_body_bytes":                   {"67108864"},
-		"password":                         {"wrong password"},
-	}
-	for _, path := range []string{"/settings/test", "/settings/apply"} {
-		settingsRequest := formRequest(http.MethodPost, path, settingsForm, cookies...)
-		settingsResponse := httptest.NewRecorder()
-		handler.ServeHTTP(settingsResponse, settingsRequest)
-		if settingsResponse.Code != http.StatusUnauthorized {
-			t.Fatalf("%s wrong confirmation password returned %d", path, settingsResponse.Code)
+	// Routine controls require the authenticated session and CSRF, with no
+	// password reconfirmation and no session rotation between actions.
+	for _, path := range []string{"/settings/test", "/settings/apply", "/veil/start"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, formRequest(http.MethodPost, path, url.Values{"csrf": {sessionCSRF}}, cookies...))
+		if response.Code == http.StatusUnauthorized || strings.Contains(response.Body.String(), "Owner password") {
+			t.Fatalf("%s required password confirmation: %d", path, response.Code)
 		}
-		if body := settingsResponse.Body.String(); !strings.Contains(body, "Owner password is incorrect.") || !strings.Contains(body, "<h1>Settings</h1>") {
-			t.Fatalf("%s password error did not render in the app: %s", path, body)
-		} else if strings.Contains(body, "wrong password") {
-			t.Fatalf("%s echoed the submitted password", path)
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, formRequest(http.MethodPost, path, url.Values{"csrf": {"invalid"}}, cookies...))
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("%s accepted invalid CSRF: %d", path, response.Code)
 		}
 	}
 
-	startForm := url.Values{"csrf": {sessionCSRF}, "password": {"wrong password"}}
-	startRequest := formRequest(http.MethodPost, "/veil/start", startForm, cookies...)
-	startResponse := httptest.NewRecorder()
-	handler.ServeHTTP(startResponse, startRequest)
-	if startResponse.Code != http.StatusUnauthorized {
-		t.Fatalf("start accepted a wrong owner password: %d", startResponse.Code)
-	}
-	if body := startResponse.Body.String(); !strings.Contains(body, "Owner password is incorrect.") || !strings.Contains(body, "<h1>Veil</h1>") {
-		t.Fatalf("start password error did not render in the app: %s", body)
-	}
 }
 
 func TestWrongLoginUsesFloatingErrorAndRequiresRetryDelay(t *testing.T) {
@@ -338,8 +311,8 @@ func TestDashboardHidesStartWhenVeilIsRunning(t *testing.T) {
 	if !strings.Contains(body, `action="/veil/restart"`) {
 		t.Fatal("dashboard did not show Restart while Veil was running")
 	}
-	if !strings.Contains(body, `name="password"`) {
-		t.Fatal("Restart did not require the owner password")
+	if strings.Contains(body, `name="password"`) {
+		t.Fatal("Restart must not ask for the owner password again")
 	}
 	if !strings.Contains(body, "Connect at") || !strings.Contains(body, "http://127.0.0.1:8080") {
 		t.Fatal("dashboard did not show the Veil connection address")
@@ -353,8 +326,8 @@ func TestDashboardHidesStartWhenVeilIsRunning(t *testing.T) {
 	if strings.Contains(body, `action="/veil/restart"`) {
 		t.Fatal("dashboard showed Restart while Veil was stopped")
 	}
-	if !strings.Contains(body, `action="/veil/start"`) || !strings.Contains(body, `name="password"`) {
-		t.Fatal("stopped dashboard did not show password-protected Start")
+	if !strings.Contains(body, `action="/veil/start"`) || strings.Contains(body, `name="password"`) {
+		t.Fatal("stopped dashboard must show Start without another password")
 	}
 }
 

@@ -87,6 +87,20 @@ func importModelFolder(reader *multipart.Reader, directory string) (string, erro
 	if _, err := os.Lstat(target); !os.IsNotExist(err) {
 		return "", errors.New("A folder with this name already exists. Rename the new folder before importing it.")
 	}
+	if info, err := os.Stat(directory); err == nil && info.Mode()&os.ModeSetgid != 0 {
+		if err := filepath.Walk(filepath.Join(staging, folder), func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			mode := os.FileMode(0660)
+			if info.IsDir() {
+				mode = os.ModeSetgid | 0770
+			}
+			return os.Chmod(path, mode)
+		}); err != nil {
+			return "", errors.New("Model folder permissions could not be set.")
+		}
+	}
 	if err := os.Rename(filepath.Join(staging, folder), target); err != nil {
 		return "", errors.New("The model folder could not be saved.")
 	}

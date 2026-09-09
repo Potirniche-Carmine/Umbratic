@@ -19,10 +19,12 @@ import (
 var dockerImageReference = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
 
 type Startup struct {
-	Listen     string
-	Port       int
-	StateDir   string
-	VeilBinary string
+	ModelsDir   string
+	CaddyBinary string
+	Listen      string
+	Port        int
+	StateDir    string
+	VeilBinary  string
 	// VLLMBinary is the vLLM executable Console launches managed models with.
 	// Optional: without it the Models page renders read-only, because there is
 	// nothing to start.
@@ -125,6 +127,9 @@ func ValidateStartup(cfg *Startup) error {
 	}
 	cfg.VeilBinary = filepath.Clean(binary)
 	if err := validateOptionalBinary(&cfg.VLLMBinary, "vLLM binary"); err != nil {
+		return err
+	}
+	if err := validateOptionalBinary(&cfg.CaddyBinary, "Caddy binary"); err != nil {
 		return err
 	}
 	cfg.VLLMDockerImage = strings.TrimSpace(cfg.VLLMDockerImage)
@@ -234,7 +239,7 @@ func (v Veil) Validate() error {
 	if parsed.User != nil || parsed.Fragment != "" {
 		return errors.New("provider URL must not contain credentials or a fragment")
 	}
-	if strings.TrimSpace(v.Model) == "" || len(v.Model) > 256 || strings.ContainsAny(v.Model, "\r\n\x00") {
+	if len(v.Model) > 256 || strings.ContainsAny(v.Model, "\r\n\x00") {
 		return errors.New("model is required and must be 256 characters or fewer")
 	}
 	if v.ContextLength < 0 || v.ContextLength > 1_048_576 {

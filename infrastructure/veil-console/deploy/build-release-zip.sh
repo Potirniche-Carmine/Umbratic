@@ -5,17 +5,29 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/../../.." && pwd)"
 version="dev"
 architecture="$(go env GOARCH)"
+target_os="$(go env GOOS)"
+profile=""
+dependency_dir=""
 output_dir="$repo_root/artifacts/releases"
 seats=""
 devices_per_user=2
-signing_key_file="${UMBRATIC_ENTITLEMENT_SIGNING_KEY_FILE:-}"
-feed_key_file="${UMBRATIC_FEED_MASTER_KEY_FILE:-}"
+signing_key_file="$HOME/umbratic-release/umbratic-entitlement-signing.key"
+feed_key_file="$HOME/umbratic-release/umbratic-feed-master.key"
 searches_per_month=0
 org_uid=""
 positional=0
+customer=customer
+console_port=8177
+veil_port=8080
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --console-port) console_port="${2:-}"; shift 2 ;;
+    --veil-port) veil_port="${2:-}"; shift 2 ;;
+    --customer) customer="${2:-}"; shift 2 ;;
+    --os) target_os="${2:-}"; shift 2 ;;
+    --profile) profile="${2:-}"; shift 2 ;;
+    --dependency-dir) dependency_dir="${2:-}"; shift 2 ;;
     --arch) architecture="${2:-}"; shift 2 ;;
     --version) version="${2:-}"; shift 2 ;;
     --output-dir) output_dir="${2:-}"; shift 2 ;;
@@ -44,12 +56,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$architecture" in
-  amd64) rust_target=x86_64-unknown-linux-gnu; qdrant_target=x86_64-unknown-linux-musl; qdrant_sha256=9ec667456443463eee390e43cd36988af6b730c6db807b4e39f57c303d0264a3 ;;
-  arm64) rust_target=aarch64-unknown-linux-gnu; qdrant_target=aarch64-unknown-linux-musl; qdrant_sha256=8986afbbff9ac32d6e2dbe5cabec80565f613f777126096a461ba066573d3245 ;;
-  *) echo "--arch must be amd64 or arm64." >&2; exit 2 ;;
+case "$target_os-$architecture" in
+  linux-amd64) rust_target=x86_64-unknown-linux-gnu ;;
+  linux-arm64) rust_target=aarch64-unknown-linux-gnu ;;
+  darwin-arm64) rust_target=aarch64-apple-darwin ;;
+  *) echo "Target must be linux-amd64, linux-arm64, or darwin-arm64." >&2; exit 2 ;;
 esac
+if [[ -z "$profile" ]]; then
+  if [[ "$target_os" == darwin ]]; then profile=metal; else profile=cuda; fi
+fi
+if [[ -z "$dependency_dir" ]]; then dependency_dir="$HOME/umbratic-release/$profile-kit"; fi
+if [[ ! -f "$dependency_dir/manifest.json" ]]; then
+  echo "Dependency kit missing: $dependency_dir/manifest.json. See docs/guides/release-server.md." >&2
+  exit 2
+fi
 
+if [[ ! "$customer" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "--customer must be a filename-safe customer label." >&2; exit 2
+fi
 if [[ ! "$version" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "The version is invalid." >&2
   exit 2
@@ -62,12 +86,8 @@ if [[ ! "$devices_per_user" =~ ^[0-9]+$ ]] || (( devices_per_user < 1 || devices
   echo "--devices-per-user must be between 1 and 32." >&2
   exit 2
 fi
-if [[ -z "$signing_key_file" || ! -f "$signing_key_file" ]]; then
-  echo "--signing-key-file must name the protected Ed25519 signing key file." >&2
-  exit 2
-fi
 if [[ -z "$feed_key_file" || ! -f "$feed_key_file" ]]; then
-  echo "--feed-key-file must name the protected update-feed master key file." >&2
+  echo "Feed master key missing: $feed_key_file. Put your existing master key there or use --feed-key-file." >&2
   exit 2
 fi
 if [[ ! "$searches_per_month" =~ ^[0-9]+$ ]] || (( searches_per_month > 100000000 )); then
@@ -109,18 +129,20 @@ read_release_env_value() {
   done <"$file"
 }
 
-search_key="${UMBRATIC_BRAVE_SEARCH_API_KEY:-}"
-if [[ -z "$search_key" ]]; then
-  search_key="$(read_release_env_value UMBRATIC_BRAVE_SEARCH_API_KEY)"
+search_key=""
+if (( searches_per_month > 0 )); then
+  search_key="${UMBRATIC_BRAVE_SEARCH_API_KEY:-}"
+  if [[ -z "$search_key" ]]; then search_key="$(read_release_env_value UMBRATIC_BRAVE_SEARCH_API_KEY)"; fi
+  if [[ -z "$search_key" ]]; then echo "Purchased search requires the release-machine search credential." >&2; exit 2; fi
 fi
 # No key anywhere is not a failure: a customer who did not buy web search gets a
 # bundle whose veil holds no subscription key, which is a complete product.
 
 work_dir="$(mktemp -d)"
 trap 'rm -rf -- "$work_dir"' EXIT
-bundle_name="umbratic-veil-console-$version-linux-$architecture"
+bundle_name="umbratic-veil-$version-$customer-$target_os-$architecture"
 bundle_dir="$work_dir/$bundle_name"
-mkdir -p "$bundle_dir" "$output_dir"
+mkdir -p "$bundle_dir/bin" "$output_dir"
 
 # Two lines: the entitlement public key, then this organization's update-feed
 # key. Both are baked into the binaries below and neither is written to disk.
@@ -150,45 +172,31 @@ if [[ -n "$search_key" ]]; then
   veil_ldflags+=" -X umbratic-veil/internal/websearch.SubscriptionKey=$search_key"
 fi
 
-(cd "$repo_root/infrastructure/veil" && CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath \
+(cd "$repo_root/infrastructure/veil" && CGO_ENABLED=0 GOOS="$target_os" GOARCH="$architecture" go build -trimpath \
   -ldflags "$veil_ldflags" \
-  -o "$bundle_dir/veil" ./cmd/veil)
-(cd "$repo_root/infrastructure/veil-console" && CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go build -trimpath \
+  -o "$bundle_dir/bin/veil" ./cmd/veil)
+(cd "$repo_root/infrastructure/veil-console" && CGO_ENABLED=0 GOOS="$target_os" GOARCH="$architecture" go build -trimpath \
   -ldflags "-X umbratic-veil-console/internal/entitlement.TrustedPublicKey=$entitlement_public_key" \
-  -o "$bundle_dir/veil-console" ./cmd/veil-console)
+  -o "$bundle_dir/bin/veil-console" ./cmd/veil-console)
 
 # The PDF extractor Console spawns for `.pdf` uploads. It is the same crate the
 # desktop already ships, built for the server target.
 (cd "$repo_root" && cargo build --locked --release --target "$rust_target" -p umbratic-pdf)
-install -m 0755 "$repo_root/target/$rust_target/release/umbratic-pdf" "$bundle_dir/umbratic-pdf"
+install -m 0755 "$repo_root/target/$rust_target/release/umbratic-pdf" "$bundle_dir/bin/umbratic-pdf"
 
-# Qdrant is fetched here, at build time, and verified against a pinned digest â€”
-# never downloaded by install.sh. That keeps an install reproducible, immune to
-# an upstream retag, and possible on a box with no route to GitHub.
-qdrant_version="1.19.0"
-
-qdrant_archive="$work_dir/qdrant.tar.gz"
-curl --fail --location --silent --show-error --max-time 300 \
-  "https://github.com/qdrant/qdrant/releases/download/v${qdrant_version}/qdrant-${qdrant_target}.tar.gz" \
-  -o "$qdrant_archive"
-if ! echo "$qdrant_sha256  $qdrant_archive" | sha256sum --check --status; then
-  echo "The qdrant download does not match the pinned digest for ${qdrant_version}." >&2
-  exit 1
-fi
-tar -xzf "$qdrant_archive" -C "$work_dir" qdrant
-install -m 0755 "$work_dir/qdrant" "$bundle_dir/qdrant"
-install -m 0644 "$script_dir/qdrant-config.yaml.template" "$bundle_dir/qdrant-config.yaml.template"
-install -m 0644 "$script_dir/qdrant.service.template" "$bundle_dir/qdrant.service.template"
-
-printf '%s\n' "$version" >"$bundle_dir/VERSION"
-printf '%s\n' "$architecture" >"$bundle_dir/ARCHITECTURE"
-install -m 0755 "$script_dir/bundle/install.sh" "$bundle_dir/install.sh"
-install -m 0755 "$script_dir/render-production-config.sh" "$bundle_dir/render-production-config.sh"
-install -m 0644 "$script_dir/veil-console.production.service.template" "$bundle_dir/veil-console.production.service.template"
-install -m 0644 "$script_dir/Caddyfile.template" "$bundle_dir/Caddyfile.template"
-install -m 0644 "$repo_root/infrastructure/veil-console/README.md" "$bundle_dir/README.md"
-
-(cd "$bundle_dir" && sha256sum veil veil-console umbratic-pdf qdrant entitlement.json install.sh \
-  qdrant-config.yaml.template qdrant.service.template VERSION ARCHITECTURE >SHA256SUMS)
+# Dependency resolution and binary review happen on the release machine.
+# Customer installs use this exact offline kit; no moving package index is used.
+cp -R "$dependency_dir" "$bundle_dir/dependencies"
+cp "$dependency_dir/manifest.json" "$bundle_dir/dependencies.json"
+rm "$bundle_dir/dependencies/manifest.json"
+(cd "$repo_root/infrastructure/veil-console" && CGO_ENABLED=0 GOOS="$target_os" GOARCH="$architecture" go build -trimpath \
+  -ldflags "-X umbratic-veil-console/internal/entitlement.TrustedPublicKey=$entitlement_public_key" \
+  -o "$bundle_dir/bin/deploy" ./cmd/deploy)
+install -m 0755 "$script_dir/bundle/deploy.sh" "$bundle_dir/deploy.sh"
+install -m 0644 "$repo_root/docs/guides/deploy-customer.md" "$bundle_dir/README.md"
+(cd "$repo_root/infrastructure/veil-console" && go run ./cmd/bundle-manifest \
+  --directory "$bundle_dir" --version "$version" --os "$target_os" --arch "$architecture" \
+  --profile "$profile" \
+  --console-port "$console_port" --veil-port "$veil_port")
 (cd "$repo_root/infrastructure/veil-console" && go run ./cmd/bundle-zip "$bundle_dir" "$output_dir/$bundle_name.zip")
 printf '%s\n' "$output_dir/$bundle_name.zip"

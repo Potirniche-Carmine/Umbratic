@@ -1,3 +1,4 @@
+import { certificateTransport, companyTLS, enrollmentDetails } from "./companyTrust";
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 
@@ -82,7 +83,9 @@ export async function enrollCompanyDevice(
 ): Promise<CompanyDeviceCredential> {
   sessionDisconnected = false;
   const baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
-  const enrollmentCode = input.enrollmentCode.trim();
+  const details = enrollmentDetails(baseUrl, input.enrollmentCode.trim());
+  const enrollmentCode = details.code;
+  transport = { ...transport, mtls: certificateTransport(details.ca, transport.mtls) };
   if (!enrollmentCode.startsWith("umbr_") || enrollmentCode.length > 512) {
     throw new Error("Enter a valid Enrollment code.");
   }
@@ -106,6 +109,7 @@ export async function enrollCompanyDevice(
     throw new Error("Veil returned invalid enrollment details.");
   }
   const credential: CompanyDeviceCredential = {
+    caPem: details.ca,
     baseUrl,
     orgUid,
     orgName,
@@ -132,6 +136,7 @@ export async function ensureCompanySession(transport: TransportOptions = {}): Pr
   if (!credential) {
     throw new Error("This device is not enrolled with a company server.");
   }
+  transport = { ...transport, mtls: companyTLS(credential.baseUrl, transport.mtls) };
   const challenge = await post(credential.baseUrl, "/api/session/challenge", {
     device_uid: credential.deviceUid,
   }, transport);

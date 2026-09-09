@@ -78,15 +78,33 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 		// think and then tell it how hard to think — here, not in the body
 		// builder, whose guard only skips the "none" effort.
 		var thinking *bool
+		if s.cfg.ModelSelectionEnabled {
+			entry, _ := s.cfg.ModelEntryByID(selectedModel)
+			allowed := false
+			for _, effort := range entry.ReasoningEfforts {
+				allowed = allowed || effort == input.Thinking
+			}
+			if !allowed {
+				input.Thinking = ""
+			}
+		}
 		switch input.Thinking {
 		case "on":
 			forced := true
 			thinking = &forced
+			profile.ReasoningEffort = model.ReasoningOn
+			profile.ThinkingTokenBudget = nil
 		case "off":
 			forced := false
 			thinking = &forced
 			profile.ReasoningEffort = model.ReasoningNone
 			profile.ThinkingTokenBudget = nil
+		default:
+			if input.Thinking != "" && s.cfg.ModelSelectionEnabled {
+				forced := true
+				thinking = &forced
+				profile.ReasoningEffort = model.ReasoningEffort(input.Thinking)
+			}
 		}
 		req := model.ChatRequest{
 			Model:               selectedModel,

@@ -1,3 +1,4 @@
+import { companyTLS } from "./companyTrust";
 import type { LocalModelInfo } from "../shared/desktopApi";
 import { companyEndpoint } from "./config";
 import { currentCompanySessionToken } from "./companyIdentity";
@@ -41,7 +42,7 @@ export function endpointProvider(): typeof companyEndpoint & {
     baseUrl: normalizeBaseUrl(localConnection?.baseUrl ?? settings.baseUrl),
     apiKey: localConnection?.authToken ?? currentCompanySessionToken(),
     headers: settings.mode === "local" ? {} : endpointHeaders(settings.headers),
-    mtls: settings.mode === "server" ? provider.mtls : undefined,
+    mtls: settings.mode === "server" ? companyTLS(settings.baseUrl, provider.mtls) : undefined,
   };
 }
 
@@ -107,13 +108,13 @@ export function endpointRequestHeaders(provider: ReturnType<typeof endpointProvi
   return headers;
 }
 
-export function companyTransportOptions(): {
+export function companyTransportOptions(baseUrl?: string): {
   headers: Record<string, string>;
   mtls: typeof companyEndpoint["mtls"];
 } {
   const settings = readModelEndpointSettings();
   return {
     headers: endpointHeaders(settings.headers),
-    mtls: companyEndpoint.mtls,
+    mtls: companyTLS(baseUrl ?? settings.baseUrl, companyEndpoint.mtls),
   };
 }

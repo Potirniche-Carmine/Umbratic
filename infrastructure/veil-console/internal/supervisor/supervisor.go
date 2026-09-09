@@ -609,3 +609,31 @@ func (s Status) String() string {
 	}
 	return "Stopped"
 }
+
+// RefreshHealth keeps Overview accurate when a model finishes loading after
+// Veil starts. Process liveness and configured model readiness are separate.
+func (s *Supervisor) RefreshHealth(ctx context.Context, token string) {
+	s.stateMu.RLock()
+	cmd := s.cmd
+	configured := s.lastConfig != nil && s.lastConfig.Model != ""
+	running := s.status.Running
+	s.stateMu.RUnlock()
+	if !running {
+		return
+	}
+	healthy := configured && healthProbe(ctx, s.veilAddress, token)
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.cmd != cmd {
+		return
+	}
+	s.status.Healthy = healthy
+	switch {
+	case !configured:
+		s.status.Message = "Running — no chat model configured"
+	case healthy:
+		s.status.Message = "Healthy"
+	default:
+		s.status.Message = "Running — model runtime unavailable"
+	}
+}

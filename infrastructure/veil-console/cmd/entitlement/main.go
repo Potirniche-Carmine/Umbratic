@@ -27,7 +27,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: entitlement --output FILE --private-key-file FILE --feed-key-file FILE --seats N [--devices-per-user N] [--searches-per-month N] [--org-uid UID]")
 		os.Exit(2)
 	}
-	key, err := os.ReadFile(privateKeyPath)
+	masterKey, err := os.ReadFile(feedKeyPath)
 	if err != nil {
 		fail(err)
 	}
@@ -37,18 +37,23 @@ func main() {
 			fail(err)
 		}
 	}
+	// Derive from the existing master before creating any release input.
+	feedKey, err := entitlement.DeriveFeedKey(string(masterKey), orgUID)
+	if err != nil {
+		fail(err)
+	}
+	key, created, err := signingKey(privateKeyPath)
+	if err != nil {
+		fail(err)
+	}
+	if created {
+		fmt.Fprintln(os.Stderr, "Created release signing key:", privateKeyPath)
+	}
+
 	document, publicKey, err := entitlement.Sign(entitlement.Payload{
 		Version: 1, OrgUID: orgUID, MaxAuthorizedUsers: seats, MaxDevicesPerUser: devices,
 		MaxSearchesPerMonth: searchesPerMonth,
 	}, strings.TrimSpace(string(key)))
-	if err != nil {
-		fail(err)
-	}
-	masterKey, err := os.ReadFile(feedKeyPath)
-	if err != nil {
-		fail(err)
-	}
-	feedKey, err := entitlement.DeriveFeedKey(string(masterKey), orgUID)
 	if err != nil {
 		fail(err)
 	}

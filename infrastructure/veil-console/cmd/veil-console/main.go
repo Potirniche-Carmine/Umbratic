@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,6 +24,8 @@ import (
 
 func main() {
 	startup := config.Startup{}
+	managed := flag.Bool("managed", false, "defer setup credentials to the deploying administrator")
+	issue := flag.Bool("issue-setup-code", false, "request a setup code from the private bootstrap socket")
 	flag.StringVar(&startup.Listen, "listen", "127.0.0.1", "loopback listen address")
 	flag.IntVar(&startup.Port, "port", 8177, "loopback listen port")
 	flag.StringVar(&startup.StateDir, "state-dir", "/var/lib/veil-console", "Console state directory")
@@ -34,9 +35,17 @@ func main() {
 	flag.StringVar(&startup.VeilAddress, "veil-address", "127.0.0.1:8080", "fixed loopback Veil address")
 	flag.StringVar(&startup.EntitlementPath, "entitlement", "", "signed customer entitlement path")
 	flag.StringVar(&startup.TrustedOrigin, "trusted-origin", "", "exact HTTPS reverse-proxy origin")
+	flag.StringVar(&startup.ModelsDir, "models-dir", "", "shared model directory")
+	flag.StringVar(&startup.CaddyBinary, "caddy-binary", "", "fixed Caddy executable for employee HTTPS")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		log.Fatal("positional arguments are not accepted")
+	}
+	if *issue {
+		if err := requestSetupCode(startup.StateDir); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 	if err := config.ValidateStartup(&startup); err != nil {
 		log.Fatal(err)
@@ -59,12 +68,19 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if !setup {
+	if *managed {
+		listener, err := serveBootstrap(store, startup.StateDir)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer listener.Close()
+	}
+	if !setup && !*managed {
 		code, err := store.NewSetup(context.Background(), time.Now())
 		if err != nil {
 			log.Fatal(err)
 		}
-		announceSetup(startup, code)
+		fmt.Printf("Setup URL: http://%s:%d/setup\nSetup code: %s\n", startup.Listen, startup.Port, code)
 	}
 	process := supervisor.New(startup.VeilBinary, startup.VeilAddress)
 	if startup.EntitlementPath != "" {
@@ -101,6 +117,7 @@ func main() {
 	}
 	shutdownSignal, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignal()
+	go console.StartConnection(shutdownSignal)
 	go console.StartLastKnownGood(shutdownSignal)
 	go corpus.Run(shutdownSignal)
 	go func() {
@@ -134,21 +151,4 @@ func readQdrantAPIKey(stateDir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(payload))
-}
-
-func announceSetup(startup config.Startup, code string) {
-	if os.Getenv("INVOCATION_ID") == "" {
-		fmt.Printf("Setup URL: http://%s/setup\nSetup code: %s\n", net.JoinHostPort(startup.Listen, fmt.Sprint(startup.Port)), code)
-		return
-	}
-	runtimeDir := "/run/veil-console"
-	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
-		log.Fatal("create setup-code runtime directory: ", err)
-	}
-	path := filepath.Join(runtimeDir, "setup-code")
-	if err := os.WriteFile(path, []byte(code+"\n"), 0o600); err != nil {
-		log.Fatal("write setup-code file: ", err)
-	}
-	time.AfterFunc(15*time.Minute, func() { _ = os.Remove(path) })
-	log.Printf("read the one-time setup code from %s", path)
 }

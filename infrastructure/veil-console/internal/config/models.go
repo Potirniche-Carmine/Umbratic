@@ -23,15 +23,18 @@ import (
 type ManagedModel struct {
 	// ID is the served model name — what a client sends as `model`, what
 	// `/v1/models` reports, and what `--served-model-name` must say.
-	ID          string
-	DisplayName string
-	Command     string
+	ID               string
+	DisplayName      string
+	Command          string
+	ReasoningEfforts string
+	SamplingJSON     string
 	// Role decides which Veil setting this process feeds. Both roles are the
 	// same kind of child — one vLLM serving one model on one loopback port —
 	// but a transcription runtime answers /v1/audio/transcriptions rather than
 	// /v1/chat/completions, so putting it in the chat registry would publish a
 	// model that fails every request a client could send it.
-	Role string
+	Role    string
+	Enabled bool
 }
 
 const (
@@ -92,8 +95,7 @@ var managedModelID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 // tokenizer a newline is whitespace, exactly like a space.
 const shellMetacharacters = ";&|<>$`"
 
-// DefaultCommand is what a new model's command box is prefilled with. fp8 is
-// vLLM's 8-bit KV cache and the default here; there is no literal "q8".
+// DefaultCommand leaves precision and cache dtype to the selected runtime.
 func DefaultCommand(modelPath, servedID string, port int) string {
 	if strings.TrimSpace(modelPath) == "" {
 		modelPath = "org/model"
@@ -106,9 +108,7 @@ func DefaultCommand(modelPath, servedID string, port int) string {
 		"--host", "127.0.0.1",
 		"--port", strconv.Itoa(port),
 		"--served-model-name", servedID,
-		"--max-model-len", "32768",
-		"--gpu-memory-utilization", "0.45",
-		"--kv-cache-dtype", "fp8",
+		"--max-model-len", "16384",
 	})
 }
 
@@ -301,6 +301,22 @@ func clampToken(token string) string {
 }
 
 func (m ManagedModel) Validate() error {
+	if _, err := m.Sampling(); err != nil {
+		return err
+	}
+	if m.SamplingJSON != "" && NormalizeRole(m.Role) != RoleChat {
+		return errors.New("sampling settings require a chat model")
+	}
+	if len(m.Efforts()) > 16 {
+		return errors.New("choose at most 16 reasoning options")
+	}
+	seen := map[string]bool{}
+	for _, effort := range m.Efforts() {
+		if !effortName.MatchString(effort) || effort == "none" || seen[effort] || NormalizeRole(m.Role) != RoleChat {
+			return errors.New("choose distinct reasoning options for a chat model")
+		}
+		seen[effort] = true
+	}
 	if !managedModelID.MatchString(m.ID) {
 		return errors.New("served id must start with a letter or digit and use only letters, digits, dots, dashes, or underscores")
 	}
@@ -372,11 +388,13 @@ func (m ManagedModel) ProviderBaseURL() string {
 // declared here rather than shared through a package because Console and Veil
 // are released separately: the contract is the JSON, not a Go type.
 type modelEnvEntry struct {
-	ID              string `json:"id"`
-	ProviderBaseURL string `json:"provider_base_url"`
-	Display         string `json:"display"`
-	Reasoning       bool   `json:"reasoning"`
-	ContextLength   int    `json:"context_length"`
+	ID               string            `json:"id"`
+	ProviderBaseURL  string            `json:"provider_base_url"`
+	Display          string            `json:"display"`
+	Reasoning        bool              `json:"reasoning"`
+	ReasoningEfforts []string          `json:"reasoning_efforts"`
+	SamplingProfiles *SamplingProfiles `json:"sampling_profiles,omitempty"`
+	ContextLength    int               `json:"context_length"`
 }
 
 // ModelsEnvJSON renders VEIL_MODELS. Empty when there are no chat models, so
@@ -395,20 +413,18 @@ func ModelsEnvJSON(models []ManagedModel) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		sampling, err := model.Sampling()
+		if err != nil {
+			return "", err
+		}
 		entries = append(entries, modelEnvEntry{
-			ID:              model.ID,
-			ProviderBaseURL: fmt.Sprintf("http://127.0.0.1:%d/v1", facts.Port),
-			Display:         strings.TrimSpace(model.DisplayName),
-			// Console does not claim to know whether this model thinks. The
-			// chat-template kwarg that controls it is named differently per
-			// family — `enable_thinking` for Qwen3 and Gemma 4, `thinking` for
-			// Granite 3.2, DeepSeek-V3.1, and Holo2 — and the defaults go both
-			// ways, so guessing from the command would be wrong as often as
-			// right. The administrator sets the server default with
-			// `--default-chat-template-kwargs`; the client may still override
-			// it per request, which is vLLM's own precedence.
-			Reasoning:     true,
-			ContextLength: facts.MaxModelLen,
+			SamplingProfiles: sampling,
+			ID:               model.ID,
+			ProviderBaseURL:  fmt.Sprintf("http://127.0.0.1:%d/v1", facts.Port),
+			Display:          strings.TrimSpace(model.DisplayName),
+			Reasoning:        len(model.Efforts()) > 0,
+			ReasoningEfforts: model.Efforts(),
+			ContextLength:    facts.MaxModelLen,
 		})
 	}
 	if len(entries) == 0 {

@@ -209,6 +209,9 @@ func TestChatRoutesToTheSelectedModel(t *testing.T) {
 
 func TestChatThinkingDirectiveReachesTheRequest(t *testing.T) {
 	cfg := registryConfig()
+	for i := range cfg.Models {
+		cfg.Models[i].ReasoningEfforts = []string{"off", "on", "low", "high"}
+	}
 	cfg.Generation.ReasoningEffort = "high"
 	budget := 4096
 	cfg.Generation.ThinkingTokenBudget = &budget
@@ -235,10 +238,18 @@ func TestChatThinkingDirectiveReachesTheRequest(t *testing.T) {
 	if client.req.Thinking == nil || !*client.req.Thinking {
 		t.Fatal("thinking on must force the directive on")
 	}
-	if client.req.ReasoningEffort != "high" {
-		t.Fatal("thinking on keeps the server's reasoning profile")
+	if client.req.ReasoningEffort != "on" {
+		t.Fatal("thinking on must not invent a graded level")
 	}
 
+	send(`{"input":"hi","thinking":"low"}`)
+	if client.req.ReasoningEffort != "low" || client.req.Thinking == nil || !*client.req.Thinking {
+		t.Fatal("allowed graded effort did not reach model")
+	}
+	send(`{"input":"hi","thinking":"medium"}`)
+	if client.req.Thinking != nil {
+		t.Fatal("unpublished effort changed model behavior")
+	}
 	send(`{"input":"hi","thinking":"off"}`)
 	if client.req.Thinking == nil || *client.req.Thinking {
 		t.Fatal("thinking off must force the directive off")

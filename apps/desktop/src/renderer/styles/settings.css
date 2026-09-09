@@ -780,7 +780,8 @@
 }
 
 .companyEnrollmentStatus {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
   align-items: center;
   justify-content: space-between;
@@ -860,7 +861,7 @@
   font-size: 12px;
 }
 
-.companyEnrollmentStatus span {
+.companyEnrollmentIdentity span {
   overflow: hidden;
   color: var(--muted);
   font-size: 11px;
@@ -906,5 +907,4 @@
 .settingsNotice svg {
   flex-shrink: 0;
 }
-
 

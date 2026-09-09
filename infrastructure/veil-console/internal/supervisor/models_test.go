@@ -246,6 +246,9 @@ func TestStopAllReapsEveryChild(t *testing.T) {
 	binary := writeStubRuntime(t)
 	models := NewModelSupervisor(binary, "")
 	first, second := managedModel(), managedModel()
+	first.Command = strings.Replace(first.Command, "0.45", "0.2", 1)
+	second.Command = strings.Replace(second.Command, "0.45", "0.2", 1)
+	t.Cleanup(models.StopAll)
 	first, second = withPort(first, freePort(t)), withPort(second, freePort(t))
 	first.Command = strings.Replace(first.Command, "Qwen/Qwen3-32B", `"`+t.TempDir()+`"`, 1)
 	second.Command = strings.Replace(second.Command, "Qwen/Qwen3-32B", `"`+t.TempDir()+`"`, 1)
@@ -383,4 +386,18 @@ func processAlive(pid int) bool {
 		return false
 	}
 	return process.Signal(syscall.Signal(0)) == nil
+}
+
+func TestROCmContainerGetsAMDDevicesWithoutCUDAFlags(t *testing.T) {
+	t.Setenv("UMBRATIC_RUNTIME_PROFILE", "rocm")
+	model := managedModel()
+	model.Command = strings.Replace(model.Command, "Qwen/Qwen3-32B", `"`+t.TempDir()+`"`, 1)
+	args, err := dockerRunArgs("reviewed/image@sha256:"+strings.Repeat("a", 64), model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--gpus") || !strings.Contains(joined, "--device /dev/kfd") || !strings.Contains(joined, "--device /dev/dri") {
+		t.Fatalf("wrong ROCm device contract: %s", joined)
+	}
 }

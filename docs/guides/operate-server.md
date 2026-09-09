@@ -1,109 +1,16 @@
-# Running a customer's server
+# Server operations
 
-Everything you do after [deploy-customer.md](deploy-customer.md).
+For first installation, use the [customer quickstart](deploy-customer.md).
 
-## Day to day
+- **Models:** upload or copy supplied folders, register their role, and start them. Stopping a model disables automatic startup; restarting Console preserves which models are enabled. Check a failed model's Output before trying again. Runtime support depends on architecture and quantization, not just file extension.
+- **Employees:** manage seats, enrollment codes, deactivation, and device revocation in Access. Purchased seats work offline and do not expire when support ends.
+- **Restart:** use Console for Veil. Restart the Console service to restore all enabled models. Linux: `sudo systemctl restart umbratic-console`. Mac: `sudo launchctl kickstart -k system/com.umbratic.console`.
+- **Redeploy:** use a verified ZIP for the same organization and run `sudo ./deploy.sh`. Deployment stops services, backs up program and state together, preserves credentials and content, and restores the backup on failure. Keep the backup path printed by the installer.
+- **Backup:** stop both Umbratic services before copying the program directory, service definitions, and the entire state directory. The state includes SQLite, company identity, secrets, documents, Qdrant, and Caddy's TLS identity. Back up the adjacent Models directory separately on Mac. Store backups privately. Copy any model folders referenced through symlinks separately.
+- **Recovery:** stop services, restore matching program and state backups and service definitions, then start Qdrant and Console (Console starts Caddy). Never combine one installation's database with another's secrets. Retain the original customer ZIP and external release checksum.
 
-```bash
-sudo systemctl restart veil-console
-```
+Program files: `/opt/umbratic/veil-console`. Linux state: `/var/lib/veil-console`. Mac state: `/Library/Application Support/Umbratic/Veil Console/State`; shared models: `/Library/Application Support/Umbratic/Veil Console/Models`. Linux units are `umbratic-{qdrant,console}`. Mac definitions are `/Library/LaunchDaemons/com.umbratic.{qdrant,console}.plist`.
 
-```bash
-sudo systemctl status veil-console --no-pager
-```
+For an unclaimed installation whose setup code expired, run the installed `bin/veil-console --state-dir <canonical-state-path> --issue-setup-code` with sudo. It prints a fresh code only while the private managed Console is running; a claimed installation returns `claimed`.
 
-```bash
-sudo journalctl -u veil-console -n 100 --no-pager
-```
-
-```bash
-sudo caddy validate --config /etc/caddy/Caddyfile
-```
-
-Restarting Console also restarts the Veil process it supervises. Veil sessions
-live in memory, so desktop apps create new ones after a restart.
-
-Use Console → **Access** to deactivate or reactivate users, revoke devices, and
-issue replacement enrollment codes.
-
-## Change seats, devices, or search allowance
-
-1. Read their org UID from `/opt/umbratic/veil-console/entitlement.json`.
-2. Build a new release with the **same** org UID:
-   ```bash
-   npm run veil-console:release -- --version 0.2.0 --seats 40 --devices-per-user 2 --org-uid org_EXISTING_VALUE --signing-key-file "$HOME/umbratic-entitlement-signing.key" --feed-key-file "$HOME/umbratic-feed-master.key"
-   ```
-3. Install it as in [upgrade](#upgrade).
-
-**Never change the org UID.** The identity store belongs to it.
-
-**Carry every limit forward on every release**, including
-`--searches-per-month`. The entitlement is a complete statement of what the
-organization bought, not a patch — a flag you leave off returns to its default,
-and for web search that default is off. The subscription key needs no carrying;
-it comes from `release.env` on every build.
-
-If a new limit is below current use, administration still works but product
-access stops until an administrator deactivates users or revokes devices to fit.
-A lowered search allowance behaves differently: the month's usage is already
-counted, so an allowance below it simply leaves no searches for that month.
-
-## Upgrade
-
-1. Back up first (below).
-2. Build the new release with the existing org UID.
-3. Copy the zip to the server and verify `SHA256SUMS`.
-4. Stop the service, then run the new installer:
-   ```bash
-   sudo systemctl stop veil-console
-   ```
-   ```bash
-   sudo ./install.sh --dnsname veil.example.com
-   ```
-
-Use the same port options as the original install. Afterwards, confirm the
-service, the Console tunnel, the Veil HTTPS address, and one desktop connection.
-
-## Back up
-
-```bash
-sudo systemctl stop veil-console
-```
-
-Copy these together:
-
-- `/opt/umbratic/veil-console/entitlement.json`
-- `/opt/umbratic/veil-console/veil`
-- `/opt/umbratic/veil-console/veil-console`
-- `/var/lib/veil-console/veil-identity.json`
-- `/var/lib/veil-console/console.db`
-- `/var/lib/veil-console/secrets.json`
-- `/etc/systemd/system/veil-console.service`
-- `/etc/caddy/conf.d/veil-console.caddy`
-
-```bash
-sudo systemctl start veil-console
-```
-
-Take the entitlement, binaries, database, secrets, and identity store from the
-same deployment — they belong together. Qdrant does not need to be in the
-backup: after a restore, re-index from the Documents tab and the corpus rebuilds
-from the stored originals.
-
-Keep the signing-key backup somewhere else entirely, and never on this server.
-
-## Recover
-
-1. Install the same release on the replacement server.
-2. `sudo systemctl stop veil-console`
-3. Restore the backed-up files to their original paths and permissions.
-4. `sudo systemctl daemon-reload`
-5. Validate Caddy.
-6. Start `veil-console` and reload Caddy.
-7. Repeat the checks in [deploy-customer.md](deploy-customer.md#8-verify).
-
-## Cut them off from updates
-
-See [../setup/update-feed.md](../setup/update-feed.md#cut-a-customer-off).
-
-Full path list: [../reference/storage.md](../reference/storage.md).
+Change the employee address, HTTPS port, and certificate mode under **Connection** on the main Veil page. Applying briefly interrupts employee connections. Update existing devices to the new address and issue new codes for pending invitations; certificate-mode changes may require re-enrollment.

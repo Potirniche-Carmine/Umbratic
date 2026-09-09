@@ -159,7 +159,7 @@ export function useConnectionSettings({
     return () => {
       current = false;
     };
-  }, [active, api, draft.mode, settingsOpen]);
+  }, [active, api, draft.mode, settingsOpen, companyConnection.state, companyConnection.baseUrl, backend?.endpoint]);
 
   function updateDraft(patch: Partial<ModelEndpointSettings>) {
     saveSequenceRef.current += 1;
@@ -700,7 +700,6 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
               <strong>{companyConnection.orgName}</strong>
               <span>{companyConnection.deviceLabel}</span>
             </div>
-            {serverModels.length > 0 ? (
               <div className="connectionServerModelRow">
                 <Combobox
                   label="Model"
@@ -714,8 +713,8 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
                   selectedId={draft.modelId === "veil-managed" ? serverModels.find((model) => model.default)?.id ?? "" : draft.modelId}
                   placeholder={modelPlaceholder(serverModelStatus, serverModels.length, {
                     loading: "Asking the server…",
-                    unavailable: "Model list unavailable on this server",
-                    empty: "Model list unavailable on this server",
+                    unavailable: "Model list unavailable",
+                    empty: "No models published",
                   })}
                   onSelect={(modelId) => void controller.selectServerModel(modelId)}
                 />
@@ -730,9 +729,6 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
                   {serverModelStatus === "loading" ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
                 </button>
               </div>
-            ) : (
-              <p className="connectionModelUnavailable">Model list unavailable on this server</p>
-            )}
             <CompanyServerActions
               active={companyServerActive}
               busy={saving}

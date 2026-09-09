@@ -36,44 +36,25 @@ runtime state, diagnostics, temporary files. Workspace-local and disposable.
 
 ## Company server
 
-Ubuntu 24.04 amd64, installed by `install.sh` from the release zip.
+Installed by `deploy.sh` from the target-specific customer ZIP. Mac data lives under `/Library/Application Support/Umbratic/Veil Console/`.
 
-### Programs — root-owned, replaced on upgrade
+Programs live under `/opt/umbratic/veil-console/`: executables in `bin/`, signed entitlement in `entitlement.json`, deployment settings in `deployment.json`, and pinned runtime dependencies in `runtime/`. Mac also has the installed `venv/` and Python runtime.
 
-| Path | Contents |
-| --- | --- |
-| `/opt/umbratic/veil-console/veil` | Veil binary |
-| `/opt/umbratic/veil-console/veil-console` | Console binary |
-| `/opt/umbratic/veil-console/umbratic-pdf` | PDF text extractor for `.pdf` uploads |
-| `/opt/umbratic/veil-console/entitlement.json` | Signed customer entitlement |
-| `/opt/umbratic/veil-console/VERSION` | Installed release version |
-| `/opt/umbratic/qdrant/qdrant` | Qdrant vector database binary |
+Private state lives under `/var/lib/veil-console/` on Linux and `/Library/Application Support/Umbratic/Veil Console/State/` on Mac, owned by `_umbratic`. Back up the entire directory while services are stopped. It includes:
 
-### State — service-account owned, preserved across upgrades
+- `console.db`: owner, configuration, sessions, model startup preferences, and document records.
+- `secrets.json` and `veil-identity.json`: service credentials, enrolled users, and devices.
+- `documents/`: uploaded documents. Mac models live in the adjacent `Models/` directory, writable by local administrators and the service; Linux models remain under state `models/`.
+- `qdrant/`, `qdrant.yaml`, and `qdrant-api-key`: vector storage and private database settings.
+- `.local/share/caddy/`: TLS certificates and keys. Console reads only the public `root.crt` when creating private-HTTPS enrollment codes.
 
-| Path | Owner | Mode | Contents | Back up |
-| --- | --- | --- | --- | --- |
-| `/var/lib/veil-console/console.db` | `veil-console` | 0600 | Owner account, sessions, configuration, document rows, retrieval settings, audit events | Yes |
-| `/var/lib/veil-console/secrets.json` | `veil-console` | 0600 | Veil auth token, control token, CSRF signing key | Yes |
-| `/var/lib/veil-console/veil-identity.json` | `veil-console` | 0600 | Enrolled users and devices | Yes |
-| `/var/lib/veil-console/qdrant-api-key` | `veil-console` | 0600 | Qdrant API key, generated at install | Yes |
-| `/var/lib/veil-console/documents/` | `veil-console` | 0700 | Uploaded originals, one file per document id | Yes |
-| `/var/lib/qdrant/storage/` | `qdrant` | 0700 | Vectors and chunk payloads | Rebuildable |
-| `/var/lib/qdrant/snapshots/` | `qdrant` | 0700 | Qdrant snapshots | No |
+The private `bootstrap.sock` issues an expiring setup code on request; no setup-code file is written. The installer prints the code only after readiness checks pass.
 
-### Configuration and runtime
-
-| Path | Owner | Mode | Contents |
-| --- | --- | --- | --- |
-| `/etc/qdrant/config.yaml` | `qdrant` | 0600 | Loopback bind, storage paths, API key, telemetry off |
-| `/etc/systemd/system/veil-console.service` | root | 0644 | Console unit |
-| `/etc/systemd/system/qdrant.service` | root | 0644 | Qdrant unit |
-| `/etc/caddy/conf.d/veil-console.caddy` | root | 0644 | HTTPS front end for Veil |
-| `/run/veil-console/setup-code` | `veil-console` | 0600 | One-time setup code, removed after 15 minutes |
+Console supervises Caddy and generates its `Caddyfile` in the state directory from `connection_settings` in SQLite. System services are `/Library/LaunchDaemons/com.umbratic.{console,qdrant}.plist` on Mac, or `/etc/systemd/system/umbratic-{console,qdrant}.service` on Linux. Deployment creates a stopped-state backup next to the program directory before replacing it.
 
 ### Ports
 
-All loopback except the Caddy listener.
+All listeners start on loopback. Caddy becomes reachable over the network after an administrator configures a non-loopback address in Console.
 
 | Port | Service |
 | --- | --- |

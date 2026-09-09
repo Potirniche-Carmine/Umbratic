@@ -62,7 +62,6 @@ func TestRenderPreviewPages(t *testing.T) {
 						Command: config.CatalogCommand(chat[1], chat[1].Variants[0], 8001, 65536),
 					},
 					State: supervisor.ModelHealthy, StateText: "Serving", Running: true, IsDefault: true,
-					Summary: "Qwen/Qwen3.8-27B-FP8 · 8-bit (FP8) · 256K context · port 8001",
 				},
 				{
 					ManagedModel: config.ManagedModel{
@@ -70,7 +69,6 @@ func TestRenderPreviewPages(t *testing.T) {
 						Command: config.CatalogCommand(chat[0], chat[0].Variants[0], 8002, 262144),
 					},
 					State: supervisor.ModelStopped, StateText: "Stopped",
-					Summary: "ornith-ai/Ornith-1.5-35B-A3B-NVFP4 · 4-bit (NVFP4) · 256K context · port 8002",
 				},
 			},
 		},
@@ -97,9 +95,10 @@ func TestRenderPreviewPages(t *testing.T) {
 	settingsPage.Config.ContextLength = 65536
 
 	dashboard := pageData{
+		Connection: config.DefaultConnection(), ConnectionAvailable: true, ConnectionReady: true,
 		Title: "Veil Console", CSRF: "preview", Username: "owner",
 		Configured: true, Running: false, Status: supervisor.Status{}.String(),
-		VeilURL: "http://127.0.0.1:8080",
+		VeilURL: config.DefaultConnection().URL(),
 		Models:  modelsView{Registered: 2, Running: 1},
 	}
 

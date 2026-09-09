@@ -368,7 +368,7 @@ export function ComposerModelPicker({
                         onSelectEffort(level);
                       }}
                     >
-                      <span className="modelName">{reasoningEffortLabels[level]}</span>
+                      <span className="modelName">{reasoningEffortLabels[level] ?? level.charAt(0).toUpperCase() + level.slice(1)}</span>
                       {level === effort ? <Check size={14} aria-hidden="true" /> : null}
                     </button>
                   ))}

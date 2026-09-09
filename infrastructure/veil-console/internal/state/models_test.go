@@ -200,3 +200,73 @@ func TestManagedModelMigrationIsIdempotent(t *testing.T) {
 		t.Fatalf("reopening must preserve the registry: %#v %v", models, err)
 	}
 }
+
+func TestEnabledModelsSurviveStoreReopen(t *testing.T) {
+	ctx := context.Background()
+	directory := tempStateDir(t)
+	store, err := Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := managedFixture()
+	if err := store.InsertManagedModel(ctx, model); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetModelEnabled(ctx, model.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	got, ok, err := store.ManagedModel(ctx, model.ID)
+	if err != nil || !ok || !got.Enabled {
+		t.Fatalf("enabled intent lost: %+v %v", got, err)
+	}
+	got.Command += " --dtype auto"
+	if err := store.UpdateManagedModel(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetModelEnabled(ctx, model.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	models, err := store.ManagedModels(ctx)
+	if err != nil || len(models) != 1 || models[0].Enabled {
+		t.Fatal("stop did not clear enabled intent")
+	}
+}
+
+func TestReasoningAndSamplingPersistOnInsertAndUpdate(t *testing.T) {
+	store, err := Open(tempStateDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	item := managedFixture()
+	item.ReasoningEfforts = "off,low,medium,xhigh"
+	item.SamplingJSON = `{"thinking":{"temperature":1,"top_p":0.95,"top_k":20,"min_p":0,"presence_penalty":0,"repetition_penalty":1},"non_thinking":{"temperature":0.7,"top_p":0.8,"top_k":20,"min_p":0,"presence_penalty":1.5,"repetition_penalty":1}}`
+	if err := item.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.InsertManagedModel(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	saved, _, err := store.ManagedModel(ctx, item.ID)
+	if err != nil || saved.ReasoningEfforts != item.ReasoningEfforts || saved.SamplingJSON != item.SamplingJSON {
+		t.Fatalf("insert lost settings: %v", err)
+	}
+	item.ReasoningEfforts = "off,ultra"
+	item.SamplingJSON = ""
+	if err := store.UpdateManagedModel(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	all, err := store.ManagedModels(ctx)
+	if err != nil || len(all) != 1 || all[0].ReasoningEfforts != item.ReasoningEfforts || all[0].SamplingJSON != "" {
+		t.Fatalf("update lost settings: %v", err)
+	}
+}

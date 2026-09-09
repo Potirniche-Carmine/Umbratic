@@ -13,7 +13,12 @@ import (
 	"time"
 )
 
-func (s *Server) modelsDirectory() string { return filepath.Join(s.startup.StateDir, "models") }
+func (s *Server) modelsDirectory() string {
+	if s.startup.ModelsDir != "" {
+		return s.startup.ModelsDir
+	}
+	return filepath.Join(s.startup.StateDir, "models")
+}
 
 func localModelFolders(directory string) ([]string, error) {
 	if err := os.MkdirAll(directory, 0700); err != nil {

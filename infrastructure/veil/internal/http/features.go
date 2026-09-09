@@ -32,6 +32,7 @@ var serverFeatures = []string{
 	// harness_bucket — the name exists so a client knows the field means
 	// something here, not so an unknown value can be refused.
 	"chat.thinking_toggle",
+	"chat.reasoning_effort",
 	// Chat bodies may carry `reasoning_visible`. Security-semantic: the
 	// default is still to strip reasoning tokens, and a client must see this
 	// name before asking to forward them. An older server that never

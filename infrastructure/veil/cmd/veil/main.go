@@ -30,6 +30,7 @@ func main() {
 			BaseURL:          entry.ProviderBaseURL,
 			ContextLength:    entry.ContextLength,
 			Reasoning:        entry.Reasoning,
+			SamplingProfiles: entry.SamplingProfiles,
 			EmbeddingBaseURL: cfg.RAG.EmbeddingBaseURL,
 			EmbeddingModel:   cfg.RAG.EmbeddingModel,
 		})

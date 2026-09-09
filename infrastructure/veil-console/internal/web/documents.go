@@ -169,12 +169,9 @@ func (s *Server) documentReindex(w http.ResponseWriter, r *http.Request) {
 }
 
 // documentsSettingsApply is a settings change with the same weight as the model
-// settings: it takes the owner password, restarts Veil so the new retrieval
+// settings: it restarts Veil so the new retrieval
 // configuration is in force, and re-embeds the corpus when the model changed.
 func (s *Server) documentsSettingsApply(w http.ResponseWriter, r *http.Request) {
-	if err := s.confirmDocumentsPassword(w, r); err != nil {
-		return
-	}
 	previous := s.corpus.Settings().WithDefaults()
 	settings, err := s.parseRAGSettings(r, previous)
 	if err != nil {
@@ -242,22 +239,6 @@ func (s *Server) restartVeilForChange(ctx context.Context) error {
 		return errors.New("Veil is not configured")
 	}
 	return s.supervisor.Restart(ctx, cfg, s.currentSecrets().ControlToken)
-}
-
-func (s *Server) confirmDocumentsPassword(w http.ResponseWriter, r *http.Request) error {
-	err := s.freshPassword(w, r)
-	if err == nil {
-		return nil
-	}
-	status := http.StatusInternalServerError
-	data := s.documentsData(r, "Password confirmation failed. Try again.", "")
-	if errors.Is(err, errPasswordConfirmation) {
-		status = http.StatusUnauthorized
-		data.Error = ""
-		data.PasswordError = true
-	}
-	s.renderStatus(w, "documents.html", status, data)
-	return err
 }
 
 // parseRAGSettings reads the only two retrieval decisions the page still

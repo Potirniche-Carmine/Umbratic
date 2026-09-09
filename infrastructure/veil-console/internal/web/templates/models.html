@@ -7,7 +7,7 @@
   <link rel="icon" href="/favicon.ico?v=10">
   <link rel="stylesheet" href="/assets/style.css?v=17">
   <link rel="stylesheet" href="/assets/controls.css?v=4">
-  <link rel="stylesheet" href="/assets/models.css?v=18">
+  <link rel="stylesheet" href="/assets/models.css?v=19">
   <script defer src="/assets/console.js?v=17"></script>
 </head>
 <body>
@@ -53,7 +53,7 @@
       </div>
     </details>
     <section class="panel model-form" id="add-model">
-      <div class="section-heading"><h2>Add {{if .Models.IsDictation}}a dictation model{{else if .Models.IsEmbedding}}an embedding model{{else}}a chat model{{end}}</h2></div>
+      <div class="section-heading"><h2>Add model</h2></div>
       {{if .Models.FormError}}<p class="form-error" role="alert">{{.Models.FormError}}</p>{{end}}
       {{if and .Models.IsDictation .Models.DictationTaken}}
       <p class="panel-footnote no-rule">One dictation model can be registered at a time. Stop and remove it to select another. Model files stay in the folder.</p>
@@ -63,20 +63,15 @@
         <input type="hidden" name="port" value="{{.Models.SuggestedPort}}">
         <input type="hidden" name="kind" value="{{.Models.Kind}}">
         <div class="field-grid">
-          <label class="field field-wide"><span>Model folder</span>
+          <label class="field field-wide"><span>Model</span>
             <span class="select-control"><select name="folder" required>
-              <option value="">Choose a local folder</option>
-              {{range .Models.Folders}}<option value="{{.}}" {{if eq $.Models.Form.Folder .}}selected{{end}}>{{.}}</option>{{end}}
+              <option value="">Choose a model</option>
+              {{range .Models.Folders}}<option value="{{.}}" {{if eq $.Models.Form.Folder .}}selected{{end}}>{{.}}{{with index $.Models.FolderHints .}} ({{.}}){{end}}</option>{{end}}
             </select><span class="select-mark" aria-hidden="true"></span></span>
           </label>
           <label class="field"><span>Model name</span><input name="display_name" value="{{.Models.Form.DisplayName}}" maxlength="120" placeholder="Uses the folder name"></label>
           <label class="field"><span>Model ID</span><input name="id" value="{{.Models.Form.ID}}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" placeholder="Uses the folder name"></label>
         </div>
-        <details class="disclosure compact">
-          <summary><strong>Advanced options</strong><span class="disclosure-mark" aria-hidden="true"></span></summary>
-          <p class="panel-footnote no-rule">Leave this blank to use the model defaults. Set vLLM options here only when the model needs them.</p>
-          <label class="field"><span>vLLM arguments</span><textarea name="command" rows="8" spellcheck="false" autocomplete="off">{{.Models.Form.Command}}</textarea></label>
-        </details>
         <button class="button primary" type="submit" {{if not .Models.Folders}}disabled{{end}}>Add model</button>
         {{if not .Models.Folders}}<p class="panel-footnote">No model folders found. Copy a complete folder, then select Refresh folders.</p>{{end}}
       </form>
@@ -93,7 +88,7 @@
       <div class="model-identity">
         <input class="model-name" name="display_name" value="{{.DisplayName}}" maxlength="120" required aria-label="Display name for {{.ID}}">
         <span class="model-subline">
-          <code>{{.ID}}</code>
+
           {{if .IsSpeech}}
           <span class="model-default is-default">Dictation</span>
           {{else if $.Models.IsEmbedding}}
@@ -110,7 +105,7 @@
         <span class="model-state-text">{{.StateText}}</span>
       </div>
 
-      {{if .Summary}}<p class="model-summary">{{.Summary}}</p>{{end}}
+
 
       <!--
         The command is the argument list vLLM is started with, and the single
@@ -118,19 +113,37 @@
         publishes are read back out of it. It is executed directly, never
         through a shell.
       -->
-      <details class="disclosure compact model-command">
-        <summary><strong>Command</strong><span class="disclosure-mark" aria-hidden="true"></span></summary>
+      <div class="model-command">
         <label>
           <span class="visually-hidden">Command for {{.ID}}</span>
           <textarea name="command" rows="8" spellcheck="false" autocapitalize="off" autocomplete="off" required>{{.Command}}</textarea>
         </label>
-      </details>
+      </div>
 
       <!-- Always rendered, empty or not, so the card never changes height. -->
+      {{if $.Models.IsChat}}
+      <fieldset class="model-reasoning">
+        <legend>Reasoning options for users</legend>
+        <label><input type="checkbox" name="reasoning_effort" value="off" {{if .AllowsEffort "off"}}checked{{end}}> Off</label>
+        <label><input type="checkbox" name="reasoning_effort" value="on" {{if .AllowsEffort "on"}}checked{{end}}> On</label>
+        <label><input type="checkbox" name="reasoning_effort" value="low" {{if .AllowsEffort "low"}}checked{{end}}> Low</label>
+        <label><input type="checkbox" name="reasoning_effort" value="medium" {{if .AllowsEffort "medium"}}checked{{end}}> Medium</label>
+        <label><input type="checkbox" name="reasoning_effort" value="high" {{if .AllowsEffort "high"}}checked{{end}}> High</label>
+        <label class="field model-extra-efforts"><span>Other levels</span><input name="extra_efforts" value="{{.ExtraEfforts}}" placeholder="xhigh, ultra" maxlength="512"></label>
+        <p>Choose only options the model supports. Leave all unchecked to use its default.</p>
+      </fieldset>
+      <details class="model-command disclosure compact">
+        <summary>Sampling settings</summary>
+        <label class="field"><span>Thinking and non-thinking profiles</span>
+          <textarea name="sampling_json" rows="12" maxlength="4096" spellcheck="false" placeholder='{"thinking":{"temperature":1.0,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repetition_penalty":1.0},"non_thinking":{"temperature":0.7,"top_p":0.80,"top_k":20,"min_p":0.0,"presence_penalty":1.5,"repetition_penalty":1.0}}'>{{.SamplingJSON}}</textarea>
+        </label>
+        <p>Leave blank to use the server defaults. Non-thinking applies when Off is selected; other choices use Thinking.</p>
+      </details>
+      {{end}}
       <p class="model-notice{{if not .Notice}} is-empty{{end}}" role="status">{{.Notice}}</p>
 
       <!-- Shown without asking, because a failed model raises exactly one question. -->
-      {{if .Logs}}<pre class="model-log-tail">{{.Logs}}</pre>{{end}}
+      {{if .Logs}}<details class="model-command disclosure compact"><summary>Startup log</summary><pre class="model-log-tail">{{.Logs}}</pre></details>{{end}}
 
       <div class="model-footer">
         <div class="model-actions">

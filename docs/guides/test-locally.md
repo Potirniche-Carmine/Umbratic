@@ -7,29 +7,15 @@ Works on Ubuntu WSL. Others on your network can connect too.
 
 ## 1. Build a local customer release
 
-The `--feed-key-file` flag is the important one. Without it the build has no
-customer key stamped in and **mints no update tokens at all**, which is
-deliberate: a development server should not hand out downloads.
+Follow the [release setup](release-server.md), then run:
 
-```bash
-npm run veil-console:release -- --version 0.1.0-local --seats 5 --devices-per-user 2 --signing-key-file "$HOME/umbratic-entitlement-signing.key" --feed-key-file "$HOME/umbratic-feed-master.key"
+```sh
+npm run veil-console:release -- --customer local-test --version 0.1.0-local --seats 5
 ```
 
-## 2. Unpack and run it
+## 2. Deploy it
 
-```bash
-unzip artifacts/releases/umbratic-veil-console-0.1.0-local-linux-amd64.zip -d "$HOME"
-```
-
-```bash
-cd "$HOME/umbratic-veil-console-0.1.0-local-linux-amd64" && chmod 700 veil veil-console && chmod 600 entitlement.json
-```
-
-```bash
-"$HOME/umbratic-veil-console-0.1.0-local-linux-amd64/veil-console" --listen 127.0.0.1 --port 8177 --state-dir "$HOME/umbratic-veil-console-0.1.0-local-linux-amd64/state" --veil-binary "$HOME/umbratic-veil-console-0.1.0-local-linux-amd64/veil" --veil-address 127.0.0.1:8080 --entitlement "$HOME/umbratic-veil-console-0.1.0-local-linux-amd64/entitlement.json"
-```
-
-Stop it with `Ctrl+C`.
+Unzip the file from `artifacts/releases/` and run `sudo ./deploy.sh` inside the extracted folder. Follow the printed Console address and setup code. Keep **Connection** on localhost for testing on the server itself, or enter the server’s VPN address for another computer.
 
 ## 3. Create the owner and enroll yourself
 

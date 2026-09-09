@@ -41,6 +41,7 @@ export const veilFeature = {
    * something here, not so an unknown value can be refused.
    */
   thinkingToggle: "chat.thinking_toggle",
+  reasoningEffort: "chat.reasoning_effort",
   /**
    * Chat bodies may carry `reasoning_visible`. Security-semantic: the default
    * is still to strip reasoning tokens, so this name must be present before

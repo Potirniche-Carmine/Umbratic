@@ -33,7 +33,7 @@ commit the change.
 From `infrastructure/downloads-worker`:
 
 ```bash
-npx wrangler secret put FEED_MASTER_KEY < "$HOME/umbratic-feed-master.key"
+npx wrangler secret put FEED_MASTER_KEY < "$HOME/umbratic-release/umbratic-feed-master.key"
 ```
 
 Pipe the file in. Do not paste at the prompt — the prompt masks what it
@@ -56,7 +56,7 @@ Mint a test token and ask the feed for something:
 ```bash
 python3 -c "
 import base64, hashlib, hmac, os, time
-m = open(os.path.expanduser('~/umbratic-feed-master.key')).read().strip()
+m = open(os.path.expanduser('~/umbratic-release/umbratic-feed-master.key')).read().strip()
 d = lambda t: base64.urlsafe_b64decode(t + '=' * (-len(t) % 4))
 b = lambda x: base64.urlsafe_b64encode(x).decode().rstrip('=')
 org, stamp = 'org_testfeed', str(int(time.time()))

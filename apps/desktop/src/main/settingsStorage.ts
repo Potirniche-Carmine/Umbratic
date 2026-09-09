@@ -163,11 +163,15 @@ function modelEndpointSettings(
 
 export function readCompanyDeviceCredential(): CompanyDeviceCredential | null {
   const stored = readRawSettings().companyCredential;
-  const credential = decodeCompanyDeviceCredential(stored);
-  // A record that will not decode is corrupt or tampered with. Drop it so the
-  // device re-enrolls instead of carrying an unusable credential forward.
-  if (!credential && stored !== undefined) clearCompanyDeviceCredential();
-  return credential;
+  // Keychain can be locked or access can be declined. Neither condition is
+  // permission to erase a valid enrollment from disk.
+  return decodeCompanyDeviceCredential(stored);
+}
+
+export function readCompanyCertificate(): { baseUrl: string; caPem?: string } | null {
+  const value = readRawSettings().companyCredential;
+  if (!isRecord(value) || typeof value.baseUrl !== "string") return null;
+  return { baseUrl: value.baseUrl, caPem: typeof value.caPem === "string" ? value.caPem : undefined };
 }
 
 export function writeCompanyDeviceCredential(input: CompanyDeviceCredential): CompanyDeviceCredential {

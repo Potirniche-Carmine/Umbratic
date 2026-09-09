@@ -736,7 +736,10 @@ pre {
 }
 
 .service-actions {
-  display: block;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  grid-column: 1 / -1;
 }
 
 .service-action-form {

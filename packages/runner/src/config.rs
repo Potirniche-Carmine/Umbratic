@@ -569,6 +569,7 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
         {
             Some("on") => Some("on".into()),
             Some("off") => Some("off".into()),
+            Some(value) if valid_reasoning_level(value) => Some(value.into()),
             _ => None,
         },
         send_reasoning_visible_field: provider_object
@@ -681,6 +682,15 @@ pub fn load_runner_config() -> Result<RunnerConfig, String> {
         return parse_runner_config(&raw);
     }
     Err("runner config is required on stdin".into())
+}
+
+pub(crate) fn valid_reasoning_level(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 32
+        && value != "none"
+        && value.bytes().enumerate().all(|(i, c)| {
+            c.is_ascii_lowercase() || (i > 0 && (c.is_ascii_digit() || c == b'_' || c == b'-'))
+        })
 }
 
 #[cfg(test)]
@@ -866,7 +876,7 @@ mod tests {
     }
 
     #[test]
-    fn thinking_directive_is_on_off_or_absent() {
+    fn thinking_directive_accepts_bounded_custom_efforts() {
         let body = |thinking: &str, send: bool| {
             format!(
                 r#"{{"password":"p","cwd":"/tmp","provider":{{"name":"Veil","baseURL":"http://127.0.0.1:1","mode":"local","chatEndpointPath":"/api/engineering/chat","modelId":"m","thinking":{thinking},"sendThinkingField":{send}}}}}"#
@@ -878,8 +888,10 @@ mod tests {
         let on = parse_runner_config(&body("\"on\"", false)).unwrap();
         assert_eq!(on.provider.thinking.as_deref(), Some("on"));
         assert!(!on.provider.send_thinking_field);
-        let ignored = parse_runner_config(&body("\"medium\"", true)).unwrap();
-        assert_eq!(ignored.provider.thinking, None);
+        let graded = parse_runner_config(&body("\"medium\"", true)).unwrap();
+        assert_eq!(graded.provider.thinking.as_deref(), Some("medium"));
+        let ignored = parse_runner_config(&body("\"future-effort\"", true)).unwrap();
+        assert_eq!(ignored.provider.thinking.as_deref(), Some("future-effort"));
         let visible = parse_runner_config(
             r#"{"password":"p","cwd":"/tmp","provider":{"name":"Veil","baseURL":"http://127.0.0.1:1","mode":"local","chatEndpointPath":"/api/engineering/chat","modelId":"m","sendReasoningVisibleField":true,"reasoningVisible":true}}"#,
         )

@@ -2,7 +2,7 @@
 
 ## Veil Console
 
-Veil Console is a separate Go service. Development runs natively on Windows, macOS, and Linux. The production release target is Ubuntu 24.04 LTS on `amd64`. Console owns administrator authentication, local configuration state, secrets, and process lifecycle: one Veil child, plus one `vllm serve` child per registered model. It serves only embedded server-rendered pages on a loopback address.
+Veil Console is a separate Go service. Development runs natively on Windows, macOS, and Linux. Release packaging targets Ubuntu 24.04 LTS on `amd64`/`arm64` and Apple Silicon macOS. Hardware verification is recorded per release. Console owns administrator authentication, local configuration state, secrets, and process lifecycle: one Veil child, one fixed Caddy child for employee HTTPS, plus one `vllm serve` child per registered model. It serves only embedded server-rendered pages on a loopback address.
 
 Do not merge Console code into Veil. Console can change Veil only through its fixed executable path, an allowlisted child environment, and Veil's authenticated HTTP API. Console must set `VEIL_ENV_FILE=-` and must not inherit the parent environment.
 
@@ -18,10 +18,11 @@ Do not merge Console code into Veil. Console can change Veil only through its fi
 - Support only the local vLLM runtimes Console launches itself, without provider authentication.
 - Keep secrets out of URLs, logs, audit rows, database configuration rows, templates, and errors. A new Veil token can appear once in a no-store authenticated response.
 - Validate Host, Origin, CSRF, method, content type, and body size for every state change.
-- Veil lifecycle and settings changes re-confirm the owner password and rotate the session. Model management deliberately does not: it is session plus CSRF, because asking three times per card bought nothing on a locked local deployment.
+- Routine service controls, settings, documents, and model management require an authenticated administrator session and CSRF. Do not ask for the owner password again. Preserve login expiry, origin checks, and session protections.
 - Validate the resolved and connected provider IP. Permit only loopback or private addresses. Reject link-local and cloud metadata addresses.
 - Start Veil without a shell and with a complete allowlisted environment.
 - Serialize all start, stop, restart, apply, and token rotation operations. Model start and stop are serialized per model.
+- Connection settings belong to Console state, not release packaging. Default Caddy to localhost with private HTTPS; keep its admin API disabled and its executable, upstream, and control-API block fixed. Serialize connection changes with enrollment snapshots, verify HTTPS before saving, and restore the previous connection on failure.
 - Reap every child on shutdown. A model runtime is a process tree, not a process — vLLM's workers inherit its pipes — so signal the whole process group, or `cmd.Wait` never returns and the GPU stays occupied.
 
 ## Structure

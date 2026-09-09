@@ -186,8 +186,12 @@ export async function submitSteeredRunnerTurn(
  */
 export async function listServerModels(): Promise<ServerModelInfo[]> {
   if (readModelEndpointSettings().mode !== "server") return [];
+  await ensureCompanySession(companyTransportOptions());
+  const provider = endpointProvider();
+  const health = await checkEndpointHealth(provider);
+  recordVeilFeatures(health.features);
   if (!connectedVeilSupports(veilFeature.modelsList)) return [];
-  return fetchServerModels(endpointProvider());
+  return fetchServerModels(provider);
 }
 
 export async function enrollCompanyConnection(input: unknown) {
@@ -210,7 +214,7 @@ export async function enrollCompanyConnection(input: unknown) {
     throw new Error("Remote Veil servers must use HTTPS.");
   }
   stopLocalVeil();
-  await enrollCompanyDevice({ baseUrl, enrollmentCode, deviceLabel: label }, companyTransportOptions());
+  await enrollCompanyDevice({ baseUrl, enrollmentCode, deviceLabel: label }, companyTransportOptions(baseUrl));
   const settings = writeModelEndpointSettings({
     mode: "server", baseUrl, modelId: "veil-managed", secret: "",
   });
@@ -487,7 +491,7 @@ export async function resolveSelectedModel(
         displayName: entry.display,
         ...(entry.contextLength === undefined ? {} : { contextLength: entry.contextLength }),
         capabilities: health.capabilities
-          ? { ...health.capabilities, reasoning: entry.reasoning }
+          ? { ...health.capabilities, reasoning: entry.reasoning, reasoningEfforts: connectedVeilSupports(veilFeature.reasoningEffort) ? entry.reasoningEfforts : [] }
           : undefined,
       }));
       const chosen =

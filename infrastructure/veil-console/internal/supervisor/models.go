@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,8 +49,9 @@ const modelPollInterval = 2 * time.Second
 const modelLogLimit = 32 << 10
 
 type managedProcess struct {
-	cmd  *exec.Cmd
-	logs *safeBuffer
+	allocation float64
+	cmd        *exec.Cmd
+	logs       *safeBuffer
 	// command is what this process was actually launched with, so the page can
 	// say when the saved command has moved on from the running one.
 	command string
@@ -76,7 +77,9 @@ const modelStopDeadline = 10 * time.Second
 // starting, failing, or being stopped must not disturb the Veil process, whose
 // registry is configuration rather than liveness.
 type ModelSupervisor struct {
-	binary string
+	binary   string
+	closing  bool
+	launchMu sync.Mutex
 	// dockerImage switches launches to `docker run` of this vLLM OpenAI-server
 	// image. The card command is still the single source of truth: Console
 	// derives the container flags from it rather than storing them twice.
@@ -118,7 +121,23 @@ func vllmArgs(model config.ManagedModel) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return facts.Args, nil
+	args := facts.Args
+	hasHost := false
+	// Runtime listeners are private even when Advanced supplies a host flag.
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--host" && i+1 < len(args) {
+			args[i+1] = "127.0.0.1"
+			hasHost = true
+			i++
+		} else if strings.HasPrefix(args[i], "--host=") {
+			args[i] = "--host=127.0.0.1"
+			hasHost = true
+		}
+	}
+	if !hasHost {
+		args = append(args, "--host", "127.0.0.1")
+	}
+	return args, nil
 }
 
 // containerName is the deterministic docker name for one model, so a stale
@@ -169,11 +188,21 @@ func dockerRunArgs(image string, model config.ManagedModel) ([]string, error) {
 	args := []string{
 		"run", "--rm",
 		"--name", containerName(model.ID),
-		"--gpus", "all",
 		"--ipc", "host",
 		"--mount", strings.TrimSuffix(mount.String(), "\n"),
 		"--env", "HF_HUB_OFFLINE=1", "--env", "TRANSFORMERS_OFFLINE=1",
 		"-p", fmt.Sprintf("127.0.0.1:%d:%d", facts.Port, facts.Port),
+	}
+	switch os.Getenv("UMBRATIC_RUNTIME_PROFILE") {
+	case "rocm", "rocm-integrated":
+		args = append(args, "--device", "/dev/kfd", "--device", "/dev/dri", "--group-add", "video", "--group-add", "render")
+	case "rocm-wsl":
+		args = append(args, "--device", "/dev/dxg", "--mount", "type=bind,src=/usr/lib/wsl,dst=/usr/lib/wsl,readonly")
+	case "", "cuda":
+		// Retain placement before IPC for a stable, inspectable launch contract.
+		args = append(args[:4], append([]string{"--gpus", "all"}, args[4:]...)...)
+	default:
+		return nil, errors.New("unsupported container runtime profile")
 	}
 	// Passed by name, so the docker client reads each value from its own
 	// environment and no secret or setting lands in argv. The vLLM knobs let a
@@ -259,17 +288,31 @@ func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 		return ErrBusy
 	}
 	defer lock.Unlock()
+	m.launchMu.Lock()
+	defer m.launchMu.Unlock()
 
 	m.mu.Lock()
-	if existing := m.processes[model.ID]; existing != nil && existing.cmd.Process != nil {
+	if m.closing {
 		m.mu.Unlock()
-		return errors.New("this model is already running")
+		return errors.New("Console is shutting down")
+	}
+	if existing := m.processes[model.ID]; existing != nil && existing.cmd.Process != nil {
+		select {
+		case <-existing.exited:
+		default:
+			m.mu.Unlock()
+			return errors.New("this model is already running")
+		}
 	}
 	m.mu.Unlock()
 
+	launchModel, allocation, err := m.allocation(model)
+	if err != nil {
+		return err
+	}
 	var cmd *exec.Cmd
 	if m.dockerImage != "" {
-		args, err := dockerRunArgs(m.dockerImage, model)
+		args, err := dockerRunArgs(m.dockerImage, launchModel)
 		if err != nil {
 			return err
 		}
@@ -277,7 +320,7 @@ func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 		removeStaleContainer(model.ID)
 		cmd = exec.Command("docker", args...)
 	} else {
-		args, err := vllmArgs(model)
+		args, err := vllmArgs(launchModel)
 		if err != nil {
 			return err
 		}
@@ -293,13 +336,14 @@ func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	process := &managedProcess{
-		cmd:     cmd,
-		logs:    logs,
-		command: strings.TrimSpace(model.Command),
-		model:   model,
-		status:  ModelStatus{State: ModelStarting, PID: cmd.Process.Pid, Message: "Loading weights"},
-		cancel:  cancel,
-		exited:  make(chan struct{}),
+		allocation: allocation,
+		cmd:        cmd,
+		logs:       logs,
+		command:    strings.TrimSpace(model.Command),
+		model:      model,
+		status:     ModelStatus{State: ModelStarting, PID: cmd.Process.Pid, Message: "Starting model"},
+		cancel:     cancel,
+		exited:     make(chan struct{}),
 	}
 	m.mu.Lock()
 	m.processes[model.ID] = process
@@ -333,9 +377,13 @@ func (m *ModelSupervisor) reap(id string, cmd *exec.Cmd) {
 		message = "Stopped"
 		state = ModelStopped
 	}
+	recoverable := state == ModelFailed
+	if hint := startupFailure(process.logs.String()); recoverable && hint != "" {
+		message = hint
+		recoverable = false
+	}
 	process.status = ModelStatus{State: state, Message: message}
 	model := process.model
-	recoverable := state == ModelFailed
 	m.mu.Unlock()
 	if recoverable {
 		go m.recoverModel(model)
@@ -376,7 +424,7 @@ func (m *ModelSupervisor) recoverModel(model config.ManagedModel) {
 	m.mu.Unlock()
 	// An administrator stopped or restarted it while the delay ran; their
 	// intent wins over the recovery that was already scheduled.
-	if !stopped {
+	if stopped {
 		return
 	}
 	if err := m.Start(model); err != nil && !errors.Is(err, ErrBusy) {
@@ -411,6 +459,10 @@ func (m *ModelSupervisor) awaitReady(ctx context.Context, model config.ManagedMo
 			return
 		case <-ticker.C:
 			if modelListsItself(ctx, client, model) {
+				if err := probeModelRole(ctx, model); err != nil {
+					m.setStatus(model.ID, cmd, ModelStatus{State: ModelFailed, PID: processID(cmd), Message: err.Error()})
+					return
+				}
 				m.setStatus(model.ID, cmd, ModelStatus{
 					State:   ModelHealthy,
 					PID:     processID(cmd),
@@ -439,7 +491,20 @@ func modelListsItself(ctx context.Context, client *http.Client, model config.Man
 	}
 	// The served name is what a chat request must use, so that exact string
 	// appearing in the listing is the readiness signal.
-	return strings.Contains(string(body), strconv.Quote(model.ID))
+	var listing struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(body, &listing) != nil {
+		return false
+	}
+	for _, entry := range listing.Data {
+		if entry.ID == model.ID {
+			return true
+		}
+	}
+	return false
 }
 
 func processID(cmd *exec.Cmd) int {
@@ -507,14 +572,18 @@ func (m *ModelSupervisor) StopAll() {
 		return
 	}
 	m.mu.Lock()
+	m.closing = true
 	ids := make([]string, 0, len(m.processes))
-	for id := range m.processes {
+	for id := range m.perModel {
 		ids = append(ids, id)
 	}
 	m.mu.Unlock()
 	sort.Strings(ids)
 	for _, id := range ids {
+		lock := m.lockFor(id)
+		lock.Lock()
 		_ = m.stopNow(id)
+		lock.Unlock()
 	}
 }
 

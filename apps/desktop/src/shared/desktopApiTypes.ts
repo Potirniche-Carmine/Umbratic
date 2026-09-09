@@ -1,3 +1,6 @@
+import type { ReasoningEffort } from "./modelReasoning";
+export { REASONING_EFFORTS, DEFAULT_REASONING_EFFORT, isReasoningEffort, resolveReasoningEffort } from "./modelReasoning";
+export type { ReasoningEffort } from "./modelReasoning";
 import type { ResponseFeedbackReason, ResponseRating } from "./responseFeedback";
 import type { BackendUiEvent } from "./backendEvents";
 import type { DocumentReviewSnapshot } from "./documentReview";
@@ -77,6 +80,7 @@ export type ServerModelInfo = {
   display: string;
   contextLength?: number;
   reasoning: boolean;
+  reasoningEfforts: ReasoningEffort[];
   available: boolean;
   default: boolean;
 };
@@ -220,42 +224,6 @@ export type ModelCapabilities = {
 };
 
 /** How hard the model is asked to think. "off" is a level, not an absence. */
-export type ReasoningEffort = "off" | "on" | "low" | "medium" | "high";
-
-export const REASONING_EFFORTS: readonly ReasoningEffort[] = ["off", "on", "low", "medium", "high"];
-
-export const DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium";
-
-export function isReasoningEffort(value: unknown): value is ReasoningEffort {
-  return typeof value === "string" && (REASONING_EFFORTS as readonly string[]).includes(value);
-}
-
-/**
- * The level a model actually runs at, out of the ones it offers, or null when
- * it offers none.
- *
- * The stored effort is one setting across every model, but each model grades
- * thinking its own way, so the stored level is often not one this model reads.
- * It falls back to a level this model does offer, keeping whether the user
- * wanted thinking at all: someone on "medium" who switches to a model that
- * only knows on and off means on, and taking the first offered level instead
- * would quietly turn their thinking off.
- *
- * Both sides resolve through here — the runtime, to decide what to start the
- * model with, and the menu, to decide which row is checked. Resolving in one
- * place is what keeps the checkmark on the level the model is really using
- * rather than on nothing at all.
- */
-export function resolveReasoningEffort(
-  offered: readonly ReasoningEffort[] | undefined,
-  effort: ReasoningEffort,
-): ReasoningEffort | null {
-  if (!offered || offered.length === 0) return null;
-  if (offered.includes(effort)) return effort;
-  const wantsThinking = effort !== "off";
-  return offered.find((level) => (level !== "off") === wantsThinking) ?? offered[0];
-}
-
 export type LocalModelProvider = {
   providerId: LocalProviderId;
   providerName: string;

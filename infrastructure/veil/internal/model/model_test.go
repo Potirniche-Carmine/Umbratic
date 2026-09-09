@@ -966,3 +966,26 @@ func TestTokenizeRequestShapeFollowsTheMode(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeEndpointsOutsideOpenAIVersionPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/metrics" {
+			t.Errorf("wrong metrics path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		io.WriteString(w, "vllm:prefix_cache_hits_total 3\nvllm:prefix_cache_queries_total 4\n")
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientConfig{Mode: ModeServer, BaseURL: server.URL + "/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := client.RuntimeMetrics(context.Background())
+	if err != nil || !metrics.Available || metrics.PrefixCacheHitRate != 0.75 {
+		t.Fatalf("metrics: %+v, %v", metrics, err)
+	}
+	if client.tokenizeEndpoint != server.URL+"/tokenize" {
+		t.Fatal(client.tokenizeEndpoint)
+	}
+}

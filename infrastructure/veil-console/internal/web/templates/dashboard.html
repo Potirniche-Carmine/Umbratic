@@ -34,19 +34,39 @@
           {{if .Running}}
           <form class="service-action-form" method="post" action="/veil/restart" data-service-action>
             <input type="hidden" name="csrf" value="{{.CSRF}}">
-            <label class="field service-password"><span>Owner password</span><input type="password" name="password" autocomplete="current-password" required></label>
-            <button class="button primary" type="submit">Restart</button>
+            <button class="button secondary" type="submit">Restart</button>
+          </form>
+          <form class="service-action-form" method="post" action="/veil/stop">
+            <input type="hidden" name="csrf" value="{{.CSRF}}">
+            <button class="button danger" type="submit">Stop</button>
           </form>
           {{else}}
           <form class="service-action-form" method="post" action="/veil/start" data-service-action>
             <input type="hidden" name="csrf" value="{{.CSRF}}">
-            <label class="field service-password"><span>Owner password</span><input type="password" name="password" autocomplete="current-password" required></label>
             <button class="button primary" type="submit">Start</button>
           </form>
           {{end}}
         </div>
       {{end}}
     </section>
+    {{if .ConnectionAvailable}}
+    <section class="panel">
+      <h2>Connection</h2>
+      {{if .Connection.LocalOnly}}<p class="empty-copy">Local access only. Enter this server’s VPN IP or hostname to connect employee devices.</p>{{end}}
+      {{if not .ConnectionReady}}<p class="empty-copy">HTTPS is not ready. Check the settings and apply again.</p>{{end}}
+      <form method="post" action="/connection" class="settings-form">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <label class="field">Hostname or IP<input name="host" value="{{.Connection.Host}}" required maxlength="253" spellcheck="false" placeholder="10.20.0.5"></label>
+        <label class="field">HTTPS port<input name="port" type="number" value="{{.Connection.Port}}" min="1024" max="65535" required></label>
+        <label class="field">Certificates<select name="tls">
+          <option value="internal" {{if eq .Connection.TLS "internal"}}selected{{end}}>Private / VPN</option>
+          <option value="public" {{if eq .Connection.TLS "public"}}selected{{end}}>Public domain</option>
+        </select></label>
+        <p class="empty-copy">For public certificates, forward public TCP port 443 to this HTTPS port. Changing the address briefly interrupts connections; existing devices must use the new address.</p>
+        <button class="button primary" type="submit">Apply</button>
+      </form>
+    </section>
+    {{end}}
     {{if and .Configured .Healthy .Ops.Available}}
     <section class="panel">
       <h2>Load</h2>
@@ -69,24 +89,6 @@
         <div><dt>Runtime metrics</dt><dd>Not reporting yet.</dd></div>
         {{end}}
       </dl>
-    </section>
-    {{end}}
-    <!--
-      Only offered while there is something to stop. It used to be rendered
-      whenever Veil was configured, so a stopped service showed a Stop button
-      under a heading that said "Stopped".
-    -->
-    {{if .Running}}
-    <section class="panel stop-panel">
-      <form class="stop-form" method="post" action="/veil/stop">
-        <input type="hidden" name="csrf" value="{{.CSRF}}">
-        <div>
-          <h2>Stop Veil</h2>
-          <p>Requests stop being served until it is started again.</p>
-        </div>
-        <label class="field"><span>Owner password</span><input type="password" name="password" autocomplete="current-password" required></label>
-        <button class="button danger" type="submit">Stop Veil</button>
-      </form>
     </section>
     {{end}}
   </div>

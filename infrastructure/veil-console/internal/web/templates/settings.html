@@ -104,11 +104,6 @@
       </details>
 
       <section class="panel apply-panel">
-        <label class="field password-field">
-          <span>Owner password</span>
-          <input type="password" name="password" autocomplete="current-password" {{if .PasswordError}}aria-invalid="true" aria-describedby="password-error"{{end}} required>
-          {{if .PasswordError}}<small class="field-error" id="password-error" role="alert">Owner password is incorrect.</small>{{end}}
-        </label>
         <div class="apply-actions">
           <button class="button secondary" formaction="/settings/test" type="submit">Test connection</button>
           <button class="button primary" formaction="/settings/apply" type="submit">Apply and restart</button>

@@ -300,7 +300,6 @@
   margin-top: 0.45rem;
 }
 
-.access-empty,
 .unavailable-panel {
   min-height: 130px;
 }
@@ -441,3 +440,5 @@
 
 .auth-error { position: fixed; top: 1.25rem; left: 0; right: 0; z-index: 60; width: min(calc(100% - 2rem), 430px); margin-inline: auto; }
 .auth-error.is-empty { visibility: hidden; }
+
+.access-empty h2 { margin: 0; }

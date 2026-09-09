@@ -189,11 +189,6 @@
       </section>
 
       <section class="panel apply-panel">
-        <label class="field password-field">
-          <span>Owner password</span>
-          <input type="password" name="password" autocomplete="current-password" required {{if .PasswordError}}aria-invalid="true" aria-describedby="password-error"{{end}} data-retrieval-password>
-          {{if .PasswordError}}<small class="field-error" id="password-error" role="alert">Owner password is incorrect.</small>{{end}}
-        </label>
         <div class="apply-actions">
           <button class="button primary" type="submit">Save and restart</button>
         </div>

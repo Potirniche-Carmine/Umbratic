@@ -42,6 +42,7 @@ type modelsView struct {
 	// letting the submission fail.
 	DictationTaken bool
 	Folders        []string
+	FolderHints    map[string]string
 	ModelsDir      string
 	SuggestedPort  int
 }
@@ -62,20 +63,18 @@ type modelRow struct {
 	// Notice is the card's one reserved line. It is always rendered, empty or
 	// not, so a card never changes height when its state does.
 	Notice string
-	// Summary is the command in one readable line: what is being served, at
-	// what context, on which port. The card used to answer that with eight
-	// lines of monospace argv, which is the truth but not the answer.
-	Summary string
 }
 
 // modelForm is the add form. Editing happens on the card itself, so this is
 // only ever the three things a new model needs.
 type modelForm struct {
-	ID          string
-	DisplayName string
-	Command     string
-	Role        string
-	Folder      string
+	ReasoningEfforts string
+	SamplingJSON     string
+	ID               string
+	DisplayName      string
+	Command          string
+	Role             string
+	Folder           string
 }
 
 func (s *Server) modelsPage(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +105,11 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 	view := modelsView{
 		Configured: s.models.Configured(), Registered: len(models), Kind: kind,
 		Folders: folders, ModelsDir: s.modelsDirectory(), SuggestedPort: port,
+		FolderHints: make(map[string]string, len(folders)),
+	}
+	for _, folder := range folders {
+		metadata := supervisor.InspectModel(filepath.Join(s.modelsDirectory(), folder))
+		view.FolderHints[folder] = map[string]string{config.RoleSpeech: "Dictation", config.RoleEmbedding: "Embedding"}[metadata.SuggestedRole]
 	}
 	for _, model := range models {
 		if model.IsSpeech() {
@@ -120,7 +124,7 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 			continue
 		}
 		status := s.models.Status(model.ID)
-		running := status.State == supervisor.ModelHealthy || status.State == supervisor.ModelStarting
+		running := status.PID > 0
 		stale := running && s.models.RunningCommand(model.ID) != strings.TrimSpace(model.Command)
 		row := modelRow{
 			ManagedModel: model,
@@ -132,11 +136,12 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 			Stale:        stale,
 			Notice:       modelNotice(model, running, stale),
 		}
-		row.Summary = modelSummary(model)
 		// Output is shown when it is the answer to a question the card raises.
 		// A model that is serving has nothing to explain; one that failed has
 		// exactly one thing, and it used to be behind a link.
 		if status.State == supervisor.ModelFailed {
+			row.StateText = "Failed to start"
+			row.Notice = status.Message
 			row.Logs = s.models.Logs(model.ID)
 		}
 		view.Rows = append(view.Rows, row)
@@ -168,31 +173,6 @@ func modelNotice(model config.ManagedModel, running, stale bool) string {
 		return "Saved. Restart to run this command."
 	}
 	return ""
-}
-
-// modelSummary reads the command back as a sentence. Everything in it is
-// already in the argv below; this is the version someone can take in at a
-// glance, with the precision named when the repository is one the catalog
-// knows.
-func modelSummary(model config.ManagedModel) string {
-	facts, err := model.Parse()
-	if err != nil {
-		return ""
-	}
-	parts := []string{facts.ModelPath}
-	if entry, ok := config.CatalogByRepo(facts.ModelPath); ok {
-		for _, variant := range entry.Variants {
-			if strings.EqualFold(variant.Repo, facts.ModelPath) {
-				parts = append(parts, variant.Label)
-				break
-			}
-		}
-	}
-	if facts.MaxModelLen > 0 {
-		parts = append(parts, fmt.Sprintf("%dK context", facts.MaxModelLen/1024))
-	}
-	parts = append(parts, fmt.Sprintf("port %d", facts.Port))
-	return strings.Join(parts, " · ")
 }
 
 func modelStateText(status supervisor.ModelStatus) string {
@@ -237,12 +217,21 @@ func suggestedModelPort(r *http.Request) int {
 }
 
 func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm) {
+	_ = r.ParseForm()
+	efforts := append([]string(nil), r.Form["reasoning_effort"]...)
+	for _, extra := range strings.Split(r.FormValue("extra_efforts"), ",") {
+		if value := strings.ToLower(strings.TrimSpace(extra)); value != "" {
+			efforts = append(efforts, value)
+		}
+	}
 	form := modelForm{
-		ID:          strings.TrimSpace(r.FormValue("id")),
-		DisplayName: strings.TrimSpace(r.FormValue("display_name")),
-		Command:     strings.TrimSpace(r.FormValue("command")),
-		Role:        config.NormalizeRole(r.FormValue("role")),
-		Folder:      strings.TrimSpace(r.FormValue("folder")),
+		ID:               strings.TrimSpace(r.FormValue("id")),
+		DisplayName:      strings.TrimSpace(r.FormValue("display_name")),
+		Command:          strings.TrimSpace(r.FormValue("command")),
+		ReasoningEfforts: strings.Join(efforts, ","),
+		SamplingJSON:     strings.TrimSpace(r.FormValue("sampling_json")),
+		Role:             config.NormalizeRole(r.FormValue("role")),
+		Folder:           strings.TrimSpace(r.FormValue("folder")),
 	}
 	if id == "" {
 		form.Role = requestKind(r).Role()
@@ -252,6 +241,8 @@ func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm)
 	}
 	model := config.ManagedModel{
 		ID: form.ID, DisplayName: form.DisplayName, Command: form.Command, Role: form.Role,
+		ReasoningEfforts: form.ReasoningEfforts,
+		SamplingJSON:     form.SamplingJSON,
 	}
 	// Store it laid out one flag per line however it arrived, so a pasted
 	// one-liner is readable the next time the card is opened.
@@ -275,9 +266,14 @@ func (s *Server) modelsCreate(w http.ResponseWriter, r *http.Request) {
 		model.ID = localModelID(filepath.Base(folder))
 	}
 	if model.Command == "" {
-		model.Command = config.FormatCommand([]string{"serve", folder, "--host", "127.0.0.1", "--port", strconv.Itoa(suggestedModelPort(r)), "--served-model-name", model.ID})
+		model.Command = config.DefaultCommand(folder, model.ID, suggestedModelPort(r))
 		if model.Role == config.RoleEmbedding {
 			model.Command += "\n--runner pooling"
+		}
+		model, err = s.models.PrepareCommand(model)
+		if err != nil {
+			s.renderModelFormError(w, r, form, err)
+			return
 		}
 	}
 	facts, parseErr := model.Parse()
@@ -302,8 +298,7 @@ func (s *Server) modelsCreate(w http.ResponseWriter, r *http.Request) {
 		s.renderModelFormError(w, r, form, errors.New("the model could not be saved"))
 		return
 	}
-	s.handOffModels(r)
-	s.modelActionResult(w, r, nil, "model.create")
+	s.modelActionResult(w, r, s.handOffModels(r), "model.create")
 }
 
 // modelsDefault points Veil's default model at this card.
@@ -388,40 +383,14 @@ func (s *Server) modelsDefault(w http.ResponseWriter, r *http.Request) {
 // stored as typed and only becomes argv at start, so a model that is running
 // keeps running exactly as it was launched until it is restarted.
 func (s *Server) modelsUpdate(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("model_id")
-	model, _ := parseModelForm(r, id)
-	if err := model.Validate(); err != nil {
-		s.modelActionResult(w, r, err, "model.update")
-		return
-	}
-	existing, err := s.store.ManagedModels(r.Context())
-	if err != nil {
-		s.modelActionResult(w, r, errors.New("the model list could not be loaded"), "model.update")
-		return
-	}
-	fleet := make([]config.ManagedModel, 0, len(existing))
-	for _, candidate := range existing {
-		if candidate.ID == id {
-			continue
-		}
-		fleet = append(fleet, candidate)
-	}
-	if err := config.ValidateManagedModels(append(fleet, model), s.startup.Port, s.veilPort()); err != nil {
-		s.modelActionResult(w, r, err, "model.update")
-		return
-	}
-	if err := s.store.UpdateManagedModel(r.Context(), model); err != nil {
-		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.update")
-		return
-	}
-	s.handOffModels(r)
-	s.modelActionResult(w, r, nil, "model.update")
+	_, err := s.saveLaunchCommand(r)
+	s.modelActionResult(w, r, err, "model.update")
 }
 
 func (s *Server) modelsDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("model_id")
 	// Removing a running model would orphan its process and its GPU memory.
-	if state := s.models.Status(id).State; state == supervisor.ModelHealthy || state == supervisor.ModelStarting {
+	if status := s.models.Status(id); status.PID > 0 {
 		s.modelActionResult(w, r, errors.New("stop this model before removing it"), "model.delete")
 		return
 	}
@@ -429,48 +398,120 @@ func (s *Server) modelsDelete(w http.ResponseWriter, r *http.Request) {
 		s.modelActionResult(w, r, errors.New("the model could not be removed"), "model.delete")
 		return
 	}
-	s.handOffModels(r)
-	s.modelActionResult(w, r, nil, "model.delete")
+	s.modelActionResult(w, r, s.handOffModels(r), "model.delete")
 }
 
 func (s *Server) modelsStart(w http.ResponseWriter, r *http.Request) {
-	model, ok, err := s.store.ManagedModel(r.Context(), r.PathValue("model_id"))
-	if err != nil || !ok {
-		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.start")
+	model, err := s.saveLaunchCommand(r)
+	if err != nil {
+		s.modelActionResult(w, r, err, "model.start")
 		return
 	}
-	s.modelActionResult(w, r, s.models.Start(model), "model.start")
+	s.modelActionResult(w, r, s.startEnabledModel(r, model), "model.start")
 }
 
 func (s *Server) modelsStop(w http.ResponseWriter, r *http.Request) {
-	s.modelActionResult(w, r, s.models.Stop(r.PathValue("model_id")), "model.stop")
+	id := r.PathValue("model_id")
+	err := s.store.SetModelEnabled(r.Context(), id, false)
+	if err == nil {
+		err = s.models.Stop(id)
+	}
+	s.modelActionResult(w, r, err, "model.stop")
 }
 
 // modelsRestart is how an edited command takes effect: stop, then start from
 // the saved command.
 func (s *Server) modelsRestart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("model_id")
-	model, ok, err := s.store.ManagedModel(r.Context(), id)
-	if err != nil || !ok {
-		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.restart")
+	model, err := s.saveLaunchCommand(r)
+	if err != nil {
+		s.modelActionResult(w, r, err, "model.restart")
 		return
 	}
 	if err := s.models.Stop(id); err != nil {
 		s.modelActionResult(w, r, err, "model.restart")
 		return
 	}
-	s.modelActionResult(w, r, s.models.Start(model), "model.restart")
+	s.modelActionResult(w, r, s.startEnabledModel(r, model), "model.restart")
 }
 
-// handOffModels records the stored registry for the next Veil start. It does
-// not restart Veil: which models exist is configuration, and an administrator
-// applies it deliberately from the dashboard.
-func (s *Server) handOffModels(r *http.Request) {
+// Start and Restart submit the visible editor, just like Save. Validate before
+// stopping anything so an invalid edit leaves a serving model alone.
+func (s *Server) saveLaunchCommand(r *http.Request) (config.ManagedModel, error) {
+	model, _ := parseModelForm(r, r.PathValue("model_id"))
+	if err := model.Validate(); err != nil {
+		return model, err
+	}
+	fleet, err := s.store.ManagedModels(r.Context())
+	if err != nil {
+		return model, err
+	}
+	found := false
+	for i := range fleet {
+		if fleet[i].ID == model.ID {
+			fleet[i] = model
+			found = true
+		}
+	}
+	if !found {
+		return model, errors.New("that model is not registered")
+	}
+	if err := config.ValidateManagedModels(fleet, s.startup.Port, s.veilPort()); err != nil {
+		return model, err
+	}
+	if err := s.store.UpdateManagedModel(r.Context(), model); err != nil {
+		return model, errors.New("the model could not be saved")
+	}
+	return model, s.handOffModels(r)
+}
+
+// handOffModels applies registry changes through the existing Veil supervisor.
+// The first chat model becomes the default; removing it picks the next chat.
+func (s *Server) handOffModels(r *http.Request) error {
 	models, err := s.store.ManagedModels(r.Context())
 	if err != nil {
-		return
+		return err
+	}
+	cfg, ok, err := s.store.Configuration(r.Context(), "current")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		cfg = config.DefaultVeil()
+	}
+	var chosen *config.ManagedModel
+	for i := range models {
+		if config.NormalizeRole(models[i].Role) == config.RoleChat {
+			if chosen == nil || models[i].ID == cfg.Model {
+				chosen = &models[i]
+			}
+			if models[i].ID == cfg.Model {
+				break
+			}
+		}
+	}
+	if chosen == nil {
+		cfg.Model = ""
+		cfg.ProviderBaseURL = config.DefaultVeil().ProviderBaseURL
+		cfg.ContextLength = 0
+	} else {
+		facts, err := chosen.Parse()
+		if err != nil {
+			return err
+		}
+		cfg.Model = chosen.ID
+		cfg.ProviderBaseURL = chosen.ProviderBaseURL()
+		cfg.ContextLength = facts.MaxModelLen
+		cfg = config.WithModelDefaults(cfg, facts.ModelPath)
+	}
+	if err := s.store.SavePending(r.Context(), cfg, time.Now()); err != nil {
+		return err
+	}
+	if err := s.store.PromotePending(r.Context(), time.Now()); err != nil {
+		return err
 	}
 	s.supervisor.SetModels(models)
+	return s.restartVeilForChange(r.Context())
 }
 
 func (s *Server) renderModelFormError(w http.ResponseWriter, r *http.Request, form modelForm, err error) {
@@ -508,4 +549,15 @@ func (s *Server) modelActionResult(w http.ResponseWriter, r *http.Request, err e
 	}
 	s.store.Audit(r.Context(), event, "success", time.Now())
 	http.Redirect(w, r, modelsPath(requestKind(r)), http.StatusSeeOther)
+}
+
+func (s *Server) startEnabledModel(r *http.Request, model config.ManagedModel) error {
+	if err := s.models.Start(model); err != nil {
+		return err
+	}
+	if err := s.store.SetModelEnabled(r.Context(), model.ID, true); err != nil {
+		_ = s.models.Stop(model.ID)
+		return err
+	}
+	return nil
 }
