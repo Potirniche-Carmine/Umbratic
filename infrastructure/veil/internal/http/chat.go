@@ -128,7 +128,7 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			ReasoningVisible: input.ReasoningVisible && (thinking == nil || *thinking),
 		}
 		contextLength := s.contextLengthFor(selectedModel)
-		if estimated, ok := finalRequestFits(req, contextLength); !ok {
+		if estimated, ok := fitChatOutputBudget(&req, contextLength); !ok {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
 				"error":           "assembled request exceeds the configured context window",
 				"code":            "context_overflow_preflight",
@@ -252,6 +252,23 @@ func finalRequestFits(req model.ChatRequest, contextLength int) (int, bool) {
 	}
 	estimated := len(req.Messages)*10 + estimatedValueTokens(req.Messages) + estimatedValueTokens(req.Tools) + req.MaxOutputTokens
 	return estimated, estimated <= contextLength
+}
+
+// max_output_tokens is an upper bound. When the assembled prompt fits, use
+// the remaining window for the answer instead of rejecting the whole request
+// because the harness reserved more output than is available. Keep the same
+// conservative estimate and minimum answer allowance as the runner.
+func fitChatOutputBudget(req *model.ChatRequest, contextLength int) (int, bool) {
+	estimated, fits := finalRequestFits(*req, contextLength)
+	if fits {
+		return estimated, true
+	}
+	available := contextLength - (estimated - req.MaxOutputTokens)
+	if available < min(req.MaxOutputTokens, 1000) {
+		return estimated, false
+	}
+	req.MaxOutputTokens = available
+	return contextLength, true
 }
 
 func effectiveMaxOutputTokens(requested int, configured int) int {

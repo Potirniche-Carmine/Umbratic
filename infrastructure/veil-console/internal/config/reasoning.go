@@ -1,20 +1,13 @@
 package config
 
-import (
-	"regexp"
-	"strings"
-)
+import "strings"
 
-var effortName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-
-func (m ManagedModel) ExtraEfforts() string {
-	var values []string
-	for _, effort := range m.Efforts() {
-		if effort != "off" && effort != "on" && effort != "low" && effort != "medium" && effort != "high" {
-			values = append(values, effort)
-		}
+func supportedEffort(value string) bool {
+	switch value {
+	case "on", "off", "low", "medium", "high", "xhigh", "max":
+		return true
 	}
-	return strings.Join(values, ", ")
+	return false
 }
 
 func (m ManagedModel) Efforts() []string {

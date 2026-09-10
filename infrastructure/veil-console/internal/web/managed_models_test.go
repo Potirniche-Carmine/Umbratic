@@ -95,10 +95,9 @@ func authorizedPost(t *testing.T, handler http.Handler, cookies []*http.Cookie, 
 
 func modelFormValues(server *Server, csrf string, overrides map[string]string) url.Values {
 	form := url.Values{
-		"csrf":         {csrf},
-		"id":           {"qwen3-32b"},
-		"display_name": {"Qwen 32B"},
-		"command":      {testCommand},
+		"csrf":    {csrf},
+		"id":      {"qwen3-32b"},
+		"command": {testCommand},
 	}
 	for key, value := range overrides {
 		if value == "" {
@@ -169,14 +168,14 @@ func TestModelLifecycleThroughTheWeb(t *testing.T) {
 	// Editing the command is the point of the card: it is saved as typed.
 	edited := strings.Replace(models[0].Command, "--max-model-len 32768", "--max-model-len 98304", 1)
 	update := authorizedPost(t, handler, cookies, "/models/qwen3-32b/update", url.Values{
-		"csrf": {csrf}, "display_name": {"Qwen 32B long"}, "command": {edited},
+		"csrf": {csrf}, "command": {edited},
 	})
 	if update.Code != http.StatusSeeOther {
 		body, _ := io.ReadAll(update.Result().Body)
 		t.Fatalf("update failed: %d %s", update.Code, body)
 	}
 	stored, _, _ := server.store.ManagedModel(t.Context(), "qwen3-32b")
-	if stored.DisplayName != "Qwen 32B long" || stored.Command != edited {
+	if stored.ID != "qwen3-32b" || stored.Command != edited {
 		t.Fatalf("the update must persist: %#v", stored)
 	}
 	// The window Veil publishes follows the command it was read from.
@@ -243,7 +242,7 @@ func TestModelsPageRendersTheCommandAndItsState(t *testing.T) {
 	}
 	body := page.Body.String()
 	for _, expected := range []string{
-		"Qwen 32B", "qwen3-32b",
+		"qwen3-32b",
 		// The command is editable on the card, shown exactly as stored.
 		"--kv-cache-dtype fp8",
 		`name="command"`,
@@ -294,7 +293,7 @@ func TestASavedCommandThatIsNotRunningYetIsCalledOut(t *testing.T) {
 }
 
 func managedTestModel() config.ManagedModel {
-	return config.ManagedModel{ID: "qwen3-32b", DisplayName: "Qwen 32B", Command: testCommand}
+	return config.ManagedModel{ID: "qwen3-32b", Command: testCommand}
 }
 
 const speechCommand = "serve Qwen/Qwen3-ASR-1.7B --host 127.0.0.1 --port 8010 --served-model-name qwen3-asr"
@@ -311,7 +310,7 @@ func TestModelsPageRegistersADictationRuntime(t *testing.T) {
 		t.Fatalf("chat model create failed: %d", chat.Code)
 	}
 	speech := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(server, csrf, map[string]string{
-		"id": "qwen3-asr", "display_name": "Qwen3 ASR", "command": speechCommand, "kind": "dictation",
+		"kind": "dictation", "port": "8010",
 	}))
 	if speech.Code != http.StatusSeeOther {
 		t.Fatalf("speech model create failed: %d", speech.Code)
@@ -329,7 +328,7 @@ func TestModelsPageRegistersADictationRuntime(t *testing.T) {
 	}
 
 	dictationTab := authorizedGet(t, handler, cookies, "/models?kind=dictation").Body.String()
-	for _, expected := range []string{"Qwen3 ASR", "qwen3-asr", ">Dictation<"} {
+	for _, expected := range []string{"test-model-Dictation", ">Dictation<"} {
 		if !strings.Contains(dictationTab, expected) {
 			t.Fatalf("the dictation tab must show %q: %s", expected, dictationTab)
 		}
@@ -345,7 +344,7 @@ func TestModelsPageRegistersADictationRuntime(t *testing.T) {
 	second := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(server, csrf, map[string]string{
 		"id": "whisper", "display_name": "Whisper",
 		"command": "serve openai/whisper-large-v3 --host 127.0.0.1 --port 8011 --served-model-name whisper",
-		"kind":    "dictation",
+		"kind":    "dictation", "port": "8011",
 	}))
 	if second.Code == http.StatusSeeOther {
 		t.Fatal("a second dictation runtime must be refused at save time")

@@ -40,7 +40,6 @@
       ? new BroadcastChannel("veil-console-session")
       : null;
     const signOut = () => {
-      if (document.querySelector('[data-model-import][aria-busy="true"]')) { resetIdleTimer(); return; }
       logoutForm.requestSubmit();
     };
     const resetIdleTimer = () => {
@@ -269,80 +268,9 @@
   const localModel = document.querySelector("[data-local-model]");
   if (localModel) {
     const folder = localModel.elements.folder;
-    const name = localModel.elements.display_name;
     const id = localModel.elements.id;
     folder.addEventListener("change", () => {
-      name.value = folder.value;
-      id.value = folder.value.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 128) || "model";
+      if (id) id.value = folder.value.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 128) || "model";
     });
-  }
-  const importer = document.querySelector("[data-model-import]");
-  if (importer) {
-    const input = importer.querySelector("[data-model-files]");
-    const browse = importer.querySelector("[data-model-browse]");
-    const cancel = importer.querySelector("[data-model-cancel]");
-    const progress = importer.querySelector("[data-model-progress]");
-    const status = importer.querySelector("[data-model-import-status]");
-    let request = null;
-    const upload = (files) => {
-      if (request || !files.length) return;
-      if (files.length > 10000 || files.reduce((n, item) => n + item.file.size, 0) >= 256 * 1024 ** 3) {
-        status.textContent = "The folder exceeds 256 GiB or 10,000 files. Copy it on the server instead."; return;
-      }
-      const body = new FormData();
-      for (const item of files) body.append(item.path, item.file, item.file.name);
-      request = new XMLHttpRequest();
-      request.open("POST", "/models/import");
-      request.setRequestHeader("X-CSRF-Token", importer.dataset.csrf);
-      browse.disabled = true;
-      importer.setAttribute("aria-busy", "true");
-      const heartbeat = window.setInterval(() => {
-        void fetch("/session/touch", { credentials: "same-origin", cache: "no-store" }).catch(() => {});
-      }, 60000);
-      cancel.hidden = false;
-      progress.hidden = false;
-      progress.value = 0;
-      status.textContent = "Importing folder… Keep this page open.";
-      request.upload.onprogress = (event) => { if (event.lengthComputable) progress.value = event.loaded / event.total * 100; };
-      request.onload = () => {
-        if (request.status === 200 && !request.responseURL.includes("/login")) {
-          status.textContent = "Folder imported. Updating the model list…";
-          request = null;
-          window.location.reload();
-        } else { status.textContent = request.responseURL.includes("/login") ? "Your session ended. Sign in and try again." : request.responseText || "Import failed. Try again."; }
-      };
-      request.onerror = () => { status.textContent = "Connection lost. Refresh folders before you try again."; };
-      request.onabort = () => { status.textContent = "Import cancelled. No model was added."; };
-      request.onloadend = () => { window.clearInterval(heartbeat); importer.removeAttribute("aria-busy"); request = null; browse.disabled = false; cancel.hidden = true; input.value = ""; };
-      request.send(body);
-    };
-    browse.addEventListener("click", () => input.click());
-    cancel.addEventListener("click", () => request?.abort());
-    input.addEventListener("change", () => upload([...input.files].map((file) => ({ file, path: file.webkitRelativePath }))));
-    const readEntry = async (entry, files) => {
-      if (files.length >= 10000) throw new Error("The folder has too many files.");
-      if (entry.isFile) {
-        const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
-        files.push({ file, path: entry.fullPath.replace(/^\//, "") });
-      } else if (entry.isDirectory) {
-        const reader = entry.createReader();
-        while (true) {
-          const entries = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
-          if (!entries.length) break;
-          for (const child of entries) await readEntry(child, files);
-        }
-      }
-    };
-    for (const eventName of ["dragenter", "dragover"]) importer.addEventListener(eventName, (event) => { event.preventDefault(); importer.classList.add("is-dragging"); });
-    importer.addEventListener("dragleave", () => importer.classList.remove("is-dragging"));
-    importer.addEventListener("drop", async (event) => {
-      event.preventDefault(); importer.classList.remove("is-dragging");
-      if (request) return;
-      const entries = [...event.dataTransfer.items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
-      if (entries.length !== 1 || !entries[0].isDirectory) { status.textContent = "Drop one complete model folder, including config.json."; return; }
-      try { const files = []; await readEntry(entries[0], files); upload(files); }
-      catch (error) { status.textContent = error.message || "The folder could not be read. Use Choose folder."; }
-    });
-    window.addEventListener("beforeunload", (event) => { if (request) event.preventDefault(); });
   }
 })();

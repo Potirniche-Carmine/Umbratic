@@ -118,7 +118,7 @@ func Load(directory string) (Package, error) {
 	p.License = license
 	required := []string{"deploy.sh", "deployment.json", "entitlement.json", "README.md", "bin/deploy", "bin/veil", "bin/veil-console", "bin/umbratic-pdf", "bin/caddy", "bin/qdrant", "bin/ffmpeg"}
 	if p.Config.Profile == "metal" {
-		required = append(required, "bin/uv", "runtime/python.tar.gz", "runtime/requirements.txt")
+		required = append(required, "Models.app/Contents/Info.plist", "Models.app/Contents/MacOS/models-folder", "bin/uv", "runtime/python.tar.gz", "runtime/requirements.txt")
 		for _, name := range []string{"python", "uv", "vllm", "vllm-metal", "caddy", "qdrant", "ffmpeg"} {
 			if p.Manifest.Dependencies[name] == "" {
 				return p, fmt.Errorf("missing pinned dependency: %s", name)

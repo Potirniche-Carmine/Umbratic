@@ -11,8 +11,14 @@ dependency_dir=""
 output_dir="$repo_root/artifacts/releases"
 seats=""
 devices_per_user=2
-signing_key_file="$HOME/umbratic-release/umbratic-entitlement-signing.key"
-feed_key_file="$HOME/umbratic-release/umbratic-feed-master.key"
+release_dir="$HOME/umbratic-release"
+release_env_file="$HOME/.umbratic/release.env"
+if [[ "$(uname -s)" == Darwin ]]; then
+  release_dir="$repo_root/artifacts/release-work"
+  release_env_file="$release_dir/release.env"
+fi
+signing_key_file="$release_dir/umbratic-entitlement-signing.key"
+feed_key_file="$release_dir/umbratic-feed-master.key"
 searches_per_month=0
 org_uid=""
 positional=0
@@ -65,7 +71,7 @@ esac
 if [[ -z "$profile" ]]; then
   if [[ "$target_os" == darwin ]]; then profile=metal; else profile=cuda; fi
 fi
-if [[ -z "$dependency_dir" ]]; then dependency_dir="$HOME/umbratic-release/$profile-kit"; fi
+if [[ -z "$dependency_dir" ]]; then dependency_dir="$release_dir/$profile-kit"; fi
 if [[ ! -f "$dependency_dir/manifest.json" ]]; then
   echo "Dependency kit missing: $dependency_dir/manifest.json. See docs/guides/release-server.md." >&2
   exit 2
@@ -103,11 +109,11 @@ fi
 # any customer's, identical for every bundle we build, and so it belongs to the
 # release machine the same way the publishing credentials do: taken from the
 # environment, and otherwise from the one assignment for it in
-# ~/.umbratic/release.env. The file is read line by line and never sourced â€” it
+# the release identity file. The file is read line by line and never sourced — it
 # holds credentials, not commands, and sourcing it would run whatever a stray
 # line happened to contain.
 read_release_env_value() {
-  local name="$1" file="$HOME/.umbratic/release.env" line key value
+  local name="$1" file="$release_env_file" line key value
   [[ -f "$file" ]] || return 0
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
@@ -138,7 +144,10 @@ fi
 # No key anywhere is not a failure: a customer who did not buy web search gets a
 # bundle whose veil holds no subscription key, which is a complete product.
 
-work_dir="$(mktemp -d)"
+mkdir -p "$release_dir/tmp"
+chmod 700 "$release_dir" "$release_dir/tmp"
+export TMPDIR="$release_dir/tmp"
+work_dir="$(mktemp -d "$release_dir/tmp/build.XXXXXX")"
 trap 'rm -rf -- "$work_dir"' EXIT
 bundle_name="umbratic-veil-$version-$customer-$target_os-$architecture"
 bundle_dir="$work_dir/$bundle_name"
@@ -178,6 +187,16 @@ fi
 (cd "$repo_root/infrastructure/veil-console" && CGO_ENABLED=0 GOOS="$target_os" GOARCH="$architecture" go build -trimpath \
   -ldflags "-X umbratic-veil-console/internal/entitlement.TrustedPublicKey=$entitlement_public_key" \
   -o "$bundle_dir/bin/veil-console" ./cmd/veil-console)
+
+# The desktop launcher only opens the fixed models directory.
+if [[ "$target_os" == darwin ]]; then
+  app_dir="$bundle_dir/Models.app/Contents"
+  mkdir -p "$app_dir/MacOS"
+  cp "$script_dir/models-folder/Info.plist" "$app_dir/Info.plist"
+  xcrun swiftc -O -framework Cocoa -target arm64-apple-macosx15.0 \
+    "$script_dir/models-folder/main.swift" -o "$app_dir/MacOS/models-folder"
+  codesign --force --sign - "$bundle_dir/Models.app"
+fi
 
 # The PDF extractor Console spawns for `.pdf` uploads. It is the same crate the
 # desktop already ships, built for the server target.

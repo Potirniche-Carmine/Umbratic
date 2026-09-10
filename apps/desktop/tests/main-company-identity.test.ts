@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as crypto from "node:crypto";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
@@ -114,4 +115,82 @@ test("company enrollment stores only the encrypted-device input and renews opaqu
   await identity.disconnectCompanyDevice();
   assert.equal(cleared, true);
   assert.equal(calls.at(-1).options.headers.Authorization, `Bearer ${reconnected}`);
+});
+
+function sessionHarness() {
+  const pair = crypto.generateKeyPairSync("ed25519");
+  const credential = {
+    baseUrl: "https://veil.example", deviceUid: "dev_laptop", orgName: "Example",
+    privateKeyPkcs8: pair.privateKey.export({ format: "der", type: "pkcs8" }).toString("base64"),
+  };
+  let challenges = 0;
+  let sessions = 0;
+  let latestChallenge = "";
+  let fail = false;
+  let release;
+  let wait = Promise.resolve();
+  const tokens = [];
+  const identity = loadTypeScriptModule(new URL("../src/main/companyIdentity.ts", import.meta.url), {
+    mocks: {
+      "./companyTrust": { companyTLS: () => undefined },
+      "./storage": {
+        readCompanyDeviceCredential: () => credential,
+        writeUpdateFeedTokenSetting: (token) => tokens.push(token),
+      },
+      "./providerClient": {
+        async postProviderJson(url, body) {
+          if (url.endsWith("/challenge")) {
+            latestChallenge = `chal_${++challenges}`;
+            return { statusCode: 201, json: { challenge_uid: latestChallenge, challenge: "umbratic-device-session-v1.test" } };
+          }
+          if (url.endsWith("/logout")) return { statusCode: 204 };
+          sessions++;
+          await wait;
+          if (fail || body.challenge_uid !== latestChallenge) {
+            return { statusCode: 401, json: { code: "challenge_invalid" } };
+          }
+          assert.equal(crypto.verify(null, Buffer.from("umbratic-device-session-v1.test"), pair.publicKey, Buffer.from(body.signature, "base64url")), true);
+          return { statusCode: 201, json: {
+            session_token: `umbs_session${sessions}`, org_name: "Example",
+            expires_at: new Date(Date.now() + 900_000).toISOString(), update_token: "feed-token",
+          } };
+        },
+      },
+    },
+  });
+  return { identity, tokens, counts: () => ({ challenges, sessions }), fail: (value) => { fail = value; }, hold: () => { wait = new Promise((done) => { release = done; }); }, release: () => release() };
+}
+
+test("concurrent status, discovery and renewal share one device challenge", async () => {
+  const { identity, counts } = sessionHarness();
+  const tokens = await Promise.all([identity.ensureCompanySession(), identity.ensureCompanySession(), identity.renewCompanySession(), identity.connectCompanySession()]);
+  assert.equal(new Set(tokens).size, 1);
+  assert.deepEqual(counts(), { challenges: 1, sessions: 1 });
+  await Promise.all([identity.renewCompanySession(), identity.ensureCompanySession(), identity.renewCompanySession()]);
+  assert.deepEqual(counts(), { challenges: 2, sessions: 2 });
+});
+
+test("a failed shared exchange can be retried without refreshing the connection", async () => {
+  const h = sessionHarness();
+  h.fail(true);
+  const results = await Promise.allSettled([h.identity.ensureCompanySession(), h.identity.ensureCompanySession()]);
+  assert.ok(results.every((result) => result.status === "rejected"));
+  h.fail(false);
+  assert.match(await h.identity.ensureCompanySession(), /^umbs_/);
+  assert.deepEqual(h.counts(), { challenges: 2, sessions: 2 });
+});
+
+test("disconnect prevents an in-flight session from restoring credentials or update tokens", async () => {
+  const h = sessionHarness();
+  h.hold();
+  const pending = h.identity.ensureCompanySession();
+  const rejected = assert.rejects(pending, /connection changed/);
+  await new Promise((resolve) => setImmediate(resolve));
+  const disconnect = h.identity.disconnectCompanySession();
+  h.release();
+  await Promise.all([rejected, disconnect]);
+  assert.equal(h.identity.currentCompanySessionToken(), "");
+  assert.deepEqual(h.tokens, []);
+  await assert.rejects(h.identity.ensureCompanySession(), /disconnected/);
+  assert.match(await h.identity.connectCompanySession(), /^umbs_/);
 });

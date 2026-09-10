@@ -189,6 +189,7 @@ function verifyMacCodeSignature(appBundle: string) {
 const resources = packagedResources();
 const executable = (name: string) => process.platform === "win32" ? `${name}.exe` : name;
 const appArchive = requireFile(path.join(resources, "app.asar"));
+requireFile(path.join(resources, "app-update.yml"));
 verifyMacCodeSignature(path.resolve(resources, "../.."));
 verifyDocumentsSkill(appArchive);
 verifyBinary(path.join(resources, "runner", executable("umbratic-runner")), /UmbraticRunner/);

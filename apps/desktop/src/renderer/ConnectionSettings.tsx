@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Cloud, Loader2, Monitor, RefreshCw } from "lucide-react";
+import { Check, Cloud, Loader2, Monitor, RefreshCw, ShieldCheck } from "lucide-react";
 import type {
   BackendStatus,
   CompanyConnectionStatus,
@@ -10,6 +10,7 @@ import type {
 import { CompanyServerActions } from "./CompanyServerActions";
 import { Combobox } from "./Combobox";
 import { contextBadge } from "./ComposerControls";
+import { isMacPlatform } from "./keyboardShortcuts";
 import { CustomModelAdd, LocalModelFolder, LocalModelMenu, LocalMtpToggle, useLocalModelCatalog } from "./LocalModelList";
 import {
   defaultModelEndpointSettings,
@@ -82,6 +83,7 @@ export function useConnectionSettings({
   // is no choice to offer here.
   const [serverModels, setServerModels] = useState<ServerModelInfo[]>([]);
   const [serverModelStatus, setServerModelStatus] = useState<ModelDiscoveryStatus>("idle");
+  const serverModelsSequenceRef = useRef(0);
   const saveSequenceRef = useRef(0);
   const modeLoadSequenceRef = useRef(0);
   const modeDraftsRef = useRef<Partial<Record<ModelEndpointMode, ModelEndpointSettings>>>({
@@ -99,7 +101,7 @@ export function useConnectionSettings({
     companyServerConnected
     && settings.mode === "server"
     && !dirty
-    && backend?.endpoint === "ready";
+    && (backend?.endpoint === "ready" || backend?.endpoint === "degraded");
   const validation =
     endpointValidationMessage(draft)
     ?? (companyEnrollmentRequired && !draft.secret.trim() ? "Enter the Enrollment code." : null);
@@ -138,7 +140,9 @@ export function useConnectionSettings({
   // runtime: a list the user has to press refresh to see is a list they will
   // assume is empty.
   useEffect(() => {
-    if (!settingsOpen || !active || draft.mode !== "server") {
+    const requestId = ++serverModelsSequenceRef.current;
+    if (!settingsOpen || !active || draft.mode !== "server" || companyConnection.state !== "enrolled") {
+      setServerModels([]);
       setServerModelStatus("idle");
       return;
     }
@@ -146,12 +150,12 @@ export function useConnectionSettings({
     setServerModelStatus("loading");
     void api.listServerModels().then(
       (published) => {
-        if (!current) return;
+        if (!current || requestId !== serverModelsSequenceRef.current) return;
         setServerModels(published);
         setServerModelStatus(published.length > 0 ? "ready" : "unavailable");
       },
       () => {
-        if (!current) return;
+        if (!current || requestId !== serverModelsSequenceRef.current) return;
         setServerModels([]);
         setServerModelStatus("unavailable");
       },
@@ -329,29 +333,35 @@ export function useConnectionSettings({
   }
 
   // In local mode this is the manual load: the one action that starts the
-  // model stack outside of picking a model or sending a prompt. Server mode
-  // keeps it as a plain re-check.
+  // model stack outside of picking a model or sending a prompt. Both server
+  // refresh controls reload connection status and the published model list.
   async function refresh() {
     if (refreshDisabled) return;
     const requestId = saveSequenceRef.current + 1;
     saveSequenceRef.current = requestId;
     setRefreshing(true);
     setMessage(null);
+    const modelsRequestId = ++serverModelsSequenceRef.current;
+    if (draft.mode === "server") setServerModelStatus("loading");
     try {
       if (draft.mode === "local") await localCatalog.reload();
-      const status = dirty
-        ? null
-        : draft.mode === "local"
-          ? (await api.loadLocalModel()).status
-          : await api.getBackendStatus();
+      const status = draft.mode === "server"
+        ? await api.getBackendStatus()
+        : dirty ? null : (await api.loadLocalModel()).status;
+      const published = draft.mode === "server" ? await api.listServerModels() : null;
       if (requestId !== saveSequenceRef.current) return;
+      if (published && modelsRequestId === serverModelsSequenceRef.current) {
+        setServerModels(published);
+        setServerModelStatus(published.length > 0 ? "ready" : "unavailable");
+      }
       if (status) onBackendStatus(status);
     } catch (cause) {
       if (requestId === saveSequenceRef.current) {
         setMessage(String(cause instanceof Error ? cause.message : cause));
+        if (draft.mode === "server") setServerModelStatus("unavailable");
       }
     } finally {
-      if (requestId === saveSequenceRef.current) setRefreshing(false);
+      setRefreshing(false);
     }
   }
 
@@ -481,18 +491,6 @@ export function useConnectionSettings({
     }
   }
 
-  async function refreshServerModels() {
-    setServerModelStatus("loading");
-    try {
-      const published = await api.listServerModels();
-      setServerModels(published);
-      setServerModelStatus(published.length > 0 ? "ready" : "unavailable");
-    } catch {
-      setServerModels([]);
-      setServerModelStatus("unavailable");
-    }
-  }
-
   /**
    * Picking a server model is a settings write like any other, not a
    * connection change: the enrollment, the URL, and the session all stay.
@@ -539,7 +537,6 @@ export function useConnectionSettings({
     draft,
     serverModels,
     serverModelStatus,
-    refreshServerModels,
     selectServerModel,
     companyConnection,
     saving,
@@ -604,6 +601,7 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
     displayState,
     statusLabel,
   } = controller;
+  const showKeychainNotice = isMacPlatform() && draft.mode === "server" && !companyServerConnected;
 
   return (
     <div className="settingsPanel">
@@ -721,8 +719,8 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
                 <button
                   className="connectionModelRefresh"
                   type="button"
-                  disabled={formDisabled || serverModelStatus === "loading"}
-                  onClick={() => void controller.refreshServerModels()}
+                  disabled={formDisabled || refreshDisabled}
+                  onClick={() => void controller.refresh()}
                   aria-label="Refresh model list"
                   title="Refresh model list"
                 >
@@ -764,6 +762,16 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
                 aria-label="Enrollment code"
               />
             </label>
+            {showKeychainNotice ? (
+              <aside className="companyKeychainNotice" aria-labelledby="company-keychain-title" id="company-keychain-notice">
+                <ShieldCheck size={17} aria-hidden="true" />
+                <div>
+                  <strong id="company-keychain-title">Protected by macOS Keychain</strong>
+                  <p>If macOS asks Umbratic for Keychain access, choose <strong>Always Allow</strong> to remember this connection.</p>
+                  <p>Umbratic uses this device’s private key to sign in to your company server. The key stays encrypted on this Mac and is never sent to the server.</p>
+                </div>
+              </aside>
+            ) : null}
           </>
         )}
         {!companyServerConnected && draft.mode === "server" ? (
@@ -772,6 +780,7 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
               className={`settingsInlineButton connectionSaveButton ${saving || saveFeedback === "saved" ? "isSuccess" : ""}`}
               type="button"
               onClick={() => void controller.save()}
+              aria-describedby={showKeychainNotice ? "company-keychain-notice" : undefined}
               disabled={saving || refreshing || !dirty || !!validation || !editingEnabled}
             >
               {saving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}

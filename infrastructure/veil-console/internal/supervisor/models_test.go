@@ -20,7 +20,7 @@ import (
 
 func managedModel() config.ManagedModel {
 	return config.ManagedModel{
-		ID: "qwen3-32b", DisplayName: "Qwen 32B",
+		ID: "qwen3-32b",
 		Command: "serve Qwen/Qwen3-32B --host 127.0.0.1 --port 8001 --served-model-name qwen3-32b" +
 			" --max-model-len 32768 --gpu-memory-utilization 0.45 --kv-cache-dtype fp8",
 	}

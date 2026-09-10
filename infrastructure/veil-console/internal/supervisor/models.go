@@ -234,7 +234,7 @@ func removeStaleContainer(id string) {
 // needs its CUDA and Hugging Face variables and nothing else; inheriting
 // wholesale would hand a child every secret Console was started with.
 var childEnvironmentAllowlist = []string{
-	"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER",
+	"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP", "USER", "XDG_CACHE_HOME",
 	"CUDA_HOME", "CUDA_VISIBLE_DEVICES", "LD_LIBRARY_PATH", "NVIDIA_VISIBLE_DEVICES",
 	"HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE",
 	"VLLM_CACHE_ROOT", "VLLM_WORKER_MULTIPROC_METHOD", "VLLM_USE_V2_MODEL_RUNNER", "TORCH_HOME",

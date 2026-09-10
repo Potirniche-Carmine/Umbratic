@@ -462,7 +462,7 @@ test("local diagnostics report logical size, exportable records, and clear indep
   assert.deepEqual(plain(storage.readProductTelemetryEvents()).map((event) => event.id), ["event-1"]);
 });
 
-test("endpoint settings round-trip secrets through safeStorage without writing plaintext", () => {
+test("endpoint settings round-trip secrets through OS encryption without writing plaintext", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-"));
   const storage = loadStorage(userData);
 
@@ -744,7 +744,7 @@ test("app and chat databases keep one process-lifetime handle", () => {
   storage.closeStorageDatabases();
 });
 
-test("company device credentials keep the private key in safeStorage and expose only status", () => {
+test("company device credentials keep the private key encrypted and expose only status", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-company-credential-"));
   const storage = loadStorage(userData);
   const credential = {

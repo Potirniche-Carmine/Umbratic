@@ -15,15 +15,6 @@ import (
 	"umbratic-veil-console/internal/config"
 )
 
-const installDir = "/opt/umbratic/veil-console"
-
-var stateDir = func() string {
-	if runtime.GOOS == "darwin" {
-		return "/Library/Application Support/Umbratic/Veil Console/State"
-	}
-	return "/var/lib/veil-console"
-}()
-
 const serviceUser = "_umbratic"
 
 func run(binary string, args ...string) error {
@@ -87,7 +78,11 @@ func Preflight(p Package) error {
 	}
 	// A first install must not take over another application's ports. Redeploy
 	// stops the owned services before checking the ports again.
-	if _, err := os.Stat(installDir); os.IsNotExist(err) {
+	previous, err := existingProgram()
+	if err != nil {
+		return err
+	}
+	if previous == "" {
 		return checkPorts(p.Config)
 	}
 	return nil
@@ -141,10 +136,10 @@ func installRuntime(p Package) error {
 		uv := filepath.Join(installDir, "bin/uv")
 		python := filepath.Join(pythonDir, "bin/python3")
 		venv := filepath.Join(installDir, "venv")
-		if err := run(uv, "venv", "--offline", "--python", python, venv); err != nil {
+		if err := run(uv, "--no-cache", "venv", "--offline", "--python", python, venv); err != nil {
 			return err
 		}
-		return run(uv, "pip", "sync", "--python", filepath.Join(venv, "bin/python"), "--no-index", "--only-binary=:all:", "--require-hashes", "--find-links", filepath.Join(installDir, "runtime/wheels"), filepath.Join(installDir, "runtime/requirements.txt"))
+		return run(uv, "--no-cache", "pip", "sync", "--python", filepath.Join(venv, "bin/python"), "--no-index", "--only-binary=:all:", "--require-hashes", "--find-links", filepath.Join(installDir, "runtime/wheels"), filepath.Join(installDir, "runtime/requirements.txt"))
 	}
 	packages, err := filepath.Glob(filepath.Join(installDir, "runtime/debs/*.deb"))
 	if err != nil {

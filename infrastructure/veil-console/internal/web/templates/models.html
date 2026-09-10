@@ -6,9 +6,10 @@
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
   <link rel="stylesheet" href="/assets/style.css?v=17">
-  <link rel="stylesheet" href="/assets/controls.css?v=4">
-  <link rel="stylesheet" href="/assets/models.css?v=19">
-  <script defer src="/assets/console.js?v=17"></script>
+  <link rel="stylesheet" href="/assets/controls.css?v=5">
+  <link rel="stylesheet" href="/assets/models.css?v=23">
+  <script defer src="/assets/console.js?v=20"></script>
+  <script defer src="/assets/models.js?v=1"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -26,34 +27,31 @@
       <a href="/models?kind=dictation" {{if .Models.IsDictation}}aria-current="page"{{end}}>Dictation</a>
       <a href="/models?kind=embedding" {{if .Models.IsEmbedding}}aria-current="page"{{end}}>Embedding</a>
     </nav>
-    <details class="panel model-library disclosure" {{if not .Models.Folders}}open{{end}}>
-      <summary><strong>Import model files</strong><span class="disclosure-mark" aria-hidden="true"></span></summary>
-      <div class="model-library-body">
-      <p>Copy complete model folders from your drive into this folder on the Console computer. Keep the weights, configuration, and tokenizer files together.</p>
-      <div class="model-import" data-model-import data-csrf="{{.CSRF}}">
-        <p><strong>Drop a model folder here</strong></p>
-        <p>Or choose a folder from your computer. Up to 256 GiB and 10,000 files.</p>
-        <input class="visually-hidden" type="file" webkitdirectory multiple data-model-files aria-label="Choose model folder">
-        <button class="button secondary" type="button" data-model-browse>Choose folder</button>
-        <button class="button secondary" type="button" data-model-cancel hidden>Cancel import</button>
-        <progress max="100" value="0" data-model-progress aria-label="Import progress" hidden></progress>
-        <p class="import-status" role="status" data-model-import-status>Folder imports do not start a model.</p>
+    <section class="panel model-library" aria-labelledby="models-folder-heading">
+      <div class="model-library-heading">
+        <h2 id="models-folder-heading">Models folder</h2>
+        <span class="model-folder-count">{{len .Models.Folders}} {{if eq (len .Models.Folders) 1}}model{{else}}models{{end}}</span>
+      </div>
+      <p>Drag model folders into this folder in your file manager, then refresh.</p>
+      <div class="model-library-actions">
+        <a class="button primary" href="umbratic-models:open">Open models folder</a>
+        <a class="button secondary" href="{{if .Models.IsDictation}}/models?kind=dictation{{else if .Models.IsEmbedding}}/models?kind=embedding{{else}}/models{{end}}">Refresh folders</a>
+        <button class="button secondary" type="button" data-copy-model-directory>Copy path</button>
       </div>
       <code data-model-directory>{{.Models.ModelsDir}}</code>
-      <div class="model-library-actions">
-        <form method="post" action="/models/open-folder">
-          <input type="hidden" name="csrf" value="{{.CSRF}}">
-          <input type="hidden" name="kind" value="{{.Models.Kind}}">
-          <button class="button secondary" type="submit">Open models folder</button>
-        </form>
-        <button class="button secondary" type="button" data-copy-model-directory>Copy path</button>
-        <a class="button secondary" href="{{if .Models.IsDictation}}/models?kind=dictation{{else if .Models.IsEmbedding}}/models?kind=embedding{{else}}/models{{end}}">Refresh folders</a>
+      <div class="model-detected" role="status" aria-label="Model folders">
+        {{range .Models.Folders}}
+        <div class="model-detected-row"><strong>{{.}}</strong>{{with index $.Models.FolderHints .}}<span>{{.}}</span>{{end}}</div>
+        {{else}}<p>No model folders yet.</p>{{end}}
+        {{range $name, $issue := .Models.FolderIssues}}
+        <div class="model-detected-row model-folder-issue"><strong>{{$name}}</strong><span>{{$issue}}</span></div>
+        {{end}}
       </div>
-      <p class="panel-footnote">Models stay local. BF16, FP16, FP8, NVFP4, and other formats depend on your vLLM build and GPU. Console does not download or convert weights.</p>
-      </div>
-    </details>
+    </section>
     <section class="panel model-form" id="add-model">
       <div class="section-heading"><h2>Add model</h2></div>
+      {{if .Models.IsDictation}}<p>Choose a speech model for dictation.</p>{{end}}
+      {{if .Models.IsEmbedding}}<p>Choose an embedding model for document search.</p>{{end}}
       {{if .Models.FormError}}<p class="form-error" role="alert">{{.Models.FormError}}</p>{{end}}
       {{if and .Models.IsDictation .Models.DictationTaken}}
       <p class="panel-footnote no-rule">One dictation model can be registered at a time. Stop and remove it to select another. Model files stay in the folder.</p>
@@ -69,24 +67,23 @@
               {{range .Models.Folders}}<option value="{{.}}" {{if eq $.Models.Form.Folder .}}selected{{end}}>{{.}}{{with index $.Models.FolderHints .}} ({{.}}){{end}}</option>{{end}}
             </select><span class="select-mark" aria-hidden="true"></span></span>
           </label>
-          <label class="field"><span>Model name</span><input name="display_name" value="{{.Models.Form.DisplayName}}" maxlength="120" placeholder="Uses the folder name"></label>
-          <label class="field"><span>Model ID</span><input name="id" value="{{.Models.Form.ID}}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" placeholder="Uses the folder name"></label>
+          {{if .Models.IsChat}}<label class="field field-wide"><span>Model name</span><input name="id" value="{{.Models.Form.ID}}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" placeholder="Uses the folder name" aria-describedby="model-name-hint"><span class="field-hint" id="model-name-hint">One name for the model picker and requests. Use letters, numbers, dots, dashes, or underscores.</span></label>{{end}}
         </div>
         <button class="button primary" type="submit" {{if not .Models.Folders}}disabled{{end}}>Add model</button>
-        {{if not .Models.Folders}}<p class="panel-footnote">No model folders found. Copy a complete folder, then select Refresh folders.</p>{{end}}
+        {{if not .Models.Folders}}<p class="panel-footnote">Copy a model folder above to get started.</p>{{end}}
       </form>
       {{end}}
       {{if not .Models.Configured}}<p class="panel-footnote">Runtime not configured. Set <code>--vllm-binary</code> or <code>--vllm-docker-image</code> when you start Console to enable model startup.</p>{{end}}
     </section>
 
     {{range .Models.Rows}}
-    <form class="panel model-card" method="post" action="/models/{{.ID}}/update">
+    <form class="panel model-card" method="post" action="/models/{{.ID}}/update" data-model-id="{{.ID}}">
       <input type="hidden" name="csrf" value="{{$.CSRF}}">
       <input type="hidden" name="role" value="{{.Role}}">
       <input type="hidden" name="kind" value="{{$.Models.Kind}}">
 
       <div class="model-identity">
-        <input class="model-name" name="display_name" value="{{.DisplayName}}" maxlength="120" required aria-label="Display name for {{.ID}}">
+        <h2 class="model-name">{{.ID}}</h2>
         <span class="model-subline">
 
           {{if .IsSpeech}}
@@ -100,7 +97,7 @@
           {{end}}
         </span>
       </div>
-      <div class="model-state">
+      <div class="model-state" role="status" aria-live="polite">
         <span class="model-dot model-dot-{{.State}}" aria-hidden="true"></span>
         <span class="model-state-text">{{.StateText}}</span>
       </div>
@@ -113,48 +110,47 @@
         publishes are read back out of it. It is executed directly, never
         through a shell.
       -->
-      <div class="model-command">
+      {{if $.Models.IsChat}}<div class="model-command">
         <label>
           <span class="visually-hidden">Command for {{.ID}}</span>
           <textarea name="command" rows="8" spellcheck="false" autocapitalize="off" autocomplete="off" required>{{.Command}}</textarea>
         </label>
-      </div>
+        <p>New chat models use FP8 (8-bit) KV cache. GPU memory utilization sets the model's total memory budget, shared by all users; longer contexts need more cache.</p>
+      </div>{{end}}
 
       <!-- Always rendered, empty or not, so the card never changes height. -->
       {{if $.Models.IsChat}}
       <fieldset class="model-reasoning">
         <legend>Reasoning options for users</legend>
-        <label><input type="checkbox" name="reasoning_effort" value="off" {{if .AllowsEffort "off"}}checked{{end}}> Off</label>
         <label><input type="checkbox" name="reasoning_effort" value="on" {{if .AllowsEffort "on"}}checked{{end}}> On</label>
+        <label><input type="checkbox" name="reasoning_effort" value="off" {{if .AllowsEffort "off"}}checked{{end}}> Off</label>
         <label><input type="checkbox" name="reasoning_effort" value="low" {{if .AllowsEffort "low"}}checked{{end}}> Low</label>
         <label><input type="checkbox" name="reasoning_effort" value="medium" {{if .AllowsEffort "medium"}}checked{{end}}> Medium</label>
         <label><input type="checkbox" name="reasoning_effort" value="high" {{if .AllowsEffort "high"}}checked{{end}}> High</label>
-        <label class="field model-extra-efforts"><span>Other levels</span><input name="extra_efforts" value="{{.ExtraEfforts}}" placeholder="xhigh, ultra" maxlength="512"></label>
+        <label><input type="checkbox" name="reasoning_effort" value="xhigh" {{if .AllowsEffort "xhigh"}}checked{{end}}> Xhigh</label>
+        <label><input type="checkbox" name="reasoning_effort" value="max" {{if .AllowsEffort "max"}}checked{{end}}> Max</label>
         <p>Choose only options the model supports. Leave all unchecked to use its default.</p>
       </fieldset>
       <details class="model-command disclosure compact">
-        <summary>Sampling settings</summary>
+        <summary><span class="disclosure-mark" aria-hidden="true"></span>Sampling settings</summary>
         <label class="field"><span>Thinking and non-thinking profiles</span>
           <textarea name="sampling_json" rows="12" maxlength="4096" spellcheck="false" placeholder='{"thinking":{"temperature":1.0,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repetition_penalty":1.0},"non_thinking":{"temperature":0.7,"top_p":0.80,"top_k":20,"min_p":0.0,"presence_penalty":1.5,"repetition_penalty":1.0}}'>{{.SamplingJSON}}</textarea>
         </label>
-        <p>Leave blank to use the server defaults. Non-thinking applies when Off is selected; other choices use Thinking.</p>
+        <p>Veil sends these settings to the model runtime on each request. Off uses Non-thinking; other choices use Thinking. Leave blank for model defaults.</p>
       </details>
       {{end}}
       <p class="model-notice{{if not .Notice}} is-empty{{end}}" role="status">{{.Notice}}</p>
 
       <!-- Shown without asking, because a failed model raises exactly one question. -->
-      {{if .Logs}}<details class="model-command disclosure compact"><summary>Startup log</summary><pre class="model-log-tail">{{.Logs}}</pre></details>{{end}}
+      <details class="model-command disclosure compact" data-model-log {{if not .Logs}}hidden{{end}}><summary><span class="disclosure-mark" aria-hidden="true"></span>Startup log</summary><pre class="model-log-tail">{{.Logs}}</pre></details>
 
       <div class="model-footer">
         <div class="model-actions">
-          <button class="button secondary" type="submit">Save</button>
-          {{if .Running}}
-          <button class="button" type="submit" formaction="/models/{{.ID}}/restart">Restart</button>
-          <button class="button danger" type="submit" formaction="/models/{{.ID}}/stop">Stop</button>
-          {{else}}
-          <button class="button" type="submit" formaction="/models/{{.ID}}/start" {{if not $.Models.Configured}}disabled title="Console was started without --vllm-binary or --vllm-docker-image"{{end}}>Start</button>
-          <button class="button danger" type="submit" formaction="/models/{{.ID}}/delete">Remove</button>
-          {{end}}
+          {{if $.Models.IsChat}}<button class="button secondary" type="submit">Save</button>{{end}}
+          <button class="button" type="submit" data-when-running formaction="/models/{{.ID}}/restart" {{if not .Running}}hidden{{end}}>Restart</button>
+          <button class="button danger" type="submit" data-when-running formaction="/models/{{.ID}}/stop" {{if not .Running}}hidden{{end}}>Stop</button>
+          <button class="button" type="submit" data-when-stopped formaction="/models/{{.ID}}/start" {{if .Running}}hidden{{end}} {{if not $.Models.Configured}}disabled title="Runtime not configured"{{end}}>Start</button>
+          <button class="button danger" type="submit" data-when-stopped formaction="/models/{{.ID}}/delete" {{if .Running}}hidden{{end}}>Remove</button>
         </div>
       </div>
     </form>

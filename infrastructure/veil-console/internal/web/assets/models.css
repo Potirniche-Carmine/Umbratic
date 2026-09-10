@@ -37,40 +37,16 @@
   min-width: 0;
 }
 
-/*
- * The display name is editable in place, so it is styled as text until it is
- * touched. A box around every name would make the card read as a form rather
- * than as a model.
- */
 .model-name {
-  /* The global input styling is a 46px field with an inset shadow. A name is
-     not a field until it is touched, so all of that is reset here. */
-  width: 100%;
-  height: auto;
-  padding: 0.1rem 0.4rem;
-  margin-left: -0.4rem;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  box-shadow: none;
+  margin: 0;
   color: var(--text);
   font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  transition:
-    background-color 140ms ease,
-    border-color 140ms ease;
+  overflow-wrap: anywhere;
 }
 
-.model-name:hover {
-  border-color: var(--line);
-}
-
-.model-name:focus {
-  outline: none;
-  border-color: var(--line-strong);
-  background: var(--control);
-}
+.model-card [hidden] { display: none; }
 
 .model-identity code {
   color: var(--muted);
@@ -528,30 +504,35 @@
 }
 
 .model-library p { color: var(--muted); font-size: .85rem; }
-.model-library-body > code { display: block; overflow-wrap: anywhere; padding: .8rem; background: var(--bg); border-radius: 8px; font-size: .8rem; }
+.model-library > code { display: block; overflow-wrap: anywhere; padding: .8rem; background: var(--bg); border-radius: 8px; font-size: .8rem; }
 .model-library-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
 .model-library-actions .button { min-width: 8rem; }
 .model-log-tail { grid-column: 1 / -1; }
 .model-form .field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 40rem) { .model-form .field-grid { grid-template-columns: minmax(0, 1fr); } }
 
-.model-import { border: 1px dashed var(--line-strong); border-radius: 12px; padding: 1rem; margin: 1rem 0; text-align: center; }
-.model-import.is-dragging { border-color: var(--blue); background: var(--control); }
-.model-import p { margin: 0 0 .6rem; }
-.model-import progress { width: 100%; margin-top: .8rem; accent-color: var(--blue); }
-.model-import .import-status { min-height: 2.6em; margin: .8rem 0 0; }
 
 .model-library { display: block; }
-.model-library-body > p { margin: .7rem 0; }
+.model-library > p { margin: .7rem 0; }
 
-.model-library-body { padding: 0 clamp(1.2rem, 3.5vw, 1.65rem) 1.65rem; }
+ .model-library { padding: clamp(1.2rem, 3.5vw, 1.65rem); }
+.model-library-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.model-library-heading h2 { margin: 0; font-size: 1rem; }
+.model-folder-count { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+.model-library-actions { margin-bottom: 1rem; }
+.model-library .model-folder-help { font-size: .78rem; line-height: 1.6; }
+.model-detected { margin-top: 1.1rem; border-top: 1px solid var(--line); }
+.model-detected-row { display: flex; justify-content: space-between; gap: .7rem 1.5rem; padding-top: .85rem; font-size: .82rem; }
+.model-detected-row strong { font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
+.model-detected-row span { color: var(--muted); text-align: right; }
+.model-folder-issue { flex-direction: column; gap: .25rem; }
+.model-folder-issue span { text-align: left; }
+@media (max-width: 40rem) { .model-detected-row { flex-direction: column; gap: .25rem; } .model-detected-row span { text-align: left; } }
 
 .model-form form > button[type="submit"] { margin-top: 1.25rem; }
 
 .model-reasoning { grid-column: 1 / -1; margin: .75rem 0; padding: 0; border: 0; }
 .model-reasoning legend { font-size: .85rem; font-weight: 600; margin-bottom: .6rem; }
 .model-reasoning label { display: inline-flex; align-items: center; gap: .4rem; margin-right: 1rem; }
-.model-reasoning input { width: 1rem; height: 1rem; }
+.model-reasoning input[type="checkbox"] { width: 1rem; height: 1rem; }
 .model-reasoning p { margin: .6rem 0 0; color: var(--muted); font-size: .8rem; }
-
-.model-reasoning .model-extra-efforts { display: flex; flex-direction: column; align-items: stretch; margin-top: 1rem; }

@@ -20,32 +20,46 @@ func Install(p Package, clean bool) (result error) {
 	if os.Geteuid() != 0 {
 		return errors.New("run sudo ./deploy.sh")
 	}
-	if err := diskSpace(p.Directory); err != nil {
-		return err
-	}
 	if err := os.MkdirAll(filepath.Dir(installDir), 0755); err != nil {
 		return err
 	}
-	lock := installDir + ".deploy-lock"
-	if err := os.Mkdir(lock, 0700); err != nil {
-		return errors.New("another deployment is running (or left a lock after interruption); inspect " + lock)
+	lock, err := acquireDeploymentLock(installDir + ".deploy-lock")
+	if err != nil {
+		return err
 	}
-	defer os.Remove(lock)
+	defer lock.Close()
+	if runtime.GOOS == "darwin" {
+		if _, err := os.Stat(filepath.Dir(formerMacInstallDir)); err == nil {
+			formerLock, err := acquireDeploymentLock(formerMacInstallDir + ".deploy-lock")
+			if err != nil {
+				return err
+			}
+			defer formerLock.Close()
+		}
+	}
+	previousProgram, err := existingProgram()
+	if err != nil {
+		return err
+	}
+	if err := diskSpace(p.Directory, previousProgram); err != nil {
+		return err
+	}
 	if clean {
 		if err := removeInstallation(); err != nil {
 			return err
 		}
+		previousProgram = ""
 	}
-	backup := installDir + ".backup-" + time.Now().UTC().Format("20060102T150405Z")
+	backup := backupDirectory(time.Now().UTC().Format("20060102T150405Z"))
+	if err := os.MkdirAll(filepath.Dir(backup), 0700); err != nil {
+		return err
+	}
 	if err := os.Mkdir(backup, 0700); err != nil {
 		return err
 	}
-	previous := false
-	if _, err := os.Stat(installDir); err == nil {
-		previous = true
-	}
+	previous := previousProgram != ""
 	if previous {
-		old, err := entitlement.Load(filepath.Join(installDir, "entitlement.json"))
+		old, err := entitlement.Load(filepath.Join(previousProgram, "entitlement.json"))
 		if err != nil {
 			return fmt.Errorf("validate existing installation: %w", err)
 		}
@@ -61,17 +75,20 @@ func Install(p Package, clean bool) (result error) {
 			}
 		}
 	}()
+	fmt.Println("Stopping services...")
 	if err := stopServices(); err != nil {
 		return err
 	}
 	// Snapshot stopped SQLite, identity, documents, and TLS together. No open
 	// database copy and no regenerated secrets on a redeploy.
 	if previous {
-		if err := run("cp", "-pR", installDir, filepath.Join(backup, "program")); err != nil {
+		fmt.Println("Backing up installed programs...")
+		if err := run("cp", "-pR", previousProgram, filepath.Join(backup, "program")); err != nil {
 			return err
 		}
 	}
 	if _, err := os.Stat(stateDir); err == nil {
+		fmt.Println("Backing up Console state and documents...")
 		if err := run("cp", "-pR", stateDir, filepath.Join(backup, "state")); err != nil {
 			return err
 		}
@@ -88,6 +105,7 @@ func Install(p Package, clean bool) (result error) {
 		if result == nil {
 			return
 		}
+		fmt.Println("Restoring the previous installation...")
 		if err := stopServices(); err != nil {
 			result = fmt.Errorf("%w; rollback stop failed: %v; backup: %s", result, err, backup)
 			return
@@ -96,7 +114,7 @@ func Install(p Package, clean bool) (result error) {
 			result = fmt.Errorf("%w; rollback failed: %v", result, err)
 			return
 		}
-		if previous {
+		if previousProgram == installDir {
 			if err := run("cp", "-pR", filepath.Join(backup, "program"), installDir); err != nil {
 				result = fmt.Errorf("%w; rollback failed: %v", result, err)
 				return
@@ -131,6 +149,7 @@ func Install(p Package, clean bool) (result error) {
 	if err := ensureUser(); err != nil {
 		return err
 	}
+	fmt.Println("Installing programs...")
 	if err := os.RemoveAll(installDir); err != nil {
 		return err
 	}
@@ -143,6 +162,13 @@ func Install(p Package, clean bool) (result error) {
 	if err := os.Chmod(stateDir, 0700); err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Join(stateDir, "tmp"), 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(filepath.Join(stateDir, "tmp"), 0700); err != nil {
+		return err
+	}
+	fmt.Println("Installing the model runtime from the offline package...")
 	if err := installRuntime(p); err != nil {
 		return err
 	}
@@ -178,9 +204,14 @@ func Install(p Package, clean bool) (result error) {
 	if err := writeServices(p); err != nil {
 		return err
 	}
+	if err := registerModelsFolder(); err != nil {
+		return err
+	}
+	fmt.Println("Starting services...")
 	if err := startServices(); err != nil {
 		return err
 	}
+	fmt.Println("Waiting for Console, Veil, and Qdrant...")
 	if err := readiness(p.Config); err != nil {
 		return err
 	}
@@ -189,8 +220,10 @@ func Install(p Package, clean bool) (result error) {
 	if err != nil || code == "" {
 		return errors.New("services started but Console could not issue setup credentials")
 	}
-	if err := os.Remove(lock); err != nil {
-		return err
+	if runtime.GOOS == "darwin" {
+		if err := archiveFormerLayout(filepath.Dir(formerMacInstallDir), backup); err != nil {
+			fmt.Fprintf(os.Stderr, "Services are healthy; the former installation still needs archiving: %v\n", err)
+		}
 	}
 	fmt.Printf("Backup: %s\n", backup)
 	if runtime.GOOS == "darwin" {
@@ -233,7 +266,7 @@ func waitHTTP(ctx context.Context, client *http.Client, address string) error {
 		}
 	}
 }
-func diskSpace(directory string) error {
+func diskSpace(directory, previousProgram string) error {
 	// Include a full stopped-state backup and room to unpack native dependencies.
 	data, err := output("du", "-sk", directory)
 	if err != nil {
@@ -245,7 +278,10 @@ func diskSpace(directory string) error {
 	}
 	size, _ := strconv.ParseInt(fields[0], 10, 64)
 	existing := int64(0)
-	for _, path := range []string{stateDir, installDir} {
+	for _, path := range []string{stateDir, previousProgram} {
+		if path == "" {
+			continue
+		}
 		if data, err := output("du", "-sk", path); err == nil {
 			f := strings.Fields(data)
 			if len(f) > 0 {

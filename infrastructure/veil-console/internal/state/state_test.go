@@ -41,7 +41,7 @@ func TestSetupIsOneUseAndSessionsPersist(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.Session(ctx, token, now.Add(time.Minute)); err != nil {
+	if _, err := store.Session(ctx, token, now.Add(time.Minute), true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -95,17 +95,17 @@ func TestSessionIdleAndAbsoluteExpiry(t *testing.T) {
 	defer store.Close()
 	now := time.Unix(1000, 0)
 	idleToken, _, _ := store.CreateSession(ctx, "owner", now)
-	if _, err := store.Session(ctx, idleToken, now.Add(9*time.Minute)); err != nil {
+	if _, err := store.Session(ctx, idleToken, now.Add(9*time.Minute), true); err != nil {
 		t.Fatal("active session expired before the idle timeout")
 	}
-	if _, err := store.Session(ctx, idleToken, now.Add(20*time.Minute)); err == nil {
+	if _, err := store.Session(ctx, idleToken, now.Add(20*time.Minute), true); err == nil {
 		t.Fatal("idle session did not expire")
 	}
 	absoluteToken, _, _ := store.CreateSession(ctx, "owner", now)
 	for step := time.Minute; step < SessionAbsoluteTimeout; step += 5 * time.Minute {
-		_, _ = store.Session(ctx, absoluteToken, now.Add(step))
+		_, _ = store.Session(ctx, absoluteToken, now.Add(step), true)
 	}
-	if _, err := store.Session(ctx, absoluteToken, now.Add(SessionAbsoluteTimeout)); err == nil {
+	if _, err := store.Session(ctx, absoluteToken, now.Add(SessionAbsoluteTimeout), true); err == nil {
 		t.Fatal("absolute session did not expire")
 	}
 }
@@ -132,10 +132,10 @@ func TestRotateSessionReplacesTheOldToken(t *testing.T) {
 	if newCSRF == "" || newCSRF == oldCSRF {
 		t.Fatal("rotation must issue a different CSRF token")
 	}
-	if _, err := store.Session(ctx, oldToken, now.Add(2*time.Minute)); err == nil {
+	if _, err := store.Session(ctx, oldToken, now.Add(2*time.Minute), true); err == nil {
 		t.Fatal("the previous session token still worked after rotation")
 	}
-	if _, err := store.Session(ctx, newToken, now.Add(2*time.Minute)); err != nil {
+	if _, err := store.Session(ctx, newToken, now.Add(2*time.Minute), true); err != nil {
 		t.Fatalf("the new session token was not valid: %v", err)
 	}
 	if _, _, err := store.RotateSession(ctx, oldToken, "owner", now.Add(3*time.Minute)); err == nil {

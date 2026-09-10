@@ -1,18 +1,18 @@
-// The release machine's identity, kept outside the repository.
-//
-// Signing a build and publishing it need credentials — an Apple notarization
-// key, an Azure sign-in, R2 access keys — and every one of them belongs to
-// the machine that releases, not to the source tree. They live in one file in
-// the user's home directory; both `desktop:release` and `publish:release` read
-// it, so a release machine is set up exactly once and the repository never
-// carries a secret. `docs/release.env.example` documents every key.
+// Release-machine identity. Mac release work lives in the repository's ignored
+// artifacts/release-work directory; credentials must never be committed.
+// docs/release.env.example documents every key.
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-export const releaseEnvPath = path.join(os.homedir(), ".umbratic", "release.env");
+export const releaseDirectory = process.platform === "darwin"
+  ? path.resolve(import.meta.dirname, "../artifacts/release-work")
+  : path.join(os.homedir(), "umbratic-release");
+export const releaseEnvPath = process.platform === "darwin"
+  ? path.join(releaseDirectory, "release.env")
+  : path.join(os.homedir(), ".umbratic", "release.env");
 
 /**
  * Reads the release env file into `process.env`, without overriding anything

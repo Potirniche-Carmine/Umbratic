@@ -5,27 +5,28 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"umbratic-veil-console/internal/modelfolder"
 )
 
-const macModelsDir = "/Library/Application Support/Umbratic/Veil Console/Models"
-
 func prepareModelsDirectory() error {
-	if runtime.GOOS != "darwin" {
-		return nil
-	}
-	if err := os.MkdirAll(macModelsDir, 0755); err != nil {
+	directory := modelfolder.Directory()
+	if err := os.MkdirAll(directory, 0755); err != nil {
 		return err
 	}
-	if err := os.Chmod(filepath.Dir(filepath.Dir(macModelsDir)), 0755); err != nil {
+	group := "sudo"
+	if runtime.GOOS == "darwin" {
+		group = "admin"
+		if err := os.Chmod(filepath.Dir(filepath.Dir(directory)), 0755); err != nil {
+			return err
+		}
+		if err := os.Chmod(filepath.Dir(directory), 0755); err != nil {
+			return err
+		}
+	}
+	if err := run("chown", serviceUser+":"+group, directory); err != nil {
 		return err
 	}
-	if err := os.Chmod(filepath.Dir(macModelsDir), 0755); err != nil {
-		return err
-	}
-	if err := run("chown", serviceUser+":admin", macModelsDir); err != nil {
-		return err
-	}
-	return os.Chmod(macModelsDir, os.ModeSetgid|0770)
+	return os.Chmod(directory, os.ModeSetgid|0770)
 }
 
 // --clean is explicit: all Umbratic Console state and registered models are
@@ -42,9 +43,12 @@ func removeInstallation() error {
 			return err
 		}
 	}
-	paths := []string{installDir, stateDir}
+	paths := []string{installDir, stateDir, modelfolder.Directory()}
+	if runtime.GOOS == "linux" {
+		paths = append(paths, "/usr/local/share/applications/umbratic-models.desktop")
+	}
 	if runtime.GOOS == "darwin" {
-		paths = append(paths, filepath.Dir(macModelsDir), "/private/var/lib/veil-console")
+		paths = append(paths, formerMacInstallDir, "/private/var/lib/veil-console")
 	}
 	for _, p := range paths {
 		if err := os.RemoveAll(p); err != nil {

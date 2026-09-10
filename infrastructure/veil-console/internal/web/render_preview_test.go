@@ -49,8 +49,8 @@ func TestRenderPreviewPages(t *testing.T) {
 	models := pageData{
 		Title: "Models", CSRF: "preview", Username: "owner",
 		Models: modelsView{
-			Configured: false, Registered: 2, Running: 1,
-			Kind: config.KindChat, Folders: []string{"Qwen3-BF16", "Whisper"}, ModelsDir: "/var/lib/veil-console/models",
+			Configured: true, Registered: 2, Running: 1,
+			Kind: config.KindChat, Folders: []string{"Qwen3.8-27B-MLX-4bit", "Whisper"}, ModelsDir: "/Library/Application Support/Umbratic/Veil Console/Models",
 			SuggestedPort: 8001,
 			Form: modelForm{
 				Command: config.CatalogCommand(chat[0], chat[0].Variants[0], 8001, 65536),
@@ -58,14 +58,14 @@ func TestRenderPreviewPages(t *testing.T) {
 			Rows: []modelRow{
 				{
 					ManagedModel: config.ManagedModel{
-						ID: "qwen3.8-27b", DisplayName: "Qwen3.8 27B", Role: config.RoleChat,
+						ID: "qwen3.8-27b", Role: config.RoleChat,
 						Command: config.CatalogCommand(chat[1], chat[1].Variants[0], 8001, 65536),
 					},
 					State: supervisor.ModelHealthy, StateText: "Serving", Running: true, IsDefault: true,
 				},
 				{
 					ManagedModel: config.ManagedModel{
-						ID: "ornith-1.5-35b-a3b", DisplayName: "Ornith 1.5 35B A3B", Role: config.RoleChat,
+						ID: "ornith-1.5-35b-a3b", Role: config.RoleChat,
 						Command: config.CatalogCommand(chat[0], chat[0].Variants[0], 8002, 262144),
 					},
 					State: supervisor.ModelStopped, StateText: "Stopped",
@@ -79,10 +79,13 @@ func TestRenderPreviewPages(t *testing.T) {
 	modelsDictation.Models.Form = modelForm{
 		Command: config.CatalogCommand(dictation[0], dictation[0].Variants[0], 8003, dictation[0].DefaultContext),
 	}
+	modelsEmbedding := modelsDictation
+	modelsEmbedding.Models.Kind = config.KindEmbedding
 
 	modelsEmpty := models
 	modelsEmpty.Models.Rows = nil
 	modelsEmpty.Models.Registered = 0
+	modelsEmpty.Models.Folders = nil
 
 	settingsPage := pageData{
 		Title: "Settings", CSRF: "preview", Username: "owner",
@@ -134,6 +137,7 @@ func TestRenderPreviewPages(t *testing.T) {
 		{"models.html", "models.html", models},
 		{"models-empty.html", "models.html", modelsEmpty},
 		{"models-dictation.html", "models.html", modelsDictation},
+		{"models-embedding.html", "models.html", modelsEmbedding},
 		{"settings.html", "settings.html", settingsPage},
 		{"dashboard.html", "dashboard.html", dashboard},
 		{"dashboard-running.html", "dashboard.html", dashboardRunning},

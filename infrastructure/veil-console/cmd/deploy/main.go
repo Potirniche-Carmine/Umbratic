@@ -17,6 +17,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	fmt.Println("Checking package and host...")
 	p, err := deployment.Load(filepath.Dir(filepath.Dir(executable)))
 	if err == nil {
 		err = deployment.Preflight(p)

@@ -35,5 +35,5 @@ The remaining pages are internal release and engineering references.
 | --- | --- |
 | [plans/veil-console-deployment.md](plans/veil-console-deployment.md) | Customer ZIPs, one-script deployment, HTTP Console setup, HTTPS Veil, and signed seats |
 
-`release.env.example` is the template for `~/.umbratic/release.env`. Copy it,
+`release.env.example` is the template for the [release machine's identity file](setup/release-machine.md#2-the-env-file-both-machines). Copy it,
 do not edit it in place.

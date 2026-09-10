@@ -2,7 +2,7 @@
 //
 // electron-builder finds the macOS signing identity in the keychain and
 // notarizes when the APPLE_* variables are present, so a Mac needs nothing
-// beyond `~/.umbratic/release.env`. Windows signing has no equivalent
+// beyond its ignored release-work/release.env. Windows signing has no equivalent
 // discovery — Trusted Signing is named by four values — and those must not
 // sit in electron-builder.yml, where every unsigned developer package
 // would try to sign and fail. They come from the same env file and are passed
@@ -17,7 +17,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import process from "node:process";
 
-import { loadReleaseEnv, windowsSigningConfig } from "../../../scripts/release-env.ts";
+import { loadReleaseEnv, releaseEnvPath, windowsSigningConfig } from "../../../scripts/release-env.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -39,7 +39,7 @@ if (unsigned) {
 const args = ["--config", "electron-builder.yml", "--publish", "never", ...forwarded];
 
 if (unsigned) {
-  args.push("-c.mac.notarize=false");
+  args.push("-c.mac.notarize=false", "-c.mac.forceCodeSigning=false");
 } else if (process.platform === "win32") {
   const signing = windowsSigningConfig();
   if (signing) {
@@ -51,7 +51,7 @@ if (unsigned) {
     );
     console.log(`Signing Windows binaries with Trusted Signing as "${signing.publisherName}".`);
   } else {
-    console.warn("No Windows signing configuration in ~/.umbratic/release.env: this package is unsigned and cannot be released.");
+    console.warn(`No Windows signing configuration in ${releaseEnvPath}: this package is unsigned and cannot be released.`);
   }
 }
 

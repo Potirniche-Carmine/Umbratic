@@ -5,6 +5,7 @@ asar: true
 asarUnpack:
   - "**/*.node"
 npmRebuild: false
+afterPack: scripts/after-pack.cjs
 electronDist: ../../node_modules/electron/dist
 directories:
   output: ../../target/release/desktop
@@ -40,9 +41,11 @@ publish:
 mac:
   icon: assets/icons/icon.icns
   category: public.app-category.developer-tools
-  # Signed with whatever Developer ID Application identity the keychain holds,
-  # and notarized when the APPLE_* variables from ~/.umbratic/release.env are
-  # present; without either the build is unsigned and only for looking at.
+  # Keep appId, productName, and the Developer ID team stable across releases
+  # so Keychain recognizes updates as the same app. Only --unsigned local
+  # packages may skip signing. APPLE_* variables configure notarization.
+  forceCodeSigning: true
+  type: distribution
   # The hardened runtime is on by default. The entitlements add the microphone
   # to electron-builder's defaults, for the app and everything inside it.
   entitlements: assets/entitlements.mac.plist

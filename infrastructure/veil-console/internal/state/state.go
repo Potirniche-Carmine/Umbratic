@@ -227,7 +227,7 @@ func (s *Store) RotateSession(ctx context.Context, oldToken, username string, no
 	return token, csrf, tx.Commit()
 }
 
-func (s *Store) Session(ctx context.Context, token string, now time.Time) (Session, error) {
+func (s *Store) Session(ctx context.Context, token string, now time.Time, activity bool) (Session, error) {
 	var session Session
 	var created, last, expires int64
 	err := s.db.QueryRowContext(ctx, "SELECT username,csrf_hash,created_at,last_seen,expires_at FROM sessions WHERE token_hash=?", auth.HashToken(token)).Scan(
@@ -238,7 +238,9 @@ func (s *Store) Session(ctx context.Context, token string, now time.Time) (Sessi
 		}
 		return Session{}, errors.New("session is invalid or expired")
 	}
-	_, err = s.db.ExecContext(ctx, "UPDATE sessions SET last_seen=? WHERE token_hash=?", now.Unix(), auth.HashToken(token))
+	if activity {
+		_, err = s.db.ExecContext(ctx, "UPDATE sessions SET last_seen=? WHERE token_hash=?", now.Unix(), auth.HashToken(token))
+	}
 	session.CreatedAt, session.LastSeen, session.ExpiresAt = time.Unix(created, 0), time.Unix(last, 0), time.Unix(expires, 0)
 	return session, err
 }

@@ -259,6 +259,29 @@
 
 .banner {
   pointer-events: auto;
+  background: #352228;
+  border-color: #94505c;
+  color: #ffe1e5;
+}
+
+.banner.notice {
+  background: #1a3429;
+  border-color: #397956;
+  color: #c5f5d9;
+}
+
+@media (prefers-color-scheme: light) {
+  .banner {
+    background: #fff0f2;
+    border-color: #c77d88;
+    color: #8c2033;
+  }
+
+  .banner.notice {
+    background: #edf9f1;
+    border-color: #6eaa84;
+    color: #215d39;
+  }
 }
 
 /* Dismissal, whether the 5s timer or a click, fades rather than cuts. */

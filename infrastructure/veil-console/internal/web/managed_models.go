@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +41,7 @@ type modelsView struct {
 	// letting the submission fail.
 	DictationTaken bool
 	Folders        []string
+	FolderIssues   map[string]string
 	FolderHints    map[string]string
 	ModelsDir      string
 	SuggestedPort  int
@@ -71,7 +71,6 @@ type modelForm struct {
 	ReasoningEfforts string
 	SamplingJSON     string
 	ID               string
-	DisplayName      string
 	Command          string
 	Role             string
 	Folder           string
@@ -98,17 +97,21 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 	}
 
 	port := state.NextFreeManagedPort(models, s.startup.Port, s.veilPort())
-	folders, folderErr := localModelFolders(s.modelsDirectory())
+	folders, issues, folderErr := localModelFolders(s.modelsDirectory())
 	if folderErr != nil && errorMessage == "" {
 		errorMessage = folderErr.Error()
 	}
 	view := modelsView{
 		Configured: s.models.Configured(), Registered: len(models), Kind: kind,
-		Folders: folders, ModelsDir: s.modelsDirectory(), SuggestedPort: port,
+		Folders: folders, FolderIssues: issues, ModelsDir: s.modelsDirectory(), SuggestedPort: port,
 		FolderHints: make(map[string]string, len(folders)),
 	}
 	for _, folder := range folders {
-		metadata := supervisor.InspectModel(filepath.Join(s.modelsDirectory(), folder))
+		resolved, err := resolveLocalModel(s.modelsDirectory(), folder)
+		if err != nil {
+			continue
+		}
+		metadata := supervisor.InspectModel(resolved)
 		view.FolderHints[folder] = map[string]string{config.RoleSpeech: "Dictation", config.RoleEmbedding: "Embedding"}[metadata.SuggestedRole]
 	}
 	for _, model := range models {
@@ -139,10 +142,12 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 		// Output is shown when it is the answer to a question the card raises.
 		// A model that is serving has nothing to explain; one that failed has
 		// exactly one thing, and it used to be behind a link.
+		if status.State == supervisor.ModelStarting || status.State == supervisor.ModelFailed {
+			row.Logs = s.models.Logs(model.ID)
+		}
 		if status.State == supervisor.ModelFailed {
 			row.StateText = "Failed to start"
 			row.Notice = status.Message
-			row.Logs = s.models.Logs(model.ID)
 		}
 		view.Rows = append(view.Rows, row)
 	}
@@ -219,14 +224,8 @@ func suggestedModelPort(r *http.Request) int {
 func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm) {
 	_ = r.ParseForm()
 	efforts := append([]string(nil), r.Form["reasoning_effort"]...)
-	for _, extra := range strings.Split(r.FormValue("extra_efforts"), ",") {
-		if value := strings.ToLower(strings.TrimSpace(extra)); value != "" {
-			efforts = append(efforts, value)
-		}
-	}
 	form := modelForm{
 		ID:               strings.TrimSpace(r.FormValue("id")),
-		DisplayName:      strings.TrimSpace(r.FormValue("display_name")),
 		Command:          strings.TrimSpace(r.FormValue("command")),
 		ReasoningEfforts: strings.Join(efforts, ","),
 		SamplingJSON:     strings.TrimSpace(r.FormValue("sampling_json")),
@@ -240,7 +239,7 @@ func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm)
 		form.ID = id
 	}
 	model := config.ManagedModel{
-		ID: form.ID, DisplayName: form.DisplayName, Command: form.Command, Role: form.Role,
+		ID: form.ID, Command: form.Command, Role: form.Role,
 		ReasoningEfforts: form.ReasoningEfforts,
 		SamplingJSON:     form.SamplingJSON,
 	}
@@ -259,14 +258,19 @@ func (s *Server) modelsCreate(w http.ResponseWriter, r *http.Request) {
 		s.renderModelFormError(w, r, form, err)
 		return
 	}
-	if model.DisplayName == "" {
-		model.DisplayName = filepath.Base(folder)
+	if model.Role != config.RoleChat || model.ID == "" {
+		model.ID = localModelID(form.Folder)
 	}
-	if model.ID == "" {
-		model.ID = localModelID(filepath.Base(folder))
+	model.ID = config.ModelNameForRole(model.ID, model.Role)
+	if model.Role != config.RoleChat {
+		model.Command, model.ReasoningEfforts, model.SamplingJSON = "", "", ""
 	}
 	if model.Command == "" {
 		model.Command = config.DefaultCommand(folder, model.ID, suggestedModelPort(r))
+		if model.Role != config.RoleChat {
+			// Speech and pooling models use the checkpoint's native context.
+			model.Command = strings.Replace(model.Command, "\n--max-model-len 16384", "", 1)
+		}
 		if model.Role == config.RoleEmbedding {
 			model.Command += "\n--runner pooling"
 		}
@@ -276,6 +280,7 @@ func (s *Server) modelsCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	model = config.WithLocalModelDefaults(model, folder)
 	facts, parseErr := model.Parse()
 	if parseErr != nil || facts.ModelPath != folder {
 		s.renderModelFormError(w, r, form, errors.New("the command must use the selected local model folder"))
@@ -439,6 +444,17 @@ func (s *Server) modelsRestart(w http.ResponseWriter, r *http.Request) {
 // stopping anything so an invalid edit leaves a serving model alone.
 func (s *Server) saveLaunchCommand(r *http.Request) (config.ManagedModel, error) {
 	model, _ := parseModelForm(r, r.PathValue("model_id"))
+	stored, exists, err := s.store.ManagedModel(r.Context(), model.ID)
+	if err != nil || !exists {
+		return model, errors.New("that model is not registered")
+	}
+	model.Role = stored.Role
+	if config.NormalizeRole(stored.Role) != config.RoleChat {
+		model = stored
+	}
+	if facts, err := model.Parse(); err == nil {
+		model = config.WithLocalModelDefaults(model, facts.ModelPath)
+	}
 	if err := model.Validate(); err != nil {
 		return model, err
 	}

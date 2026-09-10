@@ -12,8 +12,8 @@ import (
 	"umbratic-veil-console/internal/config"
 )
 
-// PrepareCommand exposes the same memory default used at launch so the
-// administrator can inspect and edit it before starting the model.
+// PrepareCommand prepares editable defaults. Registering a stopped model does
+// not reserve GPU memory; allocation is checked only when starting it.
 func (m *ModelSupervisor) PrepareCommand(model config.ManagedModel) (config.ManagedModel, error) {
 	facts, err := model.Parse()
 	if err != nil {
@@ -23,8 +23,18 @@ func (m *ModelSupervisor) PrepareCommand(model config.ManagedModel) (config.Mana
 		facts.Args = append(facts.Args, "--enable-auto-tool-choice", "--tool-call-parser", "qwen3_xml", "--reasoning-parser", "qwen3")
 		model.Command = config.FormatCommand(facts.Args)
 	}
-	prepared, _, err := m.allocation(model)
-	return prepared, err
+	if config.NormalizeRole(model.Role) == config.RoleChat {
+		hasCacheType := false
+		for _, arg := range facts.Args {
+			if arg == "--kv-cache-dtype" || strings.HasPrefix(arg, "--kv-cache-dtype=") {
+				hasCacheType = true
+			}
+		}
+		if !hasCacheType {
+			model.Command += "\n--kv-cache-dtype fp8"
+		}
+	}
+	return model, nil
 }
 
 // allocation sizes a default budget from local weights plus bounded KV/runtime
@@ -86,8 +96,14 @@ func (m *ModelSupervisor) allocation(model config.ManagedModel) (config.ManagedM
 		}
 	}
 	m.mu.Unlock()
-	if used+fraction > 0.85 {
-		return model, 0, errors.New("this model's memory budget does not fit alongside the running models; stop a model or reduce its context/memory budget in Advanced")
+	// Keep headroom in automatic budgets, but honor an administrator's explicit
+	// allocation up to the full device. The runtime checks actual free memory.
+	limit := 0.85
+	if explicit {
+		limit = 1
+	}
+	if used+fraction > limit+1e-9 {
+		return model, 0, errors.New("the combined model memory budgets exceed available GPU memory; stop a model or lower --gpu-memory-utilization in its command")
 	}
 	if !explicit {
 		model.Command += "\n--gpu-memory-utilization " + strconv.FormatFloat(fraction, 'f', 2, 64)

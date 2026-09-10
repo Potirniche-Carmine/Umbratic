@@ -45,6 +45,7 @@ var migrations = []migration{
 		_, err := tx.Exec(`ALTER TABLE managed_models ADD COLUMN reasoning_efforts TEXT NOT NULL DEFAULT ''`)
 		return err
 	}},
+	{name: "managed_model_single_name", apply: applyModelNames},
 }
 
 // Connection pragmas. These are per-connection settings rather than schema, and

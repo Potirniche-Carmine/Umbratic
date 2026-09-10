@@ -9,7 +9,7 @@ import (
 
 func managedFixture() config.ManagedModel {
 	return config.ManagedModel{
-		ID: "qwen3-32b", DisplayName: "Qwen 32B",
+		ID:      "qwen3-32b",
 		Command: "serve Qwen/Qwen3-32B --port 8001 --served-model-name qwen3-32b --max-model-len 32768",
 		Role:    config.RoleChat,
 	}
@@ -71,7 +71,7 @@ func TestManagedModelsRoundTripAndPreserveOrder(t *testing.T) {
 
 	first := managedFixture()
 	second := managedFixture()
-	second.ID, second.DisplayName = "small", "Small"
+	second.ID = "small"
 	second.Command = "serve Qwen/Qwen3-4B --port 8002 --served-model-name small --max-model-len 32768"
 	for _, model := range []config.ManagedModel{first, second} {
 		if err := store.InsertManagedModel(ctx, model); err != nil {
@@ -112,7 +112,6 @@ func TestManagedModelUpdateAndDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	model.DisplayName = "Qwen 32B (long)"
 	model.Command = "serve Qwen/Qwen3-32B --port 8001 --served-model-name qwen3-32b --max-model-len 98304 --kv-cache-dtype auto"
 	if err := store.UpdateManagedModel(ctx, model); err != nil {
 		t.Fatal(err)

@@ -80,7 +80,7 @@ func (s *Server) documentsData(r *http.Request, errorMessage, noticeMessage stri
 	choices := []config.EmbeddingChoice{}
 	for _, model := range models {
 		if config.NormalizeRole(model.Role) == config.RoleEmbedding {
-			choices = append(choices, config.EmbeddingChoice{Model: model.ID, Label: model.DisplayName})
+			choices = append(choices, config.EmbeddingChoice{Model: model.ID, Label: model.ID})
 		}
 	}
 	view := documentsView{

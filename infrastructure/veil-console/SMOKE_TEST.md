@@ -8,6 +8,7 @@ Build and install the target ZIP using the [release guide](../../docs/guides/rel
 - Fresh installation: Console and trusted HTTPS respond before any model exists; setup is single-use and absent from service logs; the control API is unavailable through HTTPS.
 - Access: enroll a device, reject reuse of its code, enforce purchased seats and per-user device limits, revoke a device, deactivate a user, and verify authorization immediately changes.
 - Models: add supported chat, embedding, and speech checkpoints; verify their actual endpoints, failure messages, and concurrent requests through Veil. Stop and restart models without orphan processes.
+- Models folder: open it from Console in Finder on Mac and the default file manager on Linux. Copy a standalone model and a complete Hugging Face model cache, refresh, and verify detected names and model startup. An incomplete cache shows its folder name and an error. On headless Linux, copy to `/var/lib/umbratic-models` and refresh. No model data passes through the browser.
 - Persistence: restart services and confirm enabled models, owner, enrolled devices, and documents survive. Redeploy for the same organization and verify recovery after a failed upgrade.
 - Host lifecycle: test logout, reboot, and GPU access under the dedicated service account. On Mac, unlock FileVault after restart. Repeat on each supported Linux GPU profile.
 

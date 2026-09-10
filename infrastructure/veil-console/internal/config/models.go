@@ -24,7 +24,6 @@ type ManagedModel struct {
 	// ID is the served model name — what a client sends as `model`, what
 	// `/v1/models` reports, and what `--served-model-name` must say.
 	ID               string
-	DisplayName      string
 	Command          string
 	ReasoningEfforts string
 	SamplingJSON     string
@@ -78,7 +77,6 @@ const (
 	maxCommandBytes  = 4096
 	maxCommandTokens = 64
 	maxTokenBytes    = 512
-	maxDisplayBytes  = 120
 )
 
 // A served id travels in URLs, in argv, and in a JSON environment variable. The
@@ -143,20 +141,19 @@ func FormatCommand(args []string) string {
 	return strings.Join(lines, "\n")
 }
 
-// quoteIfNeeded puts a token back in quotes when it contains the whitespace
-// that would otherwise split it in two on the next read.
+// quoteIfNeeded preserves whitespace and literal quotes on the next read.
 func quoteIfNeeded(token string) string {
 	if token == "" {
 		return `""`
 	}
-	if !strings.ContainsAny(token, " \t\n\r") {
+	if !strings.ContainsAny(token, " \t\n\r'\"") {
 		return token
 	}
 	// A JSON value is the common case here, so single quotes are the ones that
 	// survive: wrapping `{"enable_thinking": false}` in double quotes would end
 	// the quote on its first inner one.
 	if strings.Contains(token, `"`) {
-		return `'` + token + `'`
+		return `'` + strings.ReplaceAll(token, `'`, `'"'"'`) + `'`
 	}
 	return `"` + token + `"`
 }
@@ -307,25 +304,15 @@ func (m ManagedModel) Validate() error {
 	if m.SamplingJSON != "" && NormalizeRole(m.Role) != RoleChat {
 		return errors.New("sampling settings require a chat model")
 	}
-	if len(m.Efforts()) > 16 {
-		return errors.New("choose at most 16 reasoning options")
-	}
 	seen := map[string]bool{}
 	for _, effort := range m.Efforts() {
-		if !effortName.MatchString(effort) || effort == "none" || seen[effort] || NormalizeRole(m.Role) != RoleChat {
-			return errors.New("choose distinct reasoning options for a chat model")
+		if !supportedEffort(effort) || seen[effort] || NormalizeRole(m.Role) != RoleChat {
+			return errors.New("choose distinct chat reasoning options: on, off, low, medium, high, xhigh, max")
 		}
 		seen[effort] = true
 	}
 	if !managedModelID.MatchString(m.ID) {
-		return errors.New("served id must start with a letter or digit and use only letters, digits, dots, dashes, or underscores")
-	}
-	display := strings.TrimSpace(m.DisplayName)
-	if display == "" || len(display) > maxDisplayBytes {
-		return fmt.Errorf("display name is required and must be %d characters or fewer", maxDisplayBytes)
-	}
-	if strings.ContainsAny(display, "\r\n\x00") {
-		return errors.New("display name must not contain control characters")
+		return errors.New("model name must be at most 128 characters, start with a letter or digit, and use only letters, digits, dots, dashes, or underscores")
 	}
 	_, err := m.Parse()
 	return err
@@ -421,7 +408,7 @@ func ModelsEnvJSON(models []ManagedModel) (string, error) {
 			SamplingProfiles: sampling,
 			ID:               model.ID,
 			ProviderBaseURL:  fmt.Sprintf("http://127.0.0.1:%d/v1", facts.Port),
-			Display:          strings.TrimSpace(model.DisplayName),
+			Display:          model.ID,
 			Reasoning:        len(model.Efforts()) > 0,
 			ReasoningEfforts: model.Efforts(),
 			ContextLength:    facts.MaxModelLen,

@@ -1,6 +1,6 @@
 # Release keys
 
-Keep release files in `~/umbratic-release/`.
+Keep release files in the repository's ignored `artifacts/release-work/` on Mac, or `~/umbratic-release/` on Linux.
 
 | File | What to do |
 | --- | --- |
@@ -9,6 +9,6 @@ Keep release files in `~/umbratic-release/`.
 
 The customer’s update key is derived automatically during ZIP creation. You do not create or copy a key per customer.
 
-Back up both release keys privately. Never replace them, commit them, or send them to customers. The signing key is created with owner-only permissions; keep the master key owner-only too (`chmod 600 ~/umbratic-release/*.key`).
+Back up both release keys privately. Never replace them, commit them, or send them to customers. The signing key is created with owner-only permissions; keep the master key owner-only too (`chmod 600 artifacts/release-work/*.key` from the repository root on Mac).
 
 Next: [build a customer ZIP](../guides/release-server.md) or [configure the update feed](update-feed.md).

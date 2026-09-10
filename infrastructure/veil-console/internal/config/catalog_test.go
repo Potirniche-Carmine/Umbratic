@@ -13,9 +13,8 @@ func TestEveryCatalogRowProducesAStartableCommand(t *testing.T) {
 		}
 		for _, variant := range entry.Variants {
 			model := ManagedModel{
-				ID:          entry.ServedID,
-				DisplayName: entry.DisplayName,
-				Command:     CatalogCommand(entry, variant, SuggestedPortStart, entry.DefaultContext),
+				ID:      entry.ServedID,
+				Command: CatalogCommand(entry, variant, SuggestedPortStart, entry.DefaultContext),
 			}
 			if err := model.Validate(); err != nil {
 				t.Fatalf("%s/%s does not validate: %v", entry.Key, variant.Key, err)
