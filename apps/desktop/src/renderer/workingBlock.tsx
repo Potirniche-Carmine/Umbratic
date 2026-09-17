@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronRight, Sparkles, SquareTerminal } from "lucide-react";
+import { useEffect } from "react";
 import type { Dispatch, MutableRefObject, PointerEvent, SetStateAction, TouchEvent, UIEvent, WheelEvent } from "react";
 import type { SkillInfo } from "../shared/desktopApi";
 import { activityHasNarration, activityHasTools, activitySummary } from "./activityTiming";
@@ -10,6 +11,7 @@ import {
 } from "./commandDisplay";
 import { WorkMarkdownContent } from "./markdownContent";
 import type { ComposerTimelineItem } from "./rendererTypes";
+import { useAutoExpandWorkingBlocks } from "./workingBlockPreferences";
 
 type ActivityItem = Extract<ComposerTimelineItem, { type: "activity" }>;
 
@@ -70,6 +72,14 @@ export function WorkingBlock({
   onTouchMove,
   onWheel,
 }: WorkingBlockProps) {
+  const autoExpand = useAutoExpandWorkingBlocks();
+  useEffect(() => {
+    if (!autoExpand || item.finished) return;
+    followScrollRef.current.set(item.id, true);
+    setExpanded((current) => current.has(item.id) ? current : new Set([...current, item.id]));
+    // Stream updates and manual toggles must not reopen a collapsed block.
+  }, [autoExpand, item.id, item.finished, followScrollRef, setExpanded]);
+
   const hasTools = activityHasTools(item.segments);
   // The bare status line is for a block with nothing in it yet — the wait
   // before the run has said anything. Once it holds narration there is

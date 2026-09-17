@@ -124,16 +124,8 @@ export function activityToolGroups(segments: ComposerActivitySegment[]): Array<{
 }
 
 /**
- * Prunes manual disclosure state down to the blocks that still exist.
- *
- * Blocks open only by hand. They used to auto-open while live and tuck
- * themselves away when the answer arrived, which meant the transcript's shape
- * kept changing under the reader — a block unfolding as the run warmed up,
- * collapsing as it answered, reopening on the next round. Now every block is
- * a collapsed row whose header summarizes the work (and, live, names what the
- * run is doing right now); expanding the log is the reader's choice, and a
- * block the reader opened stays open until they close it. The only prose that
- * ever stands outside a block is the run's answer.
+ * Prunes disclosure state down to the blocks that still exist. Blocks opened
+ * manually or by the auto-expand preference stay open when streaming finishes.
  */
 export function reconcileActivityDisclosureState(
   currentExpandedIds: Set<string>,
