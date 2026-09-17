@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fs, path::Path, sync::Mutex};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -26,9 +31,55 @@ pub struct CachedSkill {
 pub struct SkillCache {
     by_hash: HashMap<String, CachedSkill>,
     by_skill_id: HashMap<String, String>,
+    reads: HashMap<(String, PathBuf), SkillRead>,
+}
+
+#[derive(Debug)]
+struct SkillRead {
+    hash: String,
+    ranges: Vec<(usize, usize)>,
 }
 
 impl SkillCache {
+    pub fn begin_turn(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn record_read(&mut self, id: &str, path: &Path, content: &str, start: usize, end: usize) {
+        let hash = content_hash(content);
+        let read = self
+            .reads
+            .entry((id.to_owned(), path.to_owned()))
+            .or_insert_with(|| SkillRead {
+                hash: hash.clone(),
+                ranges: Vec::new(),
+            });
+        if read.hash != hash {
+            read.hash = hash;
+            read.ranges.clear();
+        }
+        read.ranges.push((start, end));
+        read.ranges.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for &(start, end) in &read.ranges {
+            if let Some(last) = merged.last_mut().filter(|last| start <= last.1) {
+                last.1 = last.1.max(end);
+            } else {
+                merged.push((start, end));
+            }
+        }
+        read.ranges = merged;
+    }
+
+    pub fn was_read_completely(&self, id: &str, path: &Path, content: &str) -> bool {
+        self.reads
+            .get(&(id.to_owned(), path.to_owned()))
+            .is_some_and(|read| {
+                read.hash == content_hash(content)
+                    && read.ranges.first() == Some(&(0, content.len()))
+            })
+    }
+
     pub fn get_by_skill_id(&self, skill_id: &str) -> Option<&CachedSkill> {
         let hash = self.by_skill_id.get(skill_id)?;
         self.by_hash.get(hash)
@@ -99,7 +150,30 @@ pub fn run_harness_skill_preflight(
     let mut loaded = Vec::new();
     for skill_id in selected_ids {
         match load_skill_with_lifecycle(session, run_id, skill_id, "harness", sink) {
-            Ok(skill) => loaded.push(skill),
+            Ok(skill) => {
+                let config = session
+                    .config
+                    .skills
+                    .iter()
+                    .find(|entry| entry.id == skill.skill_id)
+                    .unwrap();
+                let path = config
+                    .instruction_path
+                    .canonicalize()
+                    .map_err(|error| error.to_string())?;
+                session
+                    .skill_cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .record_read(
+                        &skill.skill_id,
+                        &path,
+                        &skill.content,
+                        0,
+                        skill.content.len(),
+                    );
+                loaded.push(skill);
+            }
             Err(failure) => {
                 return Err(format!(
                     "Explicit skill load failed ({}): {}",

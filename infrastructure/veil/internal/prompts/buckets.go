@@ -767,8 +767,8 @@ func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadat
 	}
 	if preferred := intersectSkills(bucket.PreferredSkills, availableSkills); len(preferred) > 0 {
 		sections = append(sections, "",
-			"Preferred skills (optional): "+strings.Join(preferred, ", "),
-			"If you will follow a preferred skill, read it completely with read_skill before applying it.")
+			"Skills to check for this work: "+strings.Join(preferred, ", "),
+			"Read every skill whose scope matches the actual task completely with read_skill before its dependent work. Skip only skills outside that scope.")
 	} else {
 		sections = append(sections, "")
 	}

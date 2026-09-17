@@ -24,6 +24,12 @@ The ops are page-level and metadata-level: `merge`, `split`, `extractPages`,
 the body text of a PDF changed and you do not have the source, say that plainly
 and offer to rebuild it from the content you can read.
 
+Before each create, read `references/spec.md` with `read_skill`, using this
+skill's id and `resource: "references/spec.md"`. Before each edit, read
+`references/ops.md` the same way. These are skill resources, not workspace
+files. Read the applicable reference completely before constructing the
+spec or ops; examples in this file do not replace that reference.
+
 ## Before you build anything
 
 **`inspect` first.** You get the page count, each page's size and rotation, the
@@ -90,7 +96,7 @@ when one is supplied in the prompt.
 
 ## Finishing
 
-Files land in `.umbratic/artifacts/pdf/` unless the user gave a path.
+Files land in `artifacts/pdf/` unless the user gave a path.
 
 Report: the path, the page count, `origin` and `editSurface`, any extra files a
 `split` wrote, and your assumptions. Never paste the spec back at the user.

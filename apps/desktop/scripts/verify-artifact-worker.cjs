@@ -9,6 +9,14 @@ const [archive, workspaceRoot] = process.argv.slice(2);
 app.setPath("userData", path.join(workspaceRoot, "electron-data"));
 app.whenReady().then(async () => {
   try {
+    const { installBundledSystemSkills } = require(path.join(archive, "dist-electron/main/skills.js"));
+    const skills = path.join(workspaceRoot, "skills");
+    installBundledSystemSkills(skills);
+    for (const id of ["documents", "presentations", "spreadsheets", "pdf"]) {
+      for (const resource of ["spec.md", "ops.md"]) {
+        assert.ok(fs.readFileSync(path.join(skills, "system", `umbratic-${id}`, "references", resource), "utf8").length > 100);
+      }
+    }
     const { runArtifactJob, localTransport } = require(path.join(archive, "dist-electron/main/artifacts/service.js"));
     const out = "artifacts/docx/package-smoke.docx";
     const absoluteOut = path.join(workspaceRoot, out);

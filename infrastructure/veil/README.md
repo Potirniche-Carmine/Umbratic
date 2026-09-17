@@ -51,7 +51,7 @@ Enrollment and challenge requests are public, bounded, and rate limited. All oth
 routes require the correct authentication class. There is no unauthenticated
 health endpoint and no generic provider passthrough route.
 
-Chat requests may include a validated `skills` catalog containing only each enabled skill's id, name, description, and source. Veil injects the protected rules that require the model to call `read_skill` and finish reading the relevant local `SKILL.md` before using it. Full skill bodies are never sent in the initial request, and `runtime_profiles` are not supported.
+Chat requests may include a validated `skills` catalog containing only each enabled skill's id, name, description, source, and path scope. Veil requires the model to read every skill whose scope matches the task before its dependent work, including system, personal, and imported skills. A task's simplicity or the availability of a direct tool does not waive this requirement. Each new request, including follow-ups, requires a fresh read; unrelated and disabled skills are not loaded. The runner additionally gates artifact execution on a complete read of the enabled bundled format skill and, for create/edit, its applicable schema reference. Partial reads, cached bodies from earlier requests, and reads of changed files do not satisfy that gate. Full skill bodies are never sent in the initial request, and `runtime_profiles` are not supported.
 
 Both desktop modes use this same boundary. Local mode starts a loopback Veil process bundled with the app; Server mode calls a hosted Veil deployment. The runner never injects or forwards a client system prompt in either mode.
 

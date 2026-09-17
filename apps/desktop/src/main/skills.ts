@@ -95,7 +95,7 @@ function readSkillManifest(directory: string): SkillManifest {
     if (isRecord(parsed.systemSkills)) {
       for (const [id, value] of Object.entries(parsed.systemSkills)) {
         if (
-          isValidSkillId(id) &&
+          isValidSkillId(id.split("/")[0]) && safeZipEntryName(id) === id &&
           isRecord(value) &&
           typeof value.installedChecksum === "string" &&
           /^sha256:[a-f0-9]{64}$/i.test(value.installedChecksum) &&
@@ -263,57 +263,54 @@ function isReservedSkillId(id: string): boolean {
   return id === "system" || systemSkillDefinitions.some((skill) => skill.id === id);
 }
 
-/**
- * Writes any missing system skill, and refreshes any whose on-disk copy is still
- * byte-for-byte the one we installed. Without the refresh, a user who installed
- * the app once kept the original wording of every system skill forever, and an
- * improved skill only ever reached new installs.
- *
- * A copy the user has edited is never touched — the install record no longer
- * matches, so the file is theirs. `resetSystemSkill` remains the way to discard
- * such an edit deliberately.
+/** Install complete skill folders, refreshing only files the user has not edited.
+ * Root SKILL.md records use the skill id; resources use id/relative/path.
  */
 function ensureSystemSkillFiles(directory = skillsDirectoryPath()) {
   const root = path.resolve(directory);
+  const systemRoot = fs.lstatSync(systemSkillsDirectory(root), { throwIfNoEntry: false });
+  if (systemRoot && (!systemRoot.isDirectory() || systemRoot.isSymbolicLink())) {
+    throw new Error("The system skills directory must be a real directory.");
+  }
   fs.mkdirSync(systemSkillsDirectory(root), { recursive: true });
   const manifest = readSkillManifest(root);
   let manifestChanged = false;
-
   for (const skill of systemSkillDefinitions) {
-    const skillDir = systemSkillDirectory(skill, root);
-    const skillFile = systemSkillFilePath(skill, root);
-    fs.mkdirSync(skillDir, { recursive: true });
-
-    const bundled = bundledSystemSkillContent(skill.id);
-    const bundledChecksum = sha256Hex(bundled);
-    const onDisk = fs.existsSync(skillFile) ? readTextFileIfSafe(skillFile) : null;
-
-    if (onDisk === null) {
-      fs.writeFileSync(skillFile, bundled, "utf8");
-      manifest.systemSkills[skill.id] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
-      manifestChanged = true;
-      continue;
-    }
-    if (sha256Hex(onDisk) === bundledChecksum) {
-      // Already current. Record it if this install predates the record, so the
-      // next bundled change can tell an untouched copy from an edited one.
-      if (manifest.systemSkills[skill.id]?.installedChecksum !== bundledChecksum) {
-        manifest.systemSkills[skill.id] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
-        manifestChanged = true;
-      }
-      continue;
-    }
-    const installed = manifest.systemSkills[skill.id]?.installedChecksum;
-    if (installed && sha256Hex(onDisk) === installed) {
-      fs.writeFileSync(skillFile, bundled, "utf8");
-      manifest.systemSkills[skill.id] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
-      manifestChanged = true;
-    }
-    // Otherwise the copy differs from both the bundle and what we installed:
-    // the user edited it, and it stays until they reset it.
+    const source = path.join(bundledSystemSkillsDirectory(), skill.id);
+    const target = systemSkillDirectory(skill, root);
+    manifestChanged = installSystemSkillFolder(source, target, skill.id, manifest) || manifestChanged;
   }
-
   if (manifestChanged) writeSkillManifest(root, manifest);
+}
+
+function installSystemSkillFolder(source: string, target: string, key: string, manifest: SkillManifest): boolean {
+  const existing = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (existing && (!existing.isDirectory() || existing.isSymbolicLink())) return false;
+  fs.mkdirSync(target, { recursive: true });
+  let changed = false;
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const from = path.join(source, entry.name);
+    const to = path.join(target, entry.name);
+    const recordKey = !key.includes("/") && entry.name === "SKILL.md" ? key : `${key}/${entry.name}`;
+    if (entry.isDirectory()) {
+      changed = installSystemSkillFolder(from, to, recordKey, manifest) || changed;
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const stat = fs.lstatSync(to, { throwIfNoEntry: false });
+    if (stat && (!stat.isFile() || stat.isSymbolicLink())) continue;
+    const bundled = fs.readFileSync(from);
+    const bundledChecksum = sha256Hex(bundled);
+    const onDiskChecksum = stat ? sha256Hex(fs.readFileSync(to)) : null;
+    const installed = manifest.systemSkills[recordKey]?.installedChecksum;
+    if (onDiskChecksum !== null && onDiskChecksum !== bundledChecksum && onDiskChecksum !== installed) continue;
+    if (onDiskChecksum !== bundledChecksum) fs.writeFileSync(to, bundled);
+    if (installed !== bundledChecksum) {
+      manifest.systemSkills[recordKey] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 export function installBundledSystemSkills(directory = skillsDirectoryPath()): string {

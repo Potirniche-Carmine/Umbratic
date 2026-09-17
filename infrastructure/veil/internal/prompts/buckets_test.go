@@ -85,7 +85,7 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 		"this plan sets the work",
 		"Start now with the needed tool call(s)",
 		"Keep the plan to yourself",
-		"Preferred skills (optional): umbratic-security-review",
+		"Skills to check for this work: umbratic-security-review",
 		"read_skill",
 		"Stop when: ",
 		"If a tool fails, read the error and try a different approach.",
@@ -116,7 +116,7 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 
 	// With no catalog at all the playbook still carries its core rules.
 	bare := PlaybookPrompt(EngineeringChat, "deep_review", nil, nil)
-	if bare == "" || strings.Contains(bare, "Preferred skills") {
+	if bare == "" || strings.Contains(bare, "Skills to check") {
 		t.Fatalf("playbook must stand alone without skills:\n%s", bare)
 	}
 	if !strings.Contains(bare, "Not covered") {

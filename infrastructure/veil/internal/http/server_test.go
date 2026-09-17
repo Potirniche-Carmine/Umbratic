@@ -336,31 +336,35 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 }
 
 func TestChatRouteAddsServerOwnedSkillCatalogPrompt(t *testing.T) {
-	modelClient := &fakeModelClient{}
-	server := NewServer(testConfig(), modelClient)
+	for _, route := range []string{"engineering", "marketing", "sales"} {
+		t.Run(route, func(t *testing.T) {
+			modelClient := &fakeModelClient{}
+			server := NewServer(testConfig(), modelClient)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"messages":[{"role":"user","content":"fix test.py"}],"skills":[{"id":"python","name":"Python","description":"Use for Python work.","source":"system"}]}`))
-	req.Header.Set("Authorization", "Bearer test-token")
-	rr := httptest.NewRecorder()
-	server.ServeHTTP(rr, req)
+			req := httptest.NewRequest(http.MethodPost, "/api/"+route+"/chat", strings.NewReader(`{"messages":[{"role":"user","content":"fix test.py"}],"skills":[{"id":"python","name":"Python","description":"Use for Python work.","source":"system"}]}`))
+			req.Header.Set("Authorization", "Bearer test-token")
+			rr := httptest.NewRecorder()
+			server.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
-	}
-	if len(modelClient.req.Messages) != 4 {
-		t.Fatalf("got %d messages", len(modelClient.req.Messages))
-	}
-	if !strings.Contains(modelClient.req.Messages[2].Content.(string), "read_skill") {
-		t.Fatalf("missing skill-use prompt: %#v", modelClient.req.Messages)
-	}
-	if !strings.Contains(modelClient.req.Messages[2].Content.(string), `"id":"python"`) {
-		t.Fatalf("missing Python skill metadata: %#v", modelClient.req.Messages)
-	}
-	if modelClient.req.Messages[3].Role != "user" {
-		t.Fatalf("client message should follow skill prompt: %#v", modelClient.req.Messages)
-	}
-	if modelClient.req.Messages[2].Role != "system" {
-		t.Fatalf("skill catalog must be in the stable system tier: %#v", modelClient.req.Messages)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+			}
+			if len(modelClient.req.Messages) != 4 {
+				t.Fatalf("got %d messages", len(modelClient.req.Messages))
+			}
+			if !strings.Contains(modelClient.req.Messages[2].Content.(string), "required task-specific playbooks when their scope matches the work") {
+				t.Fatalf("missing skill-use prompt: %#v", modelClient.req.Messages)
+			}
+			if !strings.Contains(modelClient.req.Messages[2].Content.(string), `"id":"python"`) {
+				t.Fatalf("missing Python skill metadata: %#v", modelClient.req.Messages)
+			}
+			if modelClient.req.Messages[3].Role != "user" {
+				t.Fatalf("client message should follow skill prompt: %#v", modelClient.req.Messages)
+			}
+			if modelClient.req.Messages[2].Role != "system" {
+				t.Fatalf("skill catalog must be in the stable system tier: %#v", modelClient.req.Messages)
+			}
+		})
 	}
 }
 

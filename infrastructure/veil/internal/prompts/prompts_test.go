@@ -200,7 +200,7 @@ func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 	}
 }
 
-func TestBuildAddsOptionalSkillCatalogAndRequiresCompleteReadBeforeUse(t *testing.T) {
+func TestBuildRequiresMatchingSkillsBeforeDependentWork(t *testing.T) {
 	skills := []SkillMetadata{
 		{ID: "python", Name: "Python", Description: "Use for Python work.", Source: "system"},
 		{ID: "deal-review", Name: "Deal Review", Description: "Use for account reviews.", Source: "local"},
@@ -220,23 +220,40 @@ func TestBuildAddsOptionalSkillCatalogAndRequiresCompleteReadBeforeUse(t *testin
 		t.Fatal("skill catalog should use the system tier")
 	}
 	for _, want := range []string{
-		"optional task-specific playbooks",
+		"required task-specific playbooks when their scope matches the work",
 		"not an exhaustive capability list",
-		"If no skill would materially help, handle the request normally",
-		"Do not describe your general capabilities by enumerating enabled skills",
-		"Review the names and descriptions for relevance",
-		"One request may use multiple enabled skills",
-		"Use the smallest relevant set",
+		"If no enabled skill matches, handle the request normally",
+		"do not enumerate them to describe general capabilities",
+		"review the catalog's names, descriptions, and path scopes for relevance",
+		"One request may require multiple enabled skills",
+		"Do not load unrelated skills",
 		"you MUST first call read_skill",
-		"Do this for every skill you use",
+		"every enabled skill, including system, personal, and imported skills, on every route",
 		"read its SKILL.md completely",
 		"Next offset",
+		"Read status: complete",
+		"Do not skip a matching skill because the task seems simple",
+		"not on whether you think you need help",
+		"converting a PRD to Word",
+		"never batch a skill read with actions that depend on its instructions",
+		"Before constructing a create spec or edit ops",
+		"references/spec.md or references/ops.md",
+		"keep the same skillId and set resource to the relative path",
+		"These resources belong to the skill folder, not the workspace",
+		"do not substitute guessed instructions",
+		"On every user request, including follow-ups",
+		"An earlier turn's read does not satisfy this requirement",
 		"Never infer or apply instructions from only a skill's name or description",
 		`"id":"python"`,
 		`"description":"Use for account reviews."`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("skill prompt missing %q: %s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"optional task-specific", "If no skill would materially help", "if you decide to use"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("skill prompt still permits skipping a matching skill: %q", forbidden)
 		}
 	}
 	if messages[3].Role != "user" {
