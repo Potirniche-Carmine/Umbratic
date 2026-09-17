@@ -33,7 +33,7 @@ import {
 } from "./storage";
 import type { BackendUiEvent, CapabilityProbeReport, ChatAttachment, ReviewFile, TaskRecord } from "./types";
 import { pathInside } from "./utils";
-import { normalizeReviewFile, buildTextDiff } from "../shared/reviewDiff";
+import { normalizeReviewFile, buildTextDiff, stableReviewHash } from "../shared/reviewDiff";
 import { boundedRecentLines } from "./historyContext";
 import { limitPromptImages, localDateContextLine, shouldIncludeWorkspaceContext } from "./promptContext";
 import { rootAgentInstructions } from "./repositoryInstructions";
@@ -407,6 +407,7 @@ export function buildBinaryDiff(filePath: string, before: string | null, after: 
   return normalizeReviewFile({
     path: filePath,
     status,
+    contentHash: stableReviewHash(`${filePath}\0${before}\0${after}`),
     patch: [...header, `Binary file ${status}: ${filePath}`].join("\n"),
   });
 }

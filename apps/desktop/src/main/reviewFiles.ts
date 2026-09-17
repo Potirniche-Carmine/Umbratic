@@ -94,7 +94,7 @@ export async function gitWorkspaceReviewFile(repositoryPath: string, baseline: s
   return buildBinaryDiff(
     file,
     status === "added" ? null : "before",
-    status === "deleted" ? null : "after",
+    status === "deleted" ? null : snapshotFileValue(absolute),
   );
 }
 
@@ -172,7 +172,7 @@ export async function refreshReview(
 
 export function reviewPatchHash(reviewFiles: ReviewFile[]): string {
   const normalized = reviewFiles
-    .map((file) => `${file.path}\0${file.status}\0${file.patch}`)
+    .map((file) => `${file.path}\0${file.status}\0${file.contentHash}\0${file.patch}`)
     .sort()
     .join("\0");
   return crypto.createHash("sha256").update(normalized).digest("hex");

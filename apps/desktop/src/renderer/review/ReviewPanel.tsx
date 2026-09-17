@@ -181,7 +181,7 @@ export function ReviewPanel({
     return () => {
       active = false;
     };
-  }, [taskId, actualPatchHash, selectedFile?.path, selectedFileIsDocument]);
+  }, [taskId, actualPatchHash, selectedFile?.path, selectedFile?.contentHash, selectedFileIsDocument]);
 
   useEffect(() => {
     setComments([]);
