@@ -17,7 +17,7 @@ regex = "1.11.1"
 reqwest = { version = "0.12.22", default-features = false, features = ["json", "rustls-tls", "stream"] }
 # Already in the tree through reqwest. Direct so certificate pinning can run
 # inside the TLS handshake rather than after the request body is sent.
-rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = { version = "1.15.0", features = ["std"] }
 webpki-roots = "1.0.9"
 serde = { version = "1.0.219", features = ["derive"] }
