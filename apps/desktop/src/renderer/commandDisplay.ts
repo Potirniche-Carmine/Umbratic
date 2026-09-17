@@ -53,6 +53,7 @@ const workspaceToolLabels: Record<string, string> = {
   write: "Write file",
   edit: "Edit files",
   apply_patch: "Edit files",
+  artifact: "Document",
   lsp: "Inspect code",
   workspace_graph: "Inspect code",
   retrieve_context: "Retrieve context",
@@ -177,6 +178,26 @@ export function commandDetailLabel(run: CommandRun): string {
 }
 
 export function activityToolLabel(run: CommandRun): { key: string; label: string } {
+  const actions: Record<string, [string, string, string]> = {
+    write: ["Write", "Writing", "Wrote"],
+    edit: ["Edit", "Editing", "Edited"],
+    apply_patch: ["Edit", "Editing", "Edited"],
+    create: ["Create", "Creating", "Created"],
+    inspect: ["Inspect", "Inspecting", "Inspected"],
+  };
+  const fileAction = run.toolKind === "artifact"
+    ? run.command.match(/^artifact\s+(create|edit|inspect)\s+(.+)$/)
+    : run.command.match(/^(write|edit|apply_patch)(?:\s+(.+))?$/);
+  if (fileAction) {
+    const action = fileAction[1];
+    const target = fileAction[2]?.replaceAll("\\", "/");
+    const name = target?.split("/").filter(Boolean).at(-1) ?? (action === "write" ? "file" : "files");
+    const verb = actions[action][run.status === "running" ? 1 : run.status === "passed" ? 2 : 0];
+    return { key: `${action}:${target ?? ""}`.toLowerCase(), label: `${verb} ${name}` };
+  }
+  if (run.toolKind === "artifact" && run.status === "running") {
+    return { key: "artifact", label: "Preparing document" };
+  }
   if (run.toolKind === "web_fetch") {
     const host = webFetchHost(run.command);
     return {

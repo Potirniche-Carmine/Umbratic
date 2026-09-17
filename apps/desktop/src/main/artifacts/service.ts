@@ -211,6 +211,7 @@ export function runInWorker(request: ArtifactRequest, timeoutMs: number): Promis
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.removeAllListeners("spawn");
       child.removeAllListeners("message");
       child.removeAllListeners("error");
       child.removeAllListeners("exit");
@@ -260,7 +261,18 @@ export function runInWorker(request: ArtifactRequest, timeoutMs: number): Promis
         errors: [{ path: "", message: "the document engine stopped before it answered; nothing was written" }],
       }),
     );
-    child.postMessage(request);
+    // Electron drops messages sent before the utility process has spawned.
+    child.once("spawn", () => {
+      try {
+        child.postMessage(request);
+      } catch {
+        finish({
+          ok: false,
+          kind: "runtime",
+          errors: [{ path: "", message: "the document engine could not receive the job" }],
+        });
+      }
+    });
   });
 }
 

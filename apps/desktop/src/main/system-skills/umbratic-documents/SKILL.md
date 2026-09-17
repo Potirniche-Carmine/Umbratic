@@ -40,7 +40,10 @@ not renumber headings, do not rewrite blocks.
   "blocks":[
     {"type":"title","text":"Q3 Brief","subtitle":"EMEA"},
     {"type":"heading","level":1,"text":"Summary"},
-    {"type":"paragraph","text":"Revenue grew **12%**."}
+    {"type":"paragraph","text":"Revenue grew **12%**."},
+    {"type":"table","columns":["Region","Growth"],
+     "rows":[["EMEA","12%"],["Americas","8%"]]},
+    {"type":"callout","style":"note","text":"Forecasts remain provisional."}
   ]}}
 ```
 
@@ -53,6 +56,11 @@ in).
 Fifteen block types — `title`, `heading`, `paragraph`, `bullets`, `numbered`,
 `checklist`, `definitions`, `callout`, `table`, `image`, `chart`, `quote`,
 `pageBreak`, `signature`, `formField`. `references/spec.md` has every field.
+
+Tables use `columns`, an array of header strings or `{header, width, align}`
+objects, and `rows`, an array of string arrays with one cell per column.
+Callouts are separate blocks with `style` and `text`. When converting an
+existing document, preserve its content, headings, lists, and tables.
 
 The preset owns all typography. You never send a font, a size, a margin, or a
 colour. A document has exactly one `title`; everything else is a `heading`.

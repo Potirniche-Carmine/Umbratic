@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skillsRoot = path.join(desktopRoot, "src", "main", "system-skills");
@@ -15,6 +16,16 @@ const artifactSkills = [
   "umbratic-spreadsheets",
   "umbratic-pdf",
 ];
+
+test("the Documents skill teaches a valid create spec with a table and callout", () => {
+  const body = fs.readFileSync(path.join(skillsRoot, "umbratic-documents", "SKILL.md"), "utf8");
+  const create = JSON.parse(body.match(/```json\r?\n([\s\S]*?)\r?\n```/)![1]);
+  const { readDocumentSpec } = loadTypeScriptModule(new URL("../src/main/artifacts/worker/blocks/spec.ts", import.meta.url));
+  const parsed = readDocumentSpec(create.spec, "docx");
+  assert.equal(parsed.errors.length, 0, JSON.stringify(parsed.errors));
+  assert.ok(parsed.spec.blocks.some((block) => block.type === "table"));
+  assert.ok(parsed.spec.blocks.some((block) => block.type === "callout"));
+});
 
 test("each artifact skill has frontmatter and stays inside its size budget", () => {
   for (const skill of artifactSkills) {
