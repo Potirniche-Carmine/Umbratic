@@ -60,22 +60,20 @@ func TestEveryRouteCatalogIsClosedAndComplete(t *testing.T) {
 // direct_answer carries no playbook at all: a degraded or direct run must
 // assemble byte-identically to today.
 func TestDirectAnswerAndUnknownBucketsRenderNoPlaybook(t *testing.T) {
-	skills := []SkillMetadata{{ID: "umbratic-discovery"}}
 	for _, route := range allRoutes() {
 		for _, id := range []string{DirectAnswerBucket, "", "not_a_bucket", "positioning"} {
 			if id == "positioning" && route == MarketingChat {
 				continue
 			}
-			if got := PlaybookPrompt(route, id, skills, nil); got != "" {
+			if got := PlaybookPrompt(route, id, nil); got != "" {
 				t.Fatalf("%s/%q rendered a playbook: %q", route, id, got)
 			}
 		}
 	}
 }
 
-func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
-	enabled := []SkillMetadata{{ID: "umbratic-security-review"}, {ID: "umbratic-markdown"}}
-	rendered := PlaybookPrompt(EngineeringChat, "deep_review", enabled, nil)
+func TestPlaybookRendersBodyAndStopWithoutSkillRouting(t *testing.T) {
+	rendered := PlaybookPrompt(EngineeringChat, "deep_review", nil)
 	if rendered == "" {
 		t.Fatal("deep_review must render a playbook")
 	}
@@ -85,8 +83,6 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 		"this plan sets the work",
 		"Start now with the needed tool call(s)",
 		"Keep the plan to yourself",
-		"Skills to check for this work: umbratic-security-review",
-		"read_skill",
 		"Stop when: ",
 		"If a tool fails, read the error and try a different approach.",
 	} {
@@ -108,19 +104,11 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 			t.Fatalf("the playbook must not ask for a per-call status line (%q)", gone)
 		}
 	}
-	// umbratic-git-worktree is preferred but not enabled here, so it must not
-	// be named. Every playbook has to work without its preferred skills.
-	if strings.Contains(rendered, "umbratic-git-worktree") {
-		t.Fatal("a disabled preferred skill must be omitted")
+	if strings.Contains(rendered, "Skills to check") || strings.Contains(rendered, "umbratic-") {
+		t.Fatal("playbooks must leave skill selection to the shared catalog prompt")
 	}
-
-	// With no catalog at all the playbook still carries its core rules.
-	bare := PlaybookPrompt(EngineeringChat, "deep_review", nil, nil)
-	if bare == "" || strings.Contains(bare, "Skills to check") {
-		t.Fatalf("playbook must stand alone without skills:\n%s", bare)
-	}
-	if !strings.Contains(bare, "Not covered") {
-		t.Fatal("deep_review must keep its coverage-reporting rule without the skill")
+	if !strings.Contains(rendered, "Not covered") {
+		t.Fatal("deep_review must keep its coverage-reporting rule")
 	}
 }
 
@@ -138,7 +126,7 @@ func TestRepoOrientKeepsTheRulesItEarned(t *testing.T) {
 		map[string]any{"type": "function", "function": map[string]any{"name": "workspace_graph"}},
 	}
 	for _, tools := range []any{nil, graphTools} {
-		rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, tools)
+		rendered := PlaybookPrompt(EngineeringChat, "repo_orient", tools)
 		for name, want := range map[string]string{
 			"read-only":            "leave the files as they are",
 			"no drive-by fixes":    "name it in your answer",
@@ -156,7 +144,7 @@ func TestRepoOrientKeepsTheRulesItEarned(t *testing.T) {
 			}
 		}
 	}
-	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, nil)
+	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil)
 	// The exploration budget applies to exploring, not to the answer: the plan
 	// still has to say the tour comes after looking.
 	if !strings.Contains(rendered, "You just read the project") {
@@ -493,7 +481,7 @@ func TestAStatusSentenceNarratesItsOwnWorkInFirstPerson(t *testing.T) {
 // one directory, each answered with that directory's real listing. The rule that
 // stops it belongs in the bucket that does the reading.
 func TestCodeExplainForbidsGuessedPaths(t *testing.T) {
-	rendered := PlaybookPrompt(EngineeringChat, "code_explain", nil, nil)
+	rendered := PlaybookPrompt(EngineeringChat, "code_explain", nil)
 	for _, want := range []string{
 		"Read paths you have seen",
 		"its error lists what that directory really holds",
@@ -659,7 +647,7 @@ func TestOrientDecisionValidationSeparatesTheBucketFromTheSentence(t *testing.T)
 func TestPlaybookIsTheLastProtectedSegment(t *testing.T) {
 	skills := []SkillMetadata{{ID: "umbratic-python"}}
 	client := []model.Message{{Role: "user", Content: "fix the failing test"}}
-	playbook := PlaybookPrompt(EngineeringChat, "debug_failure", skills, nil)
+	playbook := PlaybookPrompt(EngineeringChat, "debug_failure", nil)
 	if playbook == "" {
 		t.Fatal("debug_failure must render a playbook")
 	}
@@ -710,15 +698,15 @@ func TestGraphGuidanceRendersOnlyWhenTheToolIsPresent(t *testing.T) {
 	without := []any{map[string]any{"type": "function", "function": map[string]any{"name": "read"}}}
 
 	for _, bucket := range []string{"repo_orient", "code_explain", "code_change", "review_audit"} {
-		absent := PlaybookPrompt(EngineeringChat, bucket, nil, without)
-		present := PlaybookPrompt(EngineeringChat, bucket, nil, tools)
+		absent := PlaybookPrompt(EngineeringChat, bucket, without)
+		present := PlaybookPrompt(EngineeringChat, bucket, tools)
 		if strings.Contains(absent, "workspace_graph") {
 			t.Fatalf("%s named workspace_graph without the tool:\n%s", bucket, absent)
 		}
 		if !strings.Contains(present, "workspace_graph") {
 			t.Fatalf("%s dropped its graph guidance with the tool present:\n%s", bucket, present)
 		}
-		if PlaybookPrompt(EngineeringChat, bucket, nil, nil) != absent {
+		if PlaybookPrompt(EngineeringChat, bucket, nil) != absent {
 			t.Fatalf("%s: a nil tool array must render like an array without the tool", bucket)
 		}
 	}
@@ -745,8 +733,8 @@ func TestWebGuidanceRendersOnlyWhenBothToolsArePresent(t *testing.T) {
 		{SalesChat, "account_research"},
 		{SalesChat, "research_synth"},
 	} {
-		absent := PlaybookPrompt(trial.route, trial.bucket, nil, nil)
-		present := PlaybookPrompt(trial.route, trial.bucket, nil, both)
+		absent := PlaybookPrompt(trial.route, trial.bucket, nil)
+		present := PlaybookPrompt(trial.route, trial.bucket, both)
 		if strings.Contains(absent, "web_search") || strings.Contains(absent, "web_fetch") {
 			t.Fatalf("%s/%s named web tools without them:\n%s", trial.route, trial.bucket, absent)
 		}
@@ -756,7 +744,7 @@ func TestWebGuidanceRendersOnlyWhenBothToolsArePresent(t *testing.T) {
 		if !strings.Contains(present, "Never invent a company domain") {
 			t.Fatalf("%s/%s lost the no-invented-domain rule:\n%s", trial.route, trial.bucket, present)
 		}
-		if PlaybookPrompt(trial.route, trial.bucket, nil, searchOnly) != absent {
+		if PlaybookPrompt(trial.route, trial.bucket, searchOnly) != absent {
 			t.Fatalf("%s/%s must require both web tools, not search alone", trial.route, trial.bucket)
 		}
 	}
@@ -767,7 +755,7 @@ func TestWebGuidanceRendersOnlyWhenBothToolsArePresent(t *testing.T) {
 func TestReviewBucketsTellTheModelWhatNotToReRead(t *testing.T) {
 	tools := []any{map[string]any{"type": "function", "function": map[string]any{"name": "workspace_graph"}}}
 	for _, bucket := range []string{"review_audit", "deep_review"} {
-		rendered := PlaybookPrompt(EngineeringChat, bucket, nil, tools)
+		rendered := PlaybookPrompt(EngineeringChat, bucket, tools)
 		if !strings.Contains(rendered, "stop there") {
 			t.Fatalf("%s lost its bound on how much to read:\n%s", bucket, rendered)
 		}
@@ -790,7 +778,7 @@ func TestRepoOrientGraphVariantIsOneCoherentNumberedPlan(t *testing.T) {
 	tools := []any{
 		map[string]any{"type": "function", "function": map[string]any{"name": "workspace_graph"}},
 	}
-	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, tools)
+	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", tools)
 
 	if !strings.Contains(rendered, "1. In one response, call workspace_graph with action summary and read the project's own documents") {
 		t.Fatalf("step 1 must itself be the graph call, batched with document reads:\n%s", rendered)
@@ -825,7 +813,7 @@ func TestRepoOrientGraphVariantIsOneCoherentNumberedPlan(t *testing.T) {
 // Without the tool the rendered plan must be exactly what shipped before the
 // structured form existed: same words, same numbers, no trace of the variant.
 func TestRepoOrientWithoutTheGraphRendersTheOriginalPlan(t *testing.T) {
-	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, nil)
+	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil)
 	if strings.Contains(rendered, "workspace_graph") {
 		t.Fatalf("a harness without the tool must never be told to call it:\n%s", rendered)
 	}

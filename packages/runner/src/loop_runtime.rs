@@ -514,11 +514,6 @@ async fn apply_pending_steer(session: &Arc<Session>, sink: &EventSink, run_id: &
         return;
     };
     session
-        .skill_cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .begin_turn();
-    session
         .messages
         .lock()
         .await
@@ -549,11 +544,6 @@ pub async fn run_turn(
     // makes the first search of this run rebuild, while later searches in the
     // same run stay warm. A run that never searches never pays for the walk.
     session.search_index.mark_stale();
-    session
-        .skill_cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .begin_turn();
 
     // Work 3: guaranteed skill loading — harness preflight before any model request.
     let selected_ids = collect_selected_skill_ids(&session, &explicit_text, &selected_skill_ids);

@@ -40,11 +40,6 @@ pub(super) async fn artifact_tool(
 ) -> ToolExecutionResult {
     let action = string_arg(input, &["action"]);
     let job = plan(session, &action, input)?;
-    super::skill::require_artifact_skill(
-        session,
-        &action,
-        job.payload["format"].as_str().unwrap_or_default(),
-    )?;
     if job.mutating {
         let decision = permissions
             .request(

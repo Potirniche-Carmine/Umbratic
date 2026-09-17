@@ -220,29 +220,29 @@ func TestBuildRequiresMatchingSkillsBeforeDependentWork(t *testing.T) {
 		t.Fatal("skill catalog should use the system tier")
 	}
 	for _, want := range []string{
-		"required task-specific playbooks when their scope matches the work",
-		"not an exhaustive capability list",
-		"If no enabled skill matches, handle the request normally",
-		"do not enumerate them to describe general capabilities",
-		"review the catalog's names, descriptions, and path scopes for relevance",
-		"One request may require multiple enabled skills",
-		"Do not load unrelated skills",
-		"you MUST first call read_skill",
-		"every enabled skill, including system, personal, and imported skills, on every route",
-		"read its SKILL.md completely",
+		"On EVERY user request, including follow-ups",
+		"review the entire catalog's names, descriptions, and path scopes before planning or acting",
+		"You MUST call read_skill for EVERY skill the user names or whose described scope matches any part of the task",
+		"including partially relevant skills",
+		"system, personal, and imported skills on every route",
+		"Do not skip a relevant skill because you are confident",
+		"not whether you think you need help",
+		"Read each selected SKILL.md completely on this request",
+		"even if you used it earlier in the conversation",
+		"An explicit skill already supplied in full for this request counts as loaded",
 		"Next offset",
 		"Read status: complete",
-		"Do not skip a matching skill because the task seems simple",
-		"not on whether you think you need help",
-		"converting a PRD to Word",
-		"never batch a skill read with actions that depend on its instructions",
-		"Before constructing a create spec or edit ops",
-		"references/spec.md or references/ops.md",
-		"keep the same skillId and set resource to the relative path",
-		"These resources belong to the skill folder, not the workspace",
+		"Before EVERY dependent action, check which additional resources",
+		"You MUST load their complete content before constructing tool arguments",
+		"Reading SKILL.md does not load its references",
+		"this never waives a newly required reference",
+		"keep the same skillId and set resource to the relative path specified by the skill",
+		"full content is still in context and unchanged",
 		"do not substitute guessed instructions",
-		"On every user request, including follow-ups",
-		"An earlier turn's read does not satisfy this requirement",
+		"never batch a skill read with actions that depend on its instructions",
+		"Do not load unrelated skills",
+		"If no enabled skill matches, handle the request normally",
+		"not an exhaustive capability list",
 		"Never infer or apply instructions from only a skill's name or description",
 		`"id":"python"`,
 		`"description":"Use for account reviews."`,
@@ -251,9 +251,9 @@ func TestBuildRequiresMatchingSkillsBeforeDependentWork(t *testing.T) {
 			t.Fatalf("skill prompt missing %q: %s", want, prompt)
 		}
 	}
-	for _, forbidden := range []string{"optional task-specific", "If no skill would materially help", "if you decide to use"} {
+	for _, forbidden := range []string{"optional task-specific", "If no skill would materially help", "if you decide to use", "umbratic-documents", "Word", "PowerPoint", "references/spec.md", "references/ops.md"} {
 		if strings.Contains(prompt, forbidden) {
-			t.Fatalf("skill prompt still permits skipping a matching skill: %q", forbidden)
+			t.Fatalf("skill prompt contains optional or format-specific routing: %q", forbidden)
 		}
 	}
 	if messages[3].Role != "user" {

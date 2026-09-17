@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    fs,
-    path::{Path, PathBuf},
-    sync::Mutex,
-};
+use std::{collections::HashMap, fs, path::Path, sync::Mutex};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -29,66 +24,16 @@ pub struct CachedSkill {
 
 #[derive(Debug, Default)]
 pub struct SkillCache {
-    by_hash: HashMap<String, CachedSkill>,
-    by_skill_id: HashMap<String, String>,
-    reads: HashMap<(String, PathBuf), SkillRead>,
-}
-
-#[derive(Debug)]
-struct SkillRead {
-    hash: String,
-    ranges: Vec<(usize, usize)>,
+    by_skill_id: HashMap<String, CachedSkill>,
 }
 
 impl SkillCache {
-    pub fn begin_turn(&mut self) {
-        *self = Self::default();
-    }
-
-    pub fn record_read(&mut self, id: &str, path: &Path, content: &str, start: usize, end: usize) {
-        let hash = content_hash(content);
-        let read = self
-            .reads
-            .entry((id.to_owned(), path.to_owned()))
-            .or_insert_with(|| SkillRead {
-                hash: hash.clone(),
-                ranges: Vec::new(),
-            });
-        if read.hash != hash {
-            read.hash = hash;
-            read.ranges.clear();
-        }
-        read.ranges.push((start, end));
-        read.ranges.sort_unstable();
-        let mut merged: Vec<(usize, usize)> = Vec::new();
-        for &(start, end) in &read.ranges {
-            if let Some(last) = merged.last_mut().filter(|last| start <= last.1) {
-                last.1 = last.1.max(end);
-            } else {
-                merged.push((start, end));
-            }
-        }
-        read.ranges = merged;
-    }
-
-    pub fn was_read_completely(&self, id: &str, path: &Path, content: &str) -> bool {
-        self.reads
-            .get(&(id.to_owned(), path.to_owned()))
-            .is_some_and(|read| {
-                read.hash == content_hash(content)
-                    && read.ranges.first() == Some(&(0, content.len()))
-            })
-    }
-
     pub fn get_by_skill_id(&self, skill_id: &str) -> Option<&CachedSkill> {
-        let hash = self.by_skill_id.get(skill_id)?;
-        self.by_hash.get(hash)
+        self.by_skill_id.get(skill_id)
     }
 
     pub fn insert(&mut self, skill: CachedSkill) {
-        self.by_skill_id
-            .insert(skill.skill_id.clone(), skill.content_hash.clone());
-        self.by_hash.insert(skill.content_hash.clone(), skill);
+        self.by_skill_id.insert(skill.skill_id.clone(), skill);
     }
 }
 
@@ -150,30 +95,7 @@ pub fn run_harness_skill_preflight(
     let mut loaded = Vec::new();
     for skill_id in selected_ids {
         match load_skill_with_lifecycle(session, run_id, skill_id, "harness", sink) {
-            Ok(skill) => {
-                let config = session
-                    .config
-                    .skills
-                    .iter()
-                    .find(|entry| entry.id == skill.skill_id)
-                    .unwrap();
-                let path = config
-                    .instruction_path
-                    .canonicalize()
-                    .map_err(|error| error.to_string())?;
-                session
-                    .skill_cache
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .record_read(
-                        &skill.skill_id,
-                        &path,
-                        &skill.content,
-                        0,
-                        skill.content.len(),
-                    );
-                loaded.push(skill);
-            }
+            Ok(skill) => loaded.push(skill),
             Err(failure) => {
                 return Err(format!(
                     "Explicit skill load failed ({}): {}",
@@ -235,15 +157,6 @@ pub fn load_or_cache_skill(
     session: &Session,
     skill: &RunnerSkillConfig,
 ) -> Result<CachedSkill, SkillLoadFailure> {
-    {
-        let cache = session
-            .skill_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(cached) = cache.get_by_skill_id(&skill.id) {
-            return Ok(cached.clone());
-        }
-    }
     let content = read_skill_markdown(&skill.instruction_path)?;
     let content_hash = content_hash(&content);
     let cached = CachedSkill {
@@ -257,7 +170,9 @@ pub fn load_or_cache_skill(
         .skill_cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(existing) = cache.get_by_skill_id(&skill.id) {
+    if let Some(existing) = cache.get_by_skill_id(&skill.id)
+        && existing.content_hash == cached.content_hash
+    {
         return Ok(existing.clone());
     }
     cache.insert(cached.clone());
@@ -442,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn harness_preflight_loads_skill_once_per_content_hash() {
+    fn harness_preflight_refreshes_changed_content_without_conflating_skill_ids() {
         let directory = tempfile::tempdir().unwrap();
         let skill_path = directory.path().join("SKILL.md");
         std::fs::write(&skill_path, "skill body").unwrap();
@@ -452,7 +367,7 @@ mod tests {
             name: "Demo".into(),
             description: String::new(),
             source: "local".into(),
-            instruction_path: skill_path,
+            instruction_path: skill_path.clone(),
             paths: Vec::new(),
         });
         let session = Arc::new(crate::session::Session {
@@ -486,7 +401,20 @@ mod tests {
             run_harness_skill_preflight(&session, "run-2", &["demo".into()], &sink).unwrap();
         assert_eq!(first[0].content_hash, second[0].content_hash);
         assert_eq!(first[0].content, "skill body");
-        let cache = session.skill_cache.lock().unwrap();
-        assert!(cache.get_by_skill_id("demo").is_some());
+        let mut other = session.config.skills[0].clone();
+        other.id = "other".into();
+        other.source = "imported".into();
+        let same_content = load_or_cache_skill(&session, &other).unwrap();
+        assert_eq!(same_content.content_hash, first[0].content_hash);
+        assert_eq!(same_content.skill_id, "other");
+        assert_eq!(same_content.source, "imported");
+
+        fs::write(&skill_path, "updated skill body").unwrap();
+        let updated =
+            run_harness_skill_preflight(&session, "run-3", &["demo".into()], &sink).unwrap();
+        assert_ne!(updated[0].content_hash, first[0].content_hash);
+        assert_eq!(updated[0].content, "updated skill body");
+        fs::remove_file(&skill_path).unwrap();
+        assert!(run_harness_skill_preflight(&session, "run-4", &["demo".into()], &sink).is_err());
     }
 }
