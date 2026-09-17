@@ -439,6 +439,13 @@
   border-radius: 4px;
 }
 
+.documentReviewTable { overflow-x: auto; }
+.documentReviewTable table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.documentReviewTable th,
+.documentReviewTable td { min-width: 100px; padding: 10px 12px; border: 1px solid var(--line-strong); vertical-align: top; text-align: left; overflow-wrap: break-word; }
+.documentReviewTable th { background: var(--surface-2); font-weight: 600; }
+.documentReviewTable p { font-size: inherit; }
+
 .documentReviewBlock.style-title { margin-bottom: 8px; }
 .documentReviewBlock.style-subtitle { margin-bottom: 32px; }
 .documentReviewBlock.style-heading1 { margin-top: 30px; margin-bottom: 10px; }
@@ -551,4 +558,3 @@
   opacity: 0.48;
   cursor: not-allowed;
 }
-

@@ -1,17 +1,12 @@
 /**
- * The preview shown beside a file the artifact tool wrote.
- *
- * Two things changed from the DOCX-only review this replaces. The path rule is
- * now "any file this tool wrote" rather than one format's directory, and the
- * content comes from the engine's own `inspect` outline rather than from a
- * `.review.json` sidecar written beside the document — a sidecar is a second
- * copy of the truth that goes stale the moment anything else touches the file.
+ * Document previews for supported files in a task's review list, wherever the
+ * user saved them in the workspace. Main-process validation confines reads to
+ * that list and workspace. Content comes from the engine's own inspection.
  *
  * What it produces is deliberately not a rendering. A deck becomes a list of
  * slide cards, a workbook becomes its sheets and headers, a PDF becomes its
- * page text. It is the outline, presented — and the UI says so, because a
- * preview that looks like PowerPoint and is not PowerPoint is worse than one
- * that never claimed to be.
+ * page text. Word documents include their paragraphs and table cells; layout
+ * remains the review panel's typography rather than Word's page rendering.
  */
 
 import type { DocumentReviewBlock, DocumentReviewSnapshot } from "./documentReview";
@@ -20,29 +15,20 @@ import { isRecord } from "./records";
 export const artifactFormats = ["pptx", "docx", "xlsx", "pdf"] as const;
 export type ArtifactFormat = (typeof artifactFormats)[number];
 
-const artifactPathPattern = new RegExp(
-  `^\\.umbratic/artifacts/(${artifactFormats.join("|")})/[^/]+\\.(${artifactFormats.join("|")})$`,
-  "i",
-);
-
 function normalized(value: string): string {
   return value.replace(/\\/g, "/").replace(/^\.\//, "").trim();
 }
 
-/** Whether this is a path the artifact tool writes to. */
+/** Whether this workspace-relative file has a supported document format. */
 export function isArtifactPath(value: string): boolean {
-  const path = normalized(value);
-  if (path.includes("..")) return false;
-  const match = artifactPathPattern.exec(path);
-  // The directory and the extension have to agree, or a `.pdf` sitting in the
-  // `pptx` folder would preview as a deck.
-  return Boolean(match) && match![1]!.toLowerCase() === match![2]!.toLowerCase();
+  return artifactFormatOf(value) !== null;
 }
 
 export function artifactFormatOf(value: string): ArtifactFormat | null {
   const path = normalized(value);
-  if (!isArtifactPath(path)) return null;
-  return path.slice(path.lastIndexOf(".") + 1).toLowerCase() as ArtifactFormat;
+  if (!path || path.startsWith("/") || /^[a-z]:/i.test(path) || path.split("/").includes("..")) return null;
+  const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+  return artifactFormats.find((format) => format === extension) ?? null;
 }
 
 /** How many blocks a preview may hold before it is cut with a note. */
@@ -162,7 +148,14 @@ function documentBlocks(outline: Outline, push: (block: DocumentReviewBlock | nu
       case "quote":
         push(block(id, "quote", body));
         break;
-      case "table":
+      case "table": {
+        const cells = Array.isArray(entry.cells)
+          ? entry.cells.filter(Array.isArray).map((row) => row.map(text))
+          : [];
+        if (cells.length) {
+          push({ id, style: "table", text: cells.map((row) => row.join(" | ")).join("\n"), cells });
+          break;
+        }
         push(
           block(
             id,
@@ -171,6 +164,7 @@ function documentBlocks(outline: Outline, push: (block: DocumentReviewBlock | nu
           ),
         );
         break;
+      }
       case "image":
         push(block(id, "quote", "[image]"));
         break;

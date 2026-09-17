@@ -6,6 +6,8 @@ export type DocumentReviewSentence = {
   blockIndex: number;
   sentenceIndex: number;
   text: string;
+  rowIndex?: number;
+  columnIndex?: number;
 };
 
 export type DocumentReviewSelectionDetails = {
@@ -47,8 +49,13 @@ function sentencesForBlock(block: DocumentReviewBlock): string[] {
 }
 
 export function segmentDocumentReview(preview: DocumentReviewSnapshot): DocumentReviewSentence[] {
-  return preview.blocks.flatMap((block, blockIndex) =>
-    sentencesForBlock(block).map((text, sentenceIndex) => ({
+  return preview.blocks.flatMap((block, blockIndex) => block.cells
+    ? block.cells.flatMap((row, rowIndex) => row.flatMap((cell, columnIndex) =>
+      sentencesForBlock({ ...block, style: "paragraph", text: cell }).map((text, sentenceIndex) => ({
+        id: `${block.id}:row:${rowIndex}:cell:${columnIndex}:sentence:${sentenceIndex + 1}`,
+        blockId: block.id, blockIndex, sentenceIndex, text, rowIndex, columnIndex,
+      }))))
+    : sentencesForBlock(block).map((text, sentenceIndex) => ({
       id: `${block.id}:sentence:${sentenceIndex + 1}`,
       blockId: block.id,
       blockIndex,

@@ -89,7 +89,18 @@ export function DocumentReviewPreview({
               className={`documentReviewBlock style-${block.style} ${selectedCount ? "hasSelection" : ""}`}
             >
               <div className="documentReviewBlockContent">
-                {block.style === "bullet" || block.style === "numbered" ? (
+                {block.cells ? (
+                  <div className="documentReviewTable"><table>
+                    <tbody>{block.cells.map((row, rowIndex) => <tr key={rowIndex}>
+                      {row.map((_cell, columnIndex) => {
+                        const Cell = rowIndex === 0 ? "th" : "td";
+                        return <Cell key={columnIndex} scope={rowIndex === 0 ? "col" : undefined}>
+                          <BlockText block={block} sentences={blockSentences.filter((sentence) => sentence.rowIndex === rowIndex && sentence.columnIndex === columnIndex)} commenting={commenting} selected={selected} onToggleSentence={toggleSentence} />
+                        </Cell>;
+                      })}
+                    </tr>)}</tbody>
+                  </table></div>
+                ) : block.style === "bullet" || block.style === "numbered" ? (
                   <div className={`documentReviewListItem ${block.style}`}>
                     <span aria-hidden="true">{block.style === "bullet" ? "•" : `${blockIndex + 1}.`}</span>
                     <BlockText block={block} sentences={blockSentences} commenting={commenting} selected={selected} onToggleSentence={toggleSentence} />

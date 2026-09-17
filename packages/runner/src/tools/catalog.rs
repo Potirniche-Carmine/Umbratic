@@ -508,7 +508,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             text(
                 "out",
                 false,
-                "Workspace-relative destination. Defaults to .umbratic/artifacts/<format>/<name>. On edit, omit it to write the result back over path.",
+                "Workspace-relative destination. Defaults to artifacts/<format>/<name>. On edit, omit it to write the result back over path.",
             ),
             json_object(
                 "spec",

@@ -236,7 +236,7 @@ fn existing_input(
     Ok((absolute, relative))
 }
 
-/// Resolves a write destination, defaulting it under `.umbratic/artifacts/`.
+/// Documents belong to the reviewable workspace, outside internal runtime state.
 fn destination(
     session: &Session,
     format: &str,
@@ -244,10 +244,7 @@ fn destination(
     spec: &Map<String, Value>,
 ) -> Result<(PathBuf, String), ToolError> {
     let requested = if out.is_empty() {
-        format!(
-            ".umbratic/artifacts/{format}/{}.{format}",
-            default_name(spec)
-        )
+        format!("artifacts/{format}/{}.{format}", default_name(spec))
     } else {
         glob_free_path("artifact", out)?;
         out.to_owned()
@@ -582,10 +579,7 @@ mod tests {
             })),
         )
         .expect("planned");
-        assert_eq!(
-            job.payload["out"],
-            ".umbratic/artifacts/pptx/q3-review-emea.pptx"
-        );
+        assert_eq!(job.payload["out"], "artifacts/pptx/q3-review-emea.pptx");
         assert!(job.mutating);
     }
 

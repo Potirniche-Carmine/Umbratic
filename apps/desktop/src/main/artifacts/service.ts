@@ -59,6 +59,8 @@ export type ArtifactJob = {
 };
 
 export type ArtifactTransport = {
+  /** Local jobs use the runner's resolved paths directly. */
+  local: boolean;
   /** The workspace root on the machine that runs the job. */
   workspaceRoot: string;
   /** Reads a file the job named. Local mode reads the disk. */
@@ -71,6 +73,7 @@ export type ArtifactTransport = {
 
 export function localTransport(workspaceRoot: string): ArtifactTransport {
   return {
+    local: true,
     workspaceRoot,
     async read(absolutePath) {
       return fs.promises.readFile(absolutePath);
@@ -102,6 +105,7 @@ export function remoteTransport(options: {
 }): ArtifactTransport {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-artifact-"));
   return {
+    local: false,
     workspaceRoot: scratch,
     async read(absolutePath) {
       return options.pull(absolutePath);
@@ -169,7 +173,7 @@ export async function runArtifactJob(
 async function stageInput(absolutePath: string, transport: ArtifactTransport): Promise<string> {
   // Local mode stages nothing: the path the runner resolved is already a path
   // this process can open, and copying it would only add a way to diverge.
-  if (fs.existsSync(absolutePath)) return absolutePath;
+  if (transport.local) return absolutePath;
   const bytes = await transport.read(absolutePath);
   const local = path.join(transport.workspaceRoot, path.basename(absolutePath));
   await fs.promises.mkdir(path.dirname(local), { recursive: true });
@@ -178,10 +182,7 @@ async function stageInput(absolutePath: string, transport: ArtifactTransport): P
 }
 
 function stageOutput(absoluteOut: string, transport: ArtifactTransport): string {
-  const directory = path.dirname(absoluteOut);
-  // A destination whose parent this process can see is written directly.
-  if (fs.existsSync(directory) || fs.existsSync(path.dirname(directory))) return absoluteOut;
-  return path.join(transport.workspaceRoot, path.basename(absoluteOut));
+  return transport.local ? absoluteOut : path.join(transport.workspaceRoot, path.basename(absoluteOut));
 }
 
 /**

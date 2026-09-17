@@ -212,7 +212,7 @@ async function editJob(request: ArtifactRequest): Promise<ArtifactResponse> {
 
 async function inspectDocxJob(request: ArtifactRequest): Promise<ArtifactResponse> {
   const { pack, bytes } = await readPackage(request.absolutePath);
-  const inspection = inspectDocument(pack);
+  const inspection = inspectDocument(pack, request.options?.includeContent === true);
   return {
     ok: true,
     path: request.path ?? request.absolutePath ?? "",

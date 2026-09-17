@@ -10,7 +10,7 @@ app.setPath("userData", path.join(workspaceRoot, "electron-data"));
 app.whenReady().then(async () => {
   try {
     const { runArtifactJob, localTransport } = require(path.join(archive, "dist-electron/main/artifacts/service.js"));
-    const out = ".umbratic/artifacts/docx/package-smoke.docx";
+    const out = "artifacts/docx/package-smoke.docx";
     const absoluteOut = path.join(workspaceRoot, out);
     const created = await runArtifactJob({
       artifactId: "package-create",
@@ -23,6 +23,7 @@ app.whenReady().then(async () => {
     }, localTransport(workspaceRoot));
     assert.equal(created.ok, true, JSON.stringify(created));
     assert.ok(fs.statSync(absoluteOut).size > 0);
+    assert.equal(fs.existsSync(path.join(workspaceRoot, "package-smoke.docx")), false, "local jobs must not leave a staging copy at the workspace root");
     const inspected = await runArtifactJob({
       artifactId: "package-inspect",
       action: "inspect",
@@ -33,6 +34,10 @@ app.whenReady().then(async () => {
     }, localTransport(workspaceRoot));
     assert.equal(inspected.ok, true, JSON.stringify(inspected));
     assert.equal(inspected.outline.blocks.length, 1);
+    const { readArtifactPreview } = require(path.join(archive, "dist-electron/main/artifactReview.js"));
+    const preview = await readArtifactPreview({ worktreePath: workspaceRoot, originalRepoPath: workspaceRoot }, out);
+    assert.equal(preview.ok, true, JSON.stringify(preview));
+    assert.equal(preview.preview.blocks[0].text, "Packaged document worker verification.");
     console.log("Packaged document worker created and inspected a DOCX.");
     app.exit(0);
   } catch (error) {

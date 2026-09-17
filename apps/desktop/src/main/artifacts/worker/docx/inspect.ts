@@ -45,6 +45,8 @@ export type DocxBlockSummary = {
   style?: string;
   rows?: number;
   columns?: number;
+  /** Complete table text for desktop previews; tool outlines stay compact. */
+  cells?: string[][];
   /** True when the id came from a bookmark we wrote rather than from position. */
   anchored?: boolean;
 };
@@ -70,7 +72,7 @@ export type DocxInspection = {
 /** `{{name}}` — what `fillPlaceholders` replaces. */
 const placeholderPattern = /\{\{\s*([\w.-]{1,60})\s*\}\}/g;
 
-export function inspectDocument(pack: OoxmlPackage): DocxInspection {
+export function inspectDocument(pack: OoxmlPackage, includeContent = false): DocxInspection {
   const unsupported: DocxUnsupported[] = [];
   const origin = hasOriginStamp(pack) ? "umbratic" : "foreign";
 
@@ -132,7 +134,7 @@ export function inspectDocument(pack: OoxmlPackage): DocxInspection {
     if (tag === "sectPr") continue;
     position += 1;
     const summary =
-      tag === "tbl" ? summarizeTable(node, position) : tag === "p" ? summarizeParagraph(node, position) : undefined;
+      tag === "tbl" ? summarizeTable(node, position, includeContent) : tag === "p" ? summarizeParagraph(node, position, includeContent) : undefined;
     if (!summary) continue;
     if (pendingAnchor) {
       summary.id = pendingAnchor;
@@ -222,7 +224,7 @@ function blockIdFor(node: Element, position: number): { id: string; anchored: bo
   return bookmark ? { id: bookmark, anchored: true } : { id: `p${position}`, anchored: false };
 }
 
-function summarizeParagraph(node: Element, position: number): DocxBlockSummary | undefined {
+function summarizeParagraph(node: Element, position: number, includeContent: boolean): DocxBlockSummary | undefined {
   const { id, anchored } = blockIdFor(node, position);
   const style = attribute(firstElement(node, "pStyle"), "val");
   const text = paragraphText(node);
@@ -253,11 +255,11 @@ function summarizeParagraph(node: Element, position: number): DocxBlockSummary |
     ...(anchored ? { anchored } : {}),
     ...(level ? { level } : {}),
     ...(style ? { style } : {}),
-    ...(text ? { text: text.slice(0, 2_000) } : {}),
+    ...(text ? { text: includeContent ? text : text.slice(0, 2_000) } : {}),
   };
 }
 
-function summarizeTable(node: Element, position: number): DocxBlockSummary {
+function summarizeTable(node: Element, position: number, includeContent: boolean): DocxBlockSummary {
   const rows = findElements(node, "tr");
   return {
     id: `p${position}`,
@@ -267,6 +269,7 @@ function summarizeTable(node: Element, position: number): DocxBlockSummary {
     // The first row is the useful summary: it is almost always the header, and
     // it tells the model what the table is about without dumping the data.
     ...(rows[0] ? { text: findElements(rows[0], "tc").map((cell) => paragraphText(cell)).join(" | ") } : {}),
+    ...(includeContent ? { cells: rows.map((row) => childElements(row).filter((cell) => localNameOf(cell) === "tc").map(paragraphText)) } : {}),
   };
 }
 

@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
@@ -11,6 +13,8 @@ const load = (relative) =>
   loadTypeScriptModule(new URL(relative, import.meta.url), { cache, realm: "host" });
 
 const review = load("../src/shared/artifactReview.ts");
+const { DocumentReviewPreview } = load("../src/renderer/review/DocumentReviewPreview.tsx");
+const { ReviewPanel } = load("../src/renderer/review/ReviewPanel.tsx");
 // The artifact engine is committed separately from this file; a checkout
 // without src/main/artifacts/ skips the engine-backed cases instead of
 // failing on module resolution.
@@ -24,19 +28,61 @@ function workspace() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-review-"));
 }
 
+test("review routes workspace documents to a preview and keeps them in mixed file navigation", () => {
+  const html = renderToStaticMarkup(React.createElement(ReviewPanel, {
+    files: [
+      { path: "PRD.docx", status: "added", binary: true, additions: 0, deletions: 0, hunks: [], patch: "" },
+      { path: "notes.md", status: "added", additions: 1, deletions: 0, hunks: [], patch: "" },
+    ], open: true, taskId: "review", scope: "task", selectedIdeLabel: "Editor", onLoadDocumentReview: async () => ({ ok: false }),
+  }));
+  assert.match(html, /aria-label="Document review"/);
+  assert.doesNotMatch(html, /Binary file changed/);
+  assert.match(html, /reviewNavigatorName">PRD\.docx/);
+  assert.match(html, /reviewNavigatorName">notes\.md/);
+});
+
+test("document table previews render every cell as text and preserve feedback controls", () => {
+  const preview = { title: "PRD", documentPath: "PRD.docx", blocks: [{ id: "b1", style: "table", text: "", cells: [["ID", "Requirement"], ["SEC-17", "<Audit access>"]] }] };
+  const html = renderToStaticMarkup(React.createElement(DocumentReviewPreview, { preview, commenting: true, selection: [], onSelectionChange() {} }));
+  assert.match(html, /<table>/);
+  assert.match(html, /<th scope="col">/);
+  assert.match(html, /SEC-17/);
+  assert.match(html, /&lt;Audit access&gt;/);
+  assert.match(html, /role="button" tabindex="0"/);
+});
+
 test("the path rule accepts every format the tool writes and nothing else", () => {
   for (const format of ["pptx", "docx", "xlsx", "pdf"]) {
     assert.equal(review.isArtifactPath(`.umbratic/artifacts/${format}/deck.${format}`), true);
     assert.equal(review.artifactFormatOf(`.umbratic/artifacts/${format}/deck.${format}`), format);
   }
-  // The directory and the extension have to agree, or a PDF in the pptx folder
-  // would preview as a deck.
-  assert.equal(review.isArtifactPath(".umbratic/artifacts/pptx/report.pdf"), false);
+  assert.equal(review.artifactFormatOf("artifacts/pptx/report.pdf"), "pdf", "the file extension determines its format");
   assert.equal(review.isArtifactPath(".umbratic/artifacts/pptx/../../etc/passwd"), false);
   assert.equal(review.isArtifactPath(".umbratic/runtime/runner.log"), false);
-  assert.equal(review.isArtifactPath("decks/board.pptx"), false, "only what the tool wrote");
+  assert.equal(review.isArtifactPath("decks/board.pptx"), true);
+  assert.equal(review.isArtifactPath("PRD.docx"), true);
+  assert.equal(review.isArtifactPath("/private/report.docx"), false);
+  assert.equal(review.isArtifactPath("C:\\private\\report.docx"), false);
   // The sidecar this replaced is not a thing any more.
   assert.equal(review.isArtifactPath(".umbratic/artifacts/docx/brief.docx.review.json"), false);
+});
+
+engineTest("document previews include full paragraphs and table cells, while tool outlines stay compact", async () => {
+  const root = workspace();
+  try {
+    const out = path.join(root, "PRD.docx");
+    const longText = "A complete requirement. ".repeat(120);
+    const made = await engine.runArtifactJob({ action: "create", format: "docx", workspaceRoot: root, absoluteOut: out,
+      spec: { blocks: [{ type: "paragraph", text: longText }, { type: "table", columns: ["ID", "Requirement"], rows: [["SEC-17", "Access is audited."]] }] } });
+    assert.equal(made.ok, true);
+    const request = { action: "inspect", format: "docx", workspaceRoot: root, absolutePath: out };
+    const compact = await engine.runArtifactJob(request);
+    assert.equal(compact.outline.blocks[1].cells, undefined);
+    const full = await engine.runArtifactJob({ ...request, options: { includeContent: true } });
+    const preview = review.artifactPreviewFromOutline("PRD.docx", "docx", full.outline);
+    assert.equal(preview.blocks[0].text, longText.trim());
+    assert.deepEqual(preview.blocks[1].cells, [["ID", "Requirement"], ["SEC-17", "Access is audited."]]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 engineTest("a deck previews as slide cards built from its own outline", async () => {

@@ -123,10 +123,7 @@ export function ReviewPanel({
   // The files arrive in the order the panel should show them: by review
   // priority when change analysis was available, by path otherwise. The panel
   // does not reorder them and does not say which one it got.
-  const navigatorFiles = useMemo(
-    () => files.filter((file) => !isArtifactPath(file.path)),
-    [files],
-  );
+  const navigatorFiles = files;
   const navigatorTotals = useMemo(
     () => navigatorFiles.reduce(
       (total, file) => ({
@@ -184,7 +181,7 @@ export function ReviewPanel({
     return () => {
       active = false;
     };
-  }, [selectedFile?.path, selectedFileIsDocument]);
+  }, [taskId, actualPatchHash, selectedFile?.path, selectedFileIsDocument]);
 
   useEffect(() => {
     setComments([]);
