@@ -146,7 +146,7 @@ export function readDocumentSpec(
 
   const blocksValue = input.blocks;
   if (!Array.isArray(blocksValue)) {
-    reader.fail("blocks", "must be an array of block objects");
+    reader.fail("blocks", 'must be an array of block objects. Example spec: {"blocks":[{"type":"heading","level":1,"text":"Section"},{"type":"paragraph","text":"Content"},{"type":"table","columns":["Name","Role"],"rows":[["Alex","Editor"]]}]}. Full schema: Documents/PDF skill references/spec.md.');
     return { errors: reader.errors };
   }
   if (blocksValue.length === 0) {

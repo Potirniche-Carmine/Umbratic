@@ -202,7 +202,9 @@ export function runInWorker(request: ArtifactRequest, timeoutMs: number): Promis
   }
   return new Promise((resolve) => {
     const child = utilityProcess.fork(worker, [], {
-      cwd: path.dirname(worker),
+      // The worker script can live in app.asar; a process working directory
+      // must be a real directory or Electron never starts the utility process.
+      cwd: request.workspaceRoot,
       stdio: ["ignore", "pipe", "pipe"],
       serviceName: "umbratic-artifacts",
     });

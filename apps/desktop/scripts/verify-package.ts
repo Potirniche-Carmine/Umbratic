@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { extractFile } from "@electron/asar";
+import { resolveInstalledElectron } from "./electron-runtime.ts";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const releaseRoot = path.resolve(desktopRoot, "../../target/release/desktop");
@@ -174,6 +176,20 @@ function verifyDocumentsSkill(appArchive: string) {
   }
 }
 
+function verifyArtifactWorker(appArchive: string) {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-package-artifact-"));
+  try {
+    const result = spawnSync(resolveInstalledElectron(), [
+      path.join(desktopRoot, "scripts", "verify-artifact-worker.cjs"), appArchive, workspace,
+    ], { encoding: "utf8", timeout: 25_000 });
+    if (result.error || result.status !== 0) {
+      throw new Error(`Packaged document worker failed: ${result.error?.message || result.stderr || result.stdout || `exit ${result.status}`}`);
+    }
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+}
+
 function verifyMacCodeSignature(appBundle: string) {
   if (process.platform !== "darwin") return;
   const result = spawnSync("codesign", ["--verify", "--deep", appBundle], { encoding: "utf8" });
@@ -192,6 +208,7 @@ const appArchive = requireFile(path.join(resources, "app.asar"));
 requireFile(path.join(resources, "app-update.yml"));
 verifyMacCodeSignature(path.resolve(resources, "../.."));
 verifyDocumentsSkill(appArchive);
+verifyArtifactWorker(appArchive);
 verifyBinary(path.join(resources, "runner", executable("umbratic-runner")), /UmbraticRunner/);
 verifyBinary(path.join(resources, "desktop-core", executable("umbratic-desktop-core")), /usage: umbratic-desktop-core/);
 verifyBinary(path.join(resources, "pdf", executable("umbratic-pdf")), /umbratic-pdf inspect/);

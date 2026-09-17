@@ -12,18 +12,28 @@ function workerHarness() {
     kill(): void;
   };
   const sent: unknown[] = [];
+  const forks: { modulePath: string; options: { cwd: string } }[] = [];
   let killed = 0;
   child.postMessage = (value) => sent.push(value);
   child.kill = () => { killed += 1; };
   const { runInWorker } = loadTypeScriptModule(new URL("../src/main/artifacts/service.ts", import.meta.url), {
-    mocks: { electron: { utilityProcess: { fork: () => child } }, "node:fs": { existsSync: () => true } },
+    globals: { __dirname: "/Applications/Umbratic.app/Contents/Resources/app.asar/dist-electron/main/artifacts" },
+    mocks: {
+      electron: { utilityProcess: { fork: (modulePath, _args, options) => {
+        forks.push({ modulePath, options });
+        return child;
+      } } },
+      "node:fs": { existsSync: () => true },
+    },
   });
-  return { child, sent, runInWorker, killed: () => killed };
+  return { child, sent, forks, runInWorker, killed: () => killed };
 }
 
 test("artifact jobs wait for spawn, then settle once and clean up the worker", async () => {
   const h = workerHarness();
   const pending = h.runInWorker(request, 1000);
+  assert.match(h.forks[0].modulePath, /app\.asar/);
+  assert.equal(h.forks[0].options.cwd, request.workspaceRoot, "a utility process cannot use an archive as its working directory");
   assert.equal(h.sent.length, 0, "Electron discards pre-spawn messages");
   h.child.emit("spawn");
   assert.deepEqual(h.sent, [request]);
