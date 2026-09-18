@@ -59,10 +59,15 @@ const transcriptMarker = "<asr_text>";
  * Keeps only what follows the last marker. The last, not the first: a speaker
  * who says the marker aloud gets it transcribed inside their text, and taking
  * the first occurrence would then discard their own words.
+ *
+ * No marker means no words. The model always opens with its preamble, so
+ * output cut short before the marker — a recording stopped the moment it
+ * began, a clipped generation — is preamble only, and returning it typed
+ * "language English…" into the prompt box as if it were dictation.
  */
 export function transcriptText(raw: string): string {
   const at = raw.lastIndexOf(transcriptMarker);
-  return (at < 0 ? raw : raw.slice(at + transcriptMarker.length)).trim();
+  return at < 0 ? "" : raw.slice(at + transcriptMarker.length).trim();
 }
 
 /**

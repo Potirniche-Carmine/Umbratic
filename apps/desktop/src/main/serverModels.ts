@@ -11,6 +11,7 @@
 import { configuredEndpointRoute, endpointRequestHeaders, type endpointProvider } from "./endpointConfig";
 import { getProviderJson } from "./providerClient";
 import type { ServerModelInfo } from "../shared/desktopApi";
+import { isReasoningEffort } from "../shared/desktopApi";
 
 type EndpointProvider = ReturnType<typeof endpointProvider>;
 
@@ -33,6 +34,7 @@ function modelEntry(value: unknown): ServerModelInfo | null {
     display,
     ...(contextLength === undefined ? {} : { contextLength }),
     reasoning: capabilities.reasoning === true,
+    reasoningEfforts: Array.isArray(record.reasoning_efforts) ? [...new Set(record.reasoning_efforts.slice(0, 16).filter(isReasoningEffort))] : [],
     available: record.available === true,
     default: record.default === true,
   };

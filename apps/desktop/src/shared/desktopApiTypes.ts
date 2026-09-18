@@ -1,3 +1,6 @@
+import type { ReasoningEffort } from "./modelReasoning";
+export { REASONING_EFFORTS, DEFAULT_REASONING_EFFORT, isReasoningEffort, resolveReasoningEffort } from "./modelReasoning";
+export type { ReasoningEffort } from "./modelReasoning";
 import type { ResponseFeedbackReason, ResponseRating } from "./responseFeedback";
 import type { BackendUiEvent } from "./backendEvents";
 import type { DocumentReviewSnapshot } from "./documentReview";
@@ -77,6 +80,7 @@ export type ServerModelInfo = {
   display: string;
   contextLength?: number;
   reasoning: boolean;
+  reasoningEfforts: ReasoningEffort[];
   available: boolean;
   default: boolean;
 };
@@ -90,6 +94,7 @@ export type DesktopStartupSettings = {
   reasoningEffort: ReasoningEffort;
   /** Live model thinking in the Working block. Off until the user asks. */
   showThinking: boolean;
+  sendOnEnter: boolean;
   /** Composer Web toggle. Off until the user turns it on. */
   webTools: boolean;
 };
@@ -219,16 +224,6 @@ export type ModelCapabilities = {
 };
 
 /** How hard the model is asked to think. "off" is a level, not an absence. */
-export type ReasoningEffort = "off" | "on" | "low" | "medium" | "high";
-
-export const REASONING_EFFORTS: readonly ReasoningEffort[] = ["off", "on", "low", "medium", "high"];
-
-export const DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium";
-
-export function isReasoningEffort(value: unknown): value is ReasoningEffort {
-  return typeof value === "string" && (REASONING_EFFORTS as readonly string[]).includes(value);
-}
-
 export type LocalModelProvider = {
   providerId: LocalProviderId;
   providerName: string;
@@ -779,6 +774,9 @@ export type DesktopApi = {
     status: BackendStatus;
   }>;
   saveShowThinking(input: boolean): Promise<boolean>;
+  saveSendOnEnter(input: boolean): Promise<boolean>;
+  getLaunchAtLogin(): Promise<{ enabled: boolean; available: boolean }>;
+  saveLaunchAtLogin(input: boolean): Promise<{ enabled: boolean; available: boolean }>;
   getModelEndpointSettings(input?: {
     mode?: ModelEndpointMode;
   }): Promise<PublicModelEndpointSettings>;
@@ -970,7 +968,7 @@ export type DesktopApi = {
   /** Sends one slice of 16 kHz mono 16-bit PCM to the open stream. */
   sendDictationAudio(input: { chunk: Uint8Array }): Promise<void>;
   /** Ends the recording and waits for the last transcript. */
-  stopDictation(): Promise<void>;
+  stopDictation(): Promise<{ stopping: boolean }>;
   /** Abandons the recording without waiting for a transcript. */
   cancelDictation(): Promise<void>;
   getAppUpdateStatus(): Promise<AppUpdateStatus>;

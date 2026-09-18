@@ -41,7 +41,10 @@ export function TelemetrySettingsPanel({
 
       <div className="settingsGroup">
         <div className="localLogsControl">
-          <strong>{localLogSize}</strong>
+          <div className="localLogsLabel">
+            <strong>Local logs</strong>
+            <span>{localLogSize}</span>
+          </div>
           <div>
             <button className="settingsInlineButton" type="button" onClick={onExport} disabled={busy}>
               Export

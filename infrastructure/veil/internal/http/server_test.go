@@ -336,31 +336,40 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 }
 
 func TestChatRouteAddsServerOwnedSkillCatalogPrompt(t *testing.T) {
-	modelClient := &fakeModelClient{}
-	server := NewServer(testConfig(), modelClient)
+	for _, route := range []string{"engineering", "marketing", "sales"} {
+		t.Run(route, func(t *testing.T) {
+			modelClient := &fakeModelClient{}
+			server := NewServer(testConfig(), modelClient)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"messages":[{"role":"user","content":"fix test.py"}],"skills":[{"id":"python","name":"Python","description":"Use for Python work.","source":"system"}]}`))
-	req.Header.Set("Authorization", "Bearer test-token")
-	rr := httptest.NewRecorder()
-	server.ServeHTTP(rr, req)
+			// An arbitrary personal skill must appear alongside a bundled skill on
+			// both an initial request and a follow-up, without route filtering.
+			for _, input := range []string{"fix test.py", "now prepare the account review"} {
+				body := `{"messages":[{"role":"user","content":"` + input + `"}],"skills":[{"id":"python","name":"Python","description":"Use for Python work.","source":"system"},{"id":"custom-account-review","name":"Account Review","description":"Use for account reviews.","source":"local"}]}`
+				req := httptest.NewRequest(http.MethodPost, "/api/"+route+"/chat", strings.NewReader(body))
+				req.Header.Set("Authorization", "Bearer test-token")
+				rr := httptest.NewRecorder()
+				server.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
-	}
-	if len(modelClient.req.Messages) != 4 {
-		t.Fatalf("got %d messages", len(modelClient.req.Messages))
-	}
-	if !strings.Contains(modelClient.req.Messages[2].Content.(string), "read_skill") {
-		t.Fatalf("missing skill-use prompt: %#v", modelClient.req.Messages)
-	}
-	if !strings.Contains(modelClient.req.Messages[2].Content.(string), `"id":"python"`) {
-		t.Fatalf("missing Python skill metadata: %#v", modelClient.req.Messages)
-	}
-	if modelClient.req.Messages[3].Role != "user" {
-		t.Fatalf("client message should follow skill prompt: %#v", modelClient.req.Messages)
-	}
-	if modelClient.req.Messages[2].Role != "system" {
-		t.Fatalf("skill catalog must be in the stable system tier: %#v", modelClient.req.Messages)
+				if rr.Code != http.StatusOK {
+					t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+				}
+				if len(modelClient.req.Messages) != 4 {
+					t.Fatalf("got %d messages", len(modelClient.req.Messages))
+				}
+				catalog := modelClient.req.Messages[2]
+				if catalog.Role != "system" {
+					t.Fatalf("skill catalog must be in the stable system tier: %#v", catalog)
+				}
+				for _, want := range []string{"You MUST call read_skill for EVERY skill", `"id":"python"`, `"id":"custom-account-review"`, `"description":"Use for account reviews."`} {
+					if !strings.Contains(catalog.Content.(string), want) {
+						t.Fatalf("catalog missing %q: %#v", want, catalog)
+					}
+				}
+				if modelClient.req.Messages[3].Role != "user" || modelClient.req.Messages[3].Content != input {
+					t.Fatalf("client message should follow skill prompt: %#v", modelClient.req.Messages)
+				}
+			}
+		})
 	}
 }
 

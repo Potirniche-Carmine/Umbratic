@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"unicode"
 
@@ -48,9 +47,6 @@ type Bucket struct {
 	// to do prompt arithmetic, and it reads the original imperative first
 	// anyway.
 	GraphSteps map[int]string
-	// PreferredSkills are intersected with the validated client catalog before
-	// rendering, so a disabled skill is simply omitted.
-	PreferredSkills []string
 	// GraphGuidance is rendered only when the request's tool array actually
 	// carries workspace_graph. A run without the tool assembles byte-identically
 	// to today.
@@ -102,7 +98,6 @@ var engineeringBuckets = []Bucket{
 		Closing: `Give the answer as much room as it needs. You just read the project, so put what you found into it.
 
 When you have the root layout and the project's own docs, write the answer from what you have. Do not keep listing.`,
-		PreferredSkills:  []string{"umbratic-markdown"},
 		Stop:             "the map is delivered. Write a file only when the user asked for a durable map.",
 		RequiresEvidence: true,
 	},
@@ -124,7 +119,6 @@ Explain with exact paths and symbols, each one taken from a tool result.`,
 Search for the code it points at — independent searches in one response — with context to see what surrounds each hit, and read a window where that is not enough. Use mode regex when a literal query cannot express the pattern. Reproduce when that is safe and useful.
 Fix only if the user asked for a fix; otherwise report the root cause.
 Re-run the failing check after any fix.`,
-		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
 		GraphGuidance:    "Locate the failing symbol with workspace_graph query, then read its callers from that result before grepping for them.",
 		Stop:             "you have a verified fix or a concrete root-cause answer.",
 		RequiresEvidence: true,
@@ -136,7 +130,6 @@ Re-run the failing check after any fix.`,
 Edit in place rather than rewriting whole files, and match what is already there. Copy oldText from a read that covered those exact lines.
 Verify with the narrowest check that proves the change works.
 Report the paths you changed and the verification result, and keep it to that.`,
-		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
 		GraphGuidance:    "Before editing a shared symbol, call workspace_graph affected on it to see what depends on it.",
 		Stop:             "the change is made and verified, or a blocker needs the user.",
 		RequiresEvidence: true,
@@ -148,7 +141,6 @@ Report the paths you changed and the verification result, and keep it to that.`,
 Search across that scope with context where a bare match is not conclusive, emit independent searches together, read windows where it is not, and keep track of what you did and did not cover.
 Order findings by severity, each with the path and symbol that shows it.
 Report what you find. Make changes when the user asked you to fix them.`,
-		PreferredSkills:  []string{"umbratic-git-worktree", "umbratic-security-review"},
 		GraphGuidance:    "Call workspace_graph changes first, then read the symbols it ranks highest and stop there. Those symbols are what the diff touched.",
 		Stop:             "the findings are reported, plus an optional fix pass if the user asked for one.",
 		RequiresEvidence: true,
@@ -164,7 +156,6 @@ Report what you find. Make changes when the user asked you to fix them.`,
 4. Report Confirmed, Needs validation, and Not covered as separate sections, so the limits of the pass are as visible as its findings.
 
 Anti-stuck: when several waves stop producing a new class of finding, stop and write it up. One honest pass with stated gaps beats an endless second one.`,
-		PreferredSkills:  []string{"umbratic-security-review", "umbratic-git-worktree"},
 		GraphGuidance:    "Call workspace_graph changes first, then read the symbols it ranks highest and stop there. Those symbols are what the diff touched.",
 		Stop:             "the scoped deep report is delivered with explicit coverage limits.",
 		RequiresEvidence: true,
@@ -176,7 +167,6 @@ Anti-stuck: when several waves stop producing a new class of finding, stop and w
 Run the narrowest command that answers the question.
 Add or adjust tests only if the user asked for that.
 Report pass or fail with the part of the output that shows it.`,
-		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake"},
 		Stop:             "the results are reported and interpreted.",
 		RequiresEvidence: true,
 	},
@@ -187,7 +177,6 @@ Report pass or fail with the part of the output that shows it.`,
 Decide the order of the edits before making any of them.
 Work in dependency order and verify after each meaningful chunk rather than at the end.
 Summarize the risks and whatever is left over.`,
-		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
 		GraphGuidance:    "Before editing a shared symbol, call workspace_graph affected on it to see what depends on it.",
 		Stop:             "the sequenced changes are made and verified, or the requested plan is delivered.",
 		RequiresEvidence: true,
@@ -198,7 +187,6 @@ Summarize the risks and whatever is left over.`,
 		Playbook: `Find the documents in question and read what they currently say.
 Edit for accuracy, and make no drive-by code changes.
 Keep the tone and structure of the surrounding documentation.`,
-		PreferredSkills:  []string{"umbratic-markdown"},
 		Stop:             "the doc edit is complete.",
 		RequiresEvidence: true,
 	},
@@ -213,8 +201,7 @@ Keep the tone and structure of the surrounding documentation.`,
 4. Mark every assumption and unresolved decision in the draft itself.
 
 Ending this turn on questions alone is a good outcome when you need more to go on.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-product-spec", "umbratic-markdown"},
-		Stop:            "the questions are asked if context is insufficient, or the draft is delivered if it is sufficient.",
+		Stop: "the questions are asked if context is insufficient, or the draft is delivered if it is sufficient.",
 	},
 	{
 		ID:   OpenTaskBucket,
@@ -249,9 +236,8 @@ var marketingBuckets = []Bucket{
 
 Decision-critical inputs: audience, category, competitors, proof points, forbidden claims, tone, and where this will be used.
 Then produce the positioning in the requested format.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-marketing-brief", "umbratic-competitive-research", "umbratic-markdown"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "the positioning is delivered, or the blocking questions are asked.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "the positioning is delivered, or the blocking questions are asked.",
 	},
 	{
 		ID:   "campaign_plan",
@@ -260,9 +246,8 @@ Then produce the positioning in the requested format.`,
 
 Decision-critical inputs: objective, audience, offer, timeline, channels, budget band, assets on hand, KPI, and compliance limits.
 Then produce a channel plan, an asset list, and a sequence. Flag every unknown.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-marketing-brief", "umbratic-markdown"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "the plan is delivered, or the blocking questions are asked.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "the plan is delivered, or the blocking questions are asked.",
 	},
 	{
 		ID:   "copy_draft",
@@ -271,9 +256,8 @@ Then produce a channel plan, an asset list, and a sequence. Flag every unknown.`
 
 Decision-critical inputs: audience, call to action, length, tone, must-include and must-avoid, and the source facts. Ask fewer questions when a source draft already exists.
 Then draft and tighten. No invented social proof.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-marketing-brief", "umbratic-markdown", "umbratic-documents"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "the copy is delivered.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "the copy is delivered.",
 	},
 	{
 		ID:   "asset_build",
@@ -282,8 +266,7 @@ Then draft and tighten. No invented social proof.`,
 
 Decision-critical inputs: format (PPTX, DOCX, XLSX, or Markdown), audience, narrative arc, required sections, brand constraints, and source facts.
 Then load the matching artifact skill and produce the asset.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-presentations", "umbratic-documents", "umbratic-spreadsheets", "umbratic-pdf", "umbratic-markdown"},
-		Stop:            "the asset is produced.",
+		Stop: "the asset is produced.",
 	},
 	{
 		ID:   "research_synth",
@@ -291,9 +274,8 @@ Then load the matching artifact skill and produce the asset.`,
 		Playbook: `Read attached and workspace sources completely when coverage is required, take notes, then synthesize only what the sources support. Mark gaps explicitly.
 Ask a clarifying question only if the synthesis goal itself is unclear.
 Never invent findings the sources do not carry.`,
-		PreferredSkills: []string{"umbratic-competitive-research", "umbratic-news-briefing", "umbratic-pdf", "umbratic-data-analysis", "umbratic-markdown"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "the synthesis is delivered with its gaps marked.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "the synthesis is delivered with its gaps marked.",
 	},
 	{
 		ID:   "performance_review",
@@ -301,8 +283,7 @@ Never invent findings the sources do not carry.`,
 		Playbook: `Inspect the data, validate the fields, then give insights and next actions tied to that data.
 Ask only if the metric definitions are missing.
 Never fabricate benchmarks or industry averages.`,
-		PreferredSkills: []string{"umbratic-data-analysis", "umbratic-spreadsheets", "umbratic-python"},
-		Stop:            "the analysis and next actions are delivered.",
+		Stop: "the analysis and next actions are delivered.",
 	},
 	{
 		ID:   OpenTaskBucket,
@@ -310,9 +291,8 @@ Never fabricate benchmarks or industry averages.`,
 		Playbook: marketingDiscoveryRule + `
 
 Clarify what "done" looks like, then produce the smallest useful marketing output.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-markdown"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "one useful output is delivered, or the blocking question is asked.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "one useful output is delivered, or the blocking question is asked.",
 	},
 }
 
@@ -330,9 +310,8 @@ var salesBuckets = []Bucket{
 		Playbook: salesDiscoveryRule + `
 
 Gather supplied and workspace facts, produce the account brief, and end with an open-questions list.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement", "umbratic-competitive-research", "umbratic-news-briefing", "umbratic-pdf", "umbratic-markdown"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "the brief and its open questions are delivered.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "the brief and its open questions are delivered.",
 	},
 	{
 		ID:   "discovery_prep",
@@ -341,9 +320,8 @@ Gather supplied and workspace facts, produce the account brief, and end with an 
 
 Useful inputs: persona, deal stage, known pain, product wedge, competitive notes, and call length.
 Then produce hypotheses, prioritized questions, and listen-fors.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "the question set is delivered.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "the question set is delivered.",
 	},
 	{
 		ID:   "proposal_draft",
@@ -352,8 +330,7 @@ Then produce hypotheses, prioritized questions, and listen-fors.`,
 
 Decision-critical inputs: buyer, problem, scope, timeline, pricing posture, required legal or compliance notes, and success criteria.
 Then produce grounded proposal sections and label every assumption.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement", "umbratic-documents", "umbratic-markdown"},
-		Stop:            "the proposal is delivered, or the blocking questions are asked.",
+		Stop: "the proposal is delivered, or the blocking questions are asked.",
 	},
 	{
 		ID:   "objection_handling",
@@ -362,9 +339,8 @@ Then produce grounded proposal sections and label every assumption.`,
 
 Useful inputs: the exact objection, the buyer persona, approved proof, and hard limits on claims.
 Then produce a rebuttal, a clarifying question, and an optional proof ask. Do not disparage competitors.`,
-		PreferredSkills: []string{"umbratic-sales-enablement", "umbratic-competitive-research", "umbratic-discovery"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "the responses are delivered.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "the responses are delivered.",
 	},
 	{
 		ID:   "demo_script",
@@ -373,8 +349,7 @@ Then produce a rebuttal, a clarifying question, and an optional proof ask. Do no
 
 Decision-critical inputs: audience, duration, the success moment, products in scope, and environment constraints.
 Then produce a timed flow, a talk track, and fallback paths.`,
-		PreferredSkills: []string{"umbratic-sales-enablement", "umbratic-markdown", "umbratic-presentations"},
-		Stop:            "the script is delivered.",
+		Stop: "the script is delivered.",
 	},
 	{
 		ID:   "enablement_asset",
@@ -383,9 +358,8 @@ Then produce a timed flow, a talk track, and fallback paths.`,
 
 Decision-critical inputs: audience, format, and approved claims.
 Then load the matching artifact skill and build the asset.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement", "umbratic-competitive-research", "umbratic-presentations", "umbratic-documents", "umbratic-spreadsheets", "umbratic-pdf"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "the asset is produced.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "the asset is produced.",
 	},
 	{
 		ID:   "research_synth",
@@ -393,9 +367,8 @@ Then load the matching artifact skill and build the asset.`,
 		Playbook: `Read attached and workspace sources completely when coverage is required, take notes, then synthesize only what the sources support. Mark gaps explicitly.
 Ask a clarifying question only if the synthesis goal itself is unclear.
 Never invent findings the sources do not carry.`,
-		PreferredSkills: []string{"umbratic-competitive-research", "umbratic-news-briefing", "umbratic-sales-enablement", "umbratic-pdf", "umbratic-markdown"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "the synthesis is delivered with its gaps marked.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "the synthesis is delivered with its gaps marked.",
 	},
 	{
 		ID:   "pipeline_ops",
@@ -403,8 +376,7 @@ Never invent findings the sources do not carry.`,
 		Playbook: salesDiscoveryRule + `
 
 Clarify the process constraints, then give concrete pipeline next steps.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-spreadsheets"},
-		Stop:            "the concrete next steps are delivered.",
+		Stop: "the concrete next steps are delivered.",
 	},
 	{
 		ID:   OpenTaskBucket,
@@ -412,9 +384,8 @@ Clarify the process constraints, then give concrete pipeline next steps.`,
 		Playbook: salesDiscoveryRule + `
 
 Clarify what "done" looks like, then produce the smallest useful customer-facing output.`,
-		PreferredSkills: []string{"umbratic-discovery", "umbratic-sales-enablement"},
-		WebGuidance:     publicWebGuidance,
-		Stop:            "one useful output is delivered, or the blocking question is asked.",
+		WebGuidance: publicWebGuidance,
+		Stop:        "one useful output is delivered, or the blocking question is asked.",
 	},
 }
 
@@ -745,9 +716,8 @@ const playbookAntiLoop = `If a tool fails, read the error and try a different ap
 //
 // It returns "" for direct_answer, an unknown bucket, or a bucket with no
 // playbook body, so a degraded run assembles byte-identically to today.
-// availableSkills is the already-validated client catalog; preferred skills the
-// user disabled are simply omitted, and every playbook stands alone without one.
-func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadata, tools any) string {
+// Skill selection is governed by the shared catalog prompt, not bucket-specific lists.
+func PlaybookPrompt(route Route, bucketID string, tools any) string {
 	bucket, ok := BucketFor(route, bucketID)
 	if !ok || bucket.ID == DirectAnswerBucket {
 		return ""
@@ -765,13 +735,7 @@ func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadat
 	if strings.TrimSpace(bucket.WebGuidance) != "" && withWeb {
 		sections = append(sections, "", bucket.WebGuidance)
 	}
-	if preferred := intersectSkills(bucket.PreferredSkills, availableSkills); len(preferred) > 0 {
-		sections = append(sections, "",
-			"Preferred skills (optional): "+strings.Join(preferred, ", "),
-			"If you will follow a preferred skill, read it completely with read_skill before applying it.")
-	} else {
-		sections = append(sections, "")
-	}
+	sections = append(sections, "")
 	if strings.TrimSpace(bucket.Stop) != "" {
 		sections = append(sections, "Stop when: "+bucket.Stop)
 	}
@@ -828,22 +792,4 @@ func HasTool(tools any, name string) bool {
 		}
 	}
 	return false
-}
-
-func intersectSkills(preferred []string, available []SkillMetadata) []string {
-	if len(preferred) == 0 || len(available) == 0 {
-		return nil
-	}
-	enabled := make(map[string]bool, len(available))
-	for _, skill := range available {
-		enabled[skill.ID] = true
-	}
-	matched := make([]string, 0, len(preferred))
-	for _, id := range preferred {
-		if enabled[id] {
-			matched = append(matched, id)
-		}
-	}
-	sort.Strings(matched)
-	return matched
 }

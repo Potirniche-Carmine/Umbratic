@@ -30,6 +30,9 @@ pub fn is_excluded_path(value: &str) -> bool {
         ".umbratic/index/",
         ".venv/",
         "venv/",
+        // Root-level only, matching policy.rs: a top-level `env/` is almost
+        // always a virtualenv, while a nested `env/` may hold real files.
+        "env/",
         "node_modules/",
         ".git/",
         ".pytest_cache/",
@@ -60,14 +63,28 @@ pub fn is_excluded_path(value: &str) -> bool {
         ".pytest_cache",
         ".mypy_cache",
         ".ruff_cache",
+        ".tox",
+        ".nox",
+        ".eggs",
+        ".conda",
+        "site-packages",
+        ".gradle",
+        ".terraform",
         ".next",
+        ".nuxt",
+        ".svelte-kit",
         ".vite",
+        ".turbo",
+        ".parcel-cache",
+        ".cache",
+        ".idea",
         "vendor",
         ".umbratic",
     ];
     let basename = parts.last().copied().unwrap_or("");
     prefixes.iter().any(|prefix| normalized.starts_with(prefix))
         || parts.iter().any(|part| names.contains(part))
+        || parts.iter().any(|part| part.ends_with(".egg-info"))
         || matches!(basename, "cmakecache.txt" | "compile_commands.json")
 }
 

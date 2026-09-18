@@ -6,7 +6,7 @@ import { capabilityNeedsForPrompt, runnerPromptForTask } from "./taskPromptConte
 import { inspectRepository } from "./repositoryOps";
 import { refreshReview } from "./reviewFiles";
 import { createWorktreeAndRunRunner, runRunnerTask } from "./taskRunner";
-import { isBinarySnapshotValue, sanitizeAttachments, snapshotFolder } from "./workspaceSnapshot";
+import { isBinarySnapshotValue, sanitizeAttachments } from "./workspaceSnapshot";
 import { worktreeRootForRepo } from "./worktreeOps";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -44,7 +44,6 @@ import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings"
 import type {
   ChatAttachment,
   ChatRecord,
-  RepositoryInfo,
   TaskInfo,
   TaskRecord,
   TaskRemote,
@@ -72,31 +71,6 @@ export function taskUsesHiddenChatWorkspace(task: TaskRecord, chat: ChatRecord):
     task.hiddenWorkspace === true ||
     (task.repositoryId === `hidden-${chat.id}` && path.resolve(task.originalRepoPath) === hiddenChatWorkspacePath(chat.id))
   );
-}
-
-export function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryInfo) {
-  task.repositoryId = repository.id;
-  task.workspaceKind = repository.kind;
-  task.workspaceMode = "local";
-  task.hiddenWorkspace = false;
-  task.originalBranch = repository.originalBranch;
-  task.baseCommit = repository.baseCommit;
-  task.agentBranch = "";
-  task.worktreePath = repository.rootPath;
-  task.originalRepoPath = repository.rootPath;
-  task.originalWasDirty = repository.dirty;
-  task.baselineFiles = snapshotFolder(repository.rootPath);
-  task.runnerName = umbraticRunnerName;
-  task.runnerVersion = umbraticRunnerVersion;
-  task.policyVersion = umbraticPolicyVersion;
-  task.runnerSessionId = undefined;
-  task.diagnosticLogPath = undefined;
-  task.pendingPrompt = undefined;
-  task.changedFiles = [];
-  task.reviewFiles = [];
-  task.latestTest = undefined;
-  task.patchHash = undefined;
-  task.metadataPath = undefined;
 }
 
 export function startTaskRequestKey(input: Record<string, unknown>): string {
@@ -245,11 +219,14 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
       throw new Error("This chat already has a task in progress.");
     }
     if (existingTask.repositoryId !== repositoryId) {
+      // A chat that ran without a folder is refused a folder rather than
+      // re-pointed at one: attaching would present the hidden workspace's
+      // history as work done in the chosen folder, and silently discard its
+      // review state and checkpoints.
       if (!hiddenWorkspace && taskUsesHiddenChatWorkspace(existingTask, chat)) {
-        attachHiddenTaskToRepository(existingTask, refreshed);
-      } else {
-        throw new Error("This chat belongs to a different folder. Start a new chat for this folder.");
+        throw new Error("This chat started without a folder. Start a new chat to work in a folder.");
       }
+      throw new Error("This chat belongs to a different folder. Start a new chat for this folder.");
     }
     existingTask.permissionMode = getPermissionMode();
     existingTask.prompt = prompt;
@@ -567,7 +544,7 @@ export async function steerTask(input: unknown): Promise<void> {
     task.model.contextLength ?? readContextLengthSetting(),
     { useDurableContext: true },
   );
-  pendingTaskSteers.set(task.id, { actionId, prompt, attachments });
+  pendingTaskSteers.set(task.id, { actionId, prompt, attachments, alreadyInTranscript: true });
   try {
     await runnerRequest<{ disposition?: string; reasonCode?: string | null }>(
       run,

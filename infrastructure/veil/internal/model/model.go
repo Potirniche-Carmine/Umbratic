@@ -22,6 +22,7 @@ type Message struct {
 }
 
 type ChatRequest struct {
+	SamplingProfile *SamplingProfile
 	Model           string
 	Messages        []Message
 	Stream          bool
@@ -146,13 +147,15 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	metricsEndpoint, err := providerEndpointURL(cfg.BaseURL, "", "metrics")
+	// OpenAI base URLs can end in /v1; runtime operations live outside it.
+	runtimeBaseURL := strings.TrimSuffix(strings.TrimRight(cfg.BaseURL, "/"), "/v1")
+	metricsEndpoint, err := providerEndpointURL(runtimeBaseURL, "", "metrics")
 	if err != nil {
 		return nil, err
 	}
 	// Both runtimes expose /tokenize at the server root; only the request body
 	// differs, which tokenizePrefix branches on.
-	tokenizeEndpoint, err := providerEndpointURL(cfg.BaseURL, "", "tokenize")
+	tokenizeEndpoint, err := providerEndpointURL(runtimeBaseURL, "", "tokenize")
 	if err != nil {
 		return nil, err
 	}
@@ -451,6 +454,10 @@ func (c *Client) doOpenAIChat(ctx context.Context, req ChatRequest) (*http.Respo
 	if req.RepetitionPenalty > 0 {
 		body["repetition_penalty"] = req.RepetitionPenalty
 	}
+	if p := req.SamplingProfile; p != nil {
+		body["temperature"], body["top_p"], body["top_k"] = p.Temperature, p.TopP, p.TopK
+		body["min_p"], body["presence_penalty"], body["repetition_penalty"] = p.MinP, p.PresencePenalty, p.RepetitionPenalty
+	}
 	// "on" is thinking without a degree, so there is no degree to send: a
 	// template that reads only enable_thinking would ignore it, and one that
 	// grades effort would be handed a level nobody chose.
@@ -467,6 +474,9 @@ func (c *Client) doOpenAIChat(ctx context.Context, req ChatRequest) (*http.Respo
 	templateKwargs := map[string]any{}
 	if req.Thinking != nil {
 		templateKwargs["enable_thinking"] = *req.Thinking
+		if *req.Thinking && req.ReasoningEffort != "" && req.ReasoningEffort != ReasoningOn && req.ReasoningEffort != ReasoningNone {
+			templateKwargs["reasoning_effort"] = string(req.ReasoningEffort)
+		}
 	} else if c.mode == ModeLocal && req.ReasoningEffort == ReasoningOff {
 		templateKwargs["enable_thinking"] = false
 	} else if c.mode == ModeLocal && req.ReasoningEffort == ReasoningOn {

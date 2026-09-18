@@ -78,15 +78,33 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 		// think and then tell it how hard to think — here, not in the body
 		// builder, whose guard only skips the "none" effort.
 		var thinking *bool
+		if s.cfg.ModelSelectionEnabled {
+			entry, _ := s.cfg.ModelEntryByID(selectedModel)
+			allowed := false
+			for _, effort := range entry.ReasoningEfforts {
+				allowed = allowed || effort == input.Thinking
+			}
+			if !allowed {
+				input.Thinking = ""
+			}
+		}
 		switch input.Thinking {
 		case "on":
 			forced := true
 			thinking = &forced
+			profile.ReasoningEffort = model.ReasoningOn
+			profile.ThinkingTokenBudget = nil
 		case "off":
 			forced := false
 			thinking = &forced
 			profile.ReasoningEffort = model.ReasoningNone
 			profile.ThinkingTokenBudget = nil
+		default:
+			if input.Thinking != "" && s.cfg.ModelSelectionEnabled {
+				forced := true
+				thinking = &forced
+				profile.ReasoningEffort = model.ReasoningEffort(input.Thinking)
+			}
 		}
 		req := model.ChatRequest{
 			Model:               selectedModel,
@@ -110,7 +128,7 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			ReasoningVisible: input.ReasoningVisible && (thinking == nil || *thinking),
 		}
 		contextLength := s.contextLengthFor(selectedModel)
-		if estimated, ok := finalRequestFits(req, contextLength); !ok {
+		if estimated, ok := fitChatOutputBudget(&req, contextLength); !ok {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
 				"error":           "assembled request exceeds the configured context window",
 				"code":            "context_overflow_preflight",
@@ -234,6 +252,23 @@ func finalRequestFits(req model.ChatRequest, contextLength int) (int, bool) {
 	}
 	estimated := len(req.Messages)*10 + estimatedValueTokens(req.Messages) + estimatedValueTokens(req.Tools) + req.MaxOutputTokens
 	return estimated, estimated <= contextLength
+}
+
+// max_output_tokens is an upper bound. When the assembled prompt fits, use
+// the remaining window for the answer instead of rejecting the whole request
+// because the harness reserved more output than is available. Keep the same
+// conservative estimate and minimum answer allowance as the runner.
+func fitChatOutputBudget(req *model.ChatRequest, contextLength int) (int, bool) {
+	estimated, fits := finalRequestFits(*req, contextLength)
+	if fits {
+		return estimated, true
+	}
+	available := contextLength - (estimated - req.MaxOutputTokens)
+	if available < min(req.MaxOutputTokens, 1000) {
+		return estimated, false
+	}
+	req.MaxOutputTokens = available
+	return contextLength, true
 }
 
 func effectiveMaxOutputTokens(requested int, configured int) int {

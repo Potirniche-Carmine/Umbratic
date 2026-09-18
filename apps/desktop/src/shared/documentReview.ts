@@ -16,12 +16,14 @@ export type DocumentReviewBlockStyle =
   | "paragraph"
   | "bullet"
   | "numbered"
-  | "quote";
+  | "quote"
+  | "table";
 
 export type DocumentReviewBlock = {
   id: string;
   style: DocumentReviewBlockStyle;
   text: string;
+  cells?: string[][];
 };
 
 export type DocumentReviewSnapshot = {

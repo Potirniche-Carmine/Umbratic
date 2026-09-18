@@ -254,9 +254,6 @@ export function ComposerModelPicker({
   onSelect,
   onSelectEffort,
   onManage,
-  showThinking = false,
-  showThinkingAvailable = false,
-  onToggleShowThinking,
 }: {
   models: ComposerModelOption[];
   selectedId: string;
@@ -275,11 +272,6 @@ export function ComposerModelPicker({
   onSelectEffort(next: ReasoningEffort): void;
   /** Takes the user to where models are downloaded. */
   onManage?(): void;
-  /** Live model thinking in the Working block. Off until asked. */
-  showThinking?: boolean;
-  /** The connected Veil advertised `chat.reasoning_visible`. */
-  showThinkingAvailable?: boolean;
-  onToggleShowThinking?(next: boolean): void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
@@ -366,27 +358,21 @@ export function ComposerModelPicker({
                       disabled={effortDisabled}
                       onClick={() => {
                         setOpen(false);
+                        // Pressing the level already in force is not a change.
+                        // Saving it anyway would restart the local stack for
+                        // nothing, and would write this model's grading over a
+                        // stored level another model reads more finely — a
+                        // "medium" flattened to "on" by a visit to a model that
+                        // only knows the two.
+                        if (level === effort) return;
                         onSelectEffort(level);
                       }}
                     >
-                      <span className="modelName">{reasoningEffortLabels[level]}</span>
+                      <span className="modelName">{reasoningEffortLabels[level] ?? level.charAt(0).toUpperCase() + level.slice(1)}</span>
                       {level === effort ? <Check size={14} aria-hidden="true" /> : null}
                     </button>
                   ))}
                 </>
-              ) : null}
-              {efforts.length > 0 && showThinkingAvailable && effort !== "off" && onToggleShowThinking ? (
-                <label className={`modelMenuCheck ${showThinking ? "isOn" : ""}`}>
-                  <input
-                    type="checkbox"
-                    checked={showThinking}
-                    onChange={(event) => onToggleShowThinking(event.target.checked)}
-                  />
-                  Show thinking
-                  <span className="modelMenuCheckBox" aria-hidden="true">
-                    <Check size={10} strokeWidth={3.25} />
-                  </span>
-                </label>
               ) : null}
               <p className="modelMenuHeading">Model</p>
               {models.length === 0 ? (

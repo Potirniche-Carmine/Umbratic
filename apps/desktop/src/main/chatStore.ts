@@ -247,6 +247,12 @@ export function updateChatProject(input: unknown): ChatRecord {
   if (!existing) {
     throw new Error("Chat was not found.");
   }
+  // A chat that already ran without a folder stays without one: its task's
+  // workspace is the hidden scratch directory, and renaming the chat's folder
+  // afterwards would present that history as work done in the new folder.
+  if (!existing.repositoryPath && existing.taskId) {
+    throw new Error("This chat started without a folder. Start a new chat to work in a folder.");
+  }
   const next: ChatRecord = {
     ...existing,
     repositoryName,

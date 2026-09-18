@@ -9,6 +9,12 @@ Everything goes through the `artifact` tool. You send JSON; the engine writes
 the workbook, recalculates it, and reports what it found. Never write
 `openpyxl`, `xlsxwriter`, or any other library code.
 
+Before each create, read `references/spec.md` with `read_skill`, using this
+skill's id and `resource: "references/spec.md"`. Before each edit, read
+`references/ops.md` the same way. These are skill resources, not workspace
+files. Read the applicable reference completely before constructing the
+spec or ops; examples in this file do not replace that reference.
+
 ## Before you build anything
 
 **A file the user named or attached: `inspect` it first.** Per sheet you get
@@ -78,6 +84,7 @@ someone else's file are never rewritten.
 Surgical: `setCells`, `appendRows`, `insertRows`, `insertColumns`,
 `deleteRows`, `deleteColumns`, `findReplace`, `addSheet`, `renameSheet`,
 `setFormat`, `setFreeze`. Full surface adds `setNamedRange` and `deleteSheet`.
+Read `references/ops.md` for the arguments before constructing edits.
 
 `insertRows` and `insertColumns` shift every reference that pointed past them,
 so use them rather than rewriting formulas by hand. `findReplace` skips formula
@@ -97,7 +104,7 @@ Every create and edit recalculates. Read `qa[]`:
 
 At most three rounds, and the spec or the ops must change between them.
 
-Files land in `.umbratic/artifacts/xlsx/` unless the user gave a path.
+Files land in `artifacts/xlsx/` unless the user gave a path.
 
 Report: the path, `origin` and `editSurface`, rounds, remaining warnings, and
 your assumptions. Never paste the spec back at the user.

@@ -110,85 +110,35 @@ const (
 	DefaultRAGTimeout       = 2 * time.Second
 )
 
-// EmbeddingChoice is one embedding model the Documents page offers.
-//
-// Dimension is recorded rather than only probed. Probing is still what
-// confirms a runtime is actually serving the model, but knowing the width up
-// front is what lets retrieval be on out of the box: the Qdrant collection can
-// be created before anything has been embedded, instead of making someone press
-// "Test runtime" before the checkbox would even validate.
+// EmbeddingChoice is one registered local embedding model.
 type EmbeddingChoice struct {
-	Model     string
-	Label     string
-	Dimension int
-	Detail    string
-	// SizeGB is what the weights occupy, so the menu can say what choosing this
-	// costs on a card that is already holding a chat model.
-	SizeGB float64
+	Model string
+	Label string
 }
 
-// EmbeddingChoices is the closed list, the default first. Both are 1024-wide,
-// so switching between them does not strand the collection at another size.
-var EmbeddingChoices = []EmbeddingChoice{
-	{
-		Model:     "Qwen/Qwen3-Embedding-0.6B",
-		Label:     "Qwen3 Embedding 0.6B",
-		Dimension: 1024,
-		SizeGB:    1.2,
-		Detail:    "Strong multilingual retrieval, small enough to share a card with the chat model.",
-	},
-	{
-		Model:     "BAAI/bge-m3",
-		Label:     "BGE-M3",
-		Dimension: 1024,
-		SizeGB:    2.3,
-		Detail:    "Better on long, dense technical documents. Twice the weights.",
-	},
-}
-
-// EmbeddingDimension is the width a chosen model embeds at, or zero for one
-// this list does not name.
-func EmbeddingDimension(model string) int {
-	for _, choice := range EmbeddingChoices {
-		if strings.EqualFold(choice.Model, model) {
-			return choice.Dimension
-		}
-	}
-	return 0
-}
-
-// DefaultRAG is retrieval on, with the default embedding model already chosen.
-// Off-by-default made the Documents page open on a banner telling the
-// administrator to go configure something before it would do anything, which is
-// a setup step disguised as a warning.
+// DefaultRAG waits for an operator to select a local embedding runtime.
 func DefaultRAG() RAG {
-	choice := EmbeddingChoices[0]
 	return RAG{
-		Enabled:          true,
+		Enabled:          false,
 		VectorBaseURL:    DefaultVectorBaseURL,
 		Collection:       DefaultCollection,
 		EmbeddingBaseURL: DefaultEmbeddingBaseURL,
-		EmbeddingModel:   choice.Model,
-		Dimension:        choice.Dimension,
+		EmbeddingModel:   "",
+		Dimension:        0,
 		TopK:             DefaultTopK,
 		MaxInjectedBytes: DefaultMaxInjectedBytes,
 		Timeout:          DefaultRAGTimeout,
 	}
 }
 
-// WithDefaults fills the constants back in over whatever is stored, so a
-// configuration written before they were constants still serves the values this
-// build means. Only the two things the page still asks for survive from the
-// stored row: whether retrieval is on, and which embedding model it uses.
+// WithDefaults applies retrieval limits and keeps the selected local runtime.
 func (r RAG) WithDefaults() RAG {
 	defaults := DefaultRAG()
 	defaults.Enabled = r.Enabled
 	if strings.TrimSpace(r.EmbeddingModel) != "" {
+		defaults.EmbeddingBaseURL = r.EmbeddingBaseURL
 		defaults.EmbeddingModel = r.EmbeddingModel
 		defaults.Dimension = r.Dimension
-		if width := EmbeddingDimension(r.EmbeddingModel); width > 0 {
-			defaults.Dimension = width
-		}
 	}
 	return defaults
 }
@@ -257,16 +207,4 @@ func (r RAG) Environment(apiKey string) []string {
 		"VEIL_RAG_MAX_INJECTED_BYTES=" + strconv.Itoa(r.MaxInjectedBytes),
 		"VEIL_RAG_TIMEOUT=" + r.Timeout.String(),
 	}
-}
-
-// EmbeddingLabel is the human name of the chosen embedding model, for the
-// menu's closed state. An unrecognized model — one stored before this list was
-// closed — shows its own reference rather than nothing.
-func (r RAG) EmbeddingLabel() string {
-	for _, choice := range EmbeddingChoices {
-		if strings.EqualFold(choice.Model, r.EmbeddingModel) {
-			return choice.Label
-		}
-	}
-	return r.EmbeddingModel
 }

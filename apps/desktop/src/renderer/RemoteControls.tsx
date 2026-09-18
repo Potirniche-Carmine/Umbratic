@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, FolderOpen, Lock, Monitor, Plus, Server } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, Monitor, Plus, Server } from "lucide-react";
 
 import type { RemoteConnectionInfo, RemoteDirectoryListing } from "../shared/desktopApi";
 import { RemoteFolderBrowser } from "./RemoteFolderBrowser";
@@ -36,7 +36,6 @@ export function RemoteHostPicker({
   selectedId,
   directory,
   disabled,
-  locked,
   onSelect,
   onBrowse,
   onManage,
@@ -46,8 +45,6 @@ export function RemoteHostPicker({
   selectedId: string;
   directory: string;
   disabled: boolean;
-  /** True once the chat has started, when the host can no longer change. */
-  locked: boolean;
   onSelect(connectionId: string, directory: string): void;
   onBrowse(connectionId: string, path: string): Promise<RemoteDirectoryListing>;
   onManage(): void;
@@ -72,31 +69,23 @@ export function RemoteHostPicker({
   }, [open]);
 
   useEffect(() => {
-    if (disabled || locked) setOpen(false);
-  }, [disabled, locked]);
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   return (
     <div className={`remoteControl ${selected ? "isRemote" : ""} ${open ? "isOpen" : ""}`} ref={rootRef}>
       <button
         className="remoteTrigger"
         type="button"
-        disabled={disabled || locked}
+        disabled={disabled}
         aria-expanded={open}
         aria-haspopup="menu"
-        title={
-          locked
-            ? selected
-              ? `This chat is running on ${selected.name}`
-              : "This chat is running on this computer"
-            : selected
-              ? `Runs on ${selected.name} in ${directory}`
-              : "Runs on this computer"
-        }
+        title={selected ? `Runs on ${selected.name} in ${directory}` : "Runs on this computer"}
         onClick={() => setOpen((current) => !current)}
       >
         {selected ? <Server size={14} aria-hidden="true" /> : <Monitor size={14} aria-hidden="true" />}
         <span>{selected ? selected.name : "This computer"}</span>
-        {locked ? <Lock size={11} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
+        <ChevronDown size={12} aria-hidden="true" />
       </button>
 
       {open && !browsing ? (

@@ -1,7 +1,7 @@
 {
   "name": "umbratic-ai",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "packageManager": "npm@11.16.0",
   "engines": {
@@ -33,7 +33,7 @@
   },
   "scripts": {
     "desktop:dev": "npm --workspace @umbratic/desktop run dev",
-    "desktop:release": "node scripts/build-go-services.ts && npm --workspace @umbratic/desktop run package && npm --workspace @umbratic/desktop run verify:package",
+    "desktop:release": "node scripts/desktop-release.ts",
     "publish:release": "node scripts/publish-release.ts",
     "release:version": "npm version --workspaces --include-workspace-root --no-git-tag-version --ignore-scripts",
     "veil:dev": "cd infrastructure/veil && go run ./cmd/veil",

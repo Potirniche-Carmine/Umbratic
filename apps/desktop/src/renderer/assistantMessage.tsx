@@ -10,6 +10,8 @@ type AssistantMessageProps = {
   item: AssistantItem;
   /** False while the run is still going: an answer is not finished being written. */
   settled: boolean;
+  /** Whether rating buttons are offered — only chats with a company server to report to. */
+  canRate: boolean;
   rating: ResponseRating | undefined;
   /** The turn's answer text, which is what copying a response should yield. */
   copyText: string;
@@ -32,6 +34,7 @@ type AssistantMessageProps = {
 export function AssistantMessage({
   item,
   settled,
+  canRate,
   rating,
   copyText,
   onCopy,
@@ -45,9 +48,11 @@ export function AssistantMessage({
   const showActions = isAnswer && settled;
 
   return (
+    // Every passage wears the same styling — what the run says between rounds
+    // of work is prose, not a demoted aside. Only the affordances differ.
     <article
-      className={`timelineMessage assistantMessage ${isAnswer ? "assistantAnswer" : "assistantProgress"}`}
-      aria-label={isAnswer ? "Answer" : "Progress update"}
+      className="timelineMessage assistantMessage assistantAnswer"
+      aria-label={isAnswer ? "Answer" : "Assistant message"}
     >
       {children}
       {documents}
@@ -62,26 +67,30 @@ export function AssistantMessage({
             >
               <Copy size={14} />
             </button>
-            <button
-              className={`messageAction feedbackGood ${rating === "good" ? "active" : ""}`}
-              type="button"
-              onClick={(event) => onRate(item.id, "good", event.currentTarget)}
-              aria-pressed={rating === "good"}
-              title={rating === "good" ? "Edit good response feedback" : "Good response"}
-              aria-haspopup="dialog"
-            >
-              <ThumbsUp size={14} />
-            </button>
-            <button
-              className={`messageAction feedbackBad ${rating === "bad" ? "active" : ""}`}
-              type="button"
-              onClick={(event) => onRate(item.id, "bad", event.currentTarget)}
-              aria-pressed={rating === "bad"}
-              title={rating === "bad" ? "Edit bad response feedback" : "Bad response"}
-              aria-haspopup="dialog"
-            >
-              <ThumbsDown size={14} />
-            </button>
+            {canRate ? (
+              <>
+                <button
+                  className={`messageAction feedbackGood ${rating === "good" ? "active" : ""}`}
+                  type="button"
+                  onClick={(event) => onRate(item.id, "good", event.currentTarget)}
+                  aria-pressed={rating === "good"}
+                  title={rating === "good" ? "Edit good response feedback" : "Good response"}
+                  aria-haspopup="dialog"
+                >
+                  <ThumbsUp size={14} />
+                </button>
+                <button
+                  className={`messageAction feedbackBad ${rating === "bad" ? "active" : ""}`}
+                  type="button"
+                  onClick={(event) => onRate(item.id, "bad", event.currentTarget)}
+                  aria-pressed={rating === "bad"}
+                  title={rating === "bad" ? "Edit bad response feedback" : "Bad response"}
+                  aria-haspopup="dialog"
+                >
+                  <ThumbsDown size={14} />
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
       ) : null}

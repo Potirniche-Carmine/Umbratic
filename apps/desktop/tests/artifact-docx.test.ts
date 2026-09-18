@@ -492,6 +492,23 @@ test("a well-formed document reports no errors", () => {
 
 /* ---------------------------------- engine --------------------------------- */
 
+test("a missing blocks array returns a valid repair example without writing a file", async () => {
+  const root = workspace();
+  try {
+    const job = { action: "create", format: "docx", workspaceRoot: root, absoluteOut: path.join(root, "repair.docx") };
+    const rejected = await engine.runArtifactJob({ ...job, spec: { sections: [{ body: [] }] } });
+    assert.equal(rejected.ok, false);
+    assert.equal(fs.existsSync(job.absoluteOut), false);
+    const example = rejected.errors[0].message.match(/Example spec: (\{.*\})\. Full schema:/)?.[1];
+    assert.ok(example, "the validation error must show the block fields needed to repair the request");
+    const repaired = await engine.runArtifactJob({ ...job, spec: JSON.parse(example) });
+    assert.equal(repaired.ok, true, JSON.stringify(repaired));
+    assert.ok(fs.statSync(job.absoluteOut).size > 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the engine round-trips docx create, inspect, and a tracked edit", async () => {
   const root = workspace();
   const out = path.join(root, ".umbratic", "artifacts", "docx", "brief.docx");

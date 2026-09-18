@@ -1,7 +1,7 @@
 {
   "name": "@umbratic/desktop",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Private AI workbench for local and company-managed models",
   "author": "Umbratic",
   "packageManager": "npm@11.16.0",
@@ -15,6 +15,7 @@
     "build:native": "cargo build --locked --release --workspace",
     "benchmark:checkpoints": "node scripts/benchmark-checkpoints.ts",
     "copy:system-skills": "node scripts/copy-system-skills.ts",
+    "generate:dmg-background": "node scripts/generate-dmg-background.ts",
     "generate:icons": "node scripts/generate-app-icons.ts",
     "prepare:package": "node scripts/prepare-package.ts",
     "package": "npm run build && npm run prepare:package && node scripts/package.ts",

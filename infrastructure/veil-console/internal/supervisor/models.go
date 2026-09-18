@@ -2,14 +2,16 @@ package supervisor
 
 import (
 	"context"
+	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,8 +49,9 @@ const modelPollInterval = 2 * time.Second
 const modelLogLimit = 32 << 10
 
 type managedProcess struct {
-	cmd  *exec.Cmd
-	logs *safeBuffer
+	allocation float64
+	cmd        *exec.Cmd
+	logs       *safeBuffer
 	// command is what this process was actually launched with, so the page can
 	// say when the saved command has moved on from the running one.
 	command string
@@ -74,8 +77,14 @@ const modelStopDeadline = 10 * time.Second
 // starting, failing, or being stopped must not disturb the Veil process, whose
 // registry is configuration rather than liveness.
 type ModelSupervisor struct {
-	binary string
-	mu     sync.Mutex
+	binary   string
+	closing  bool
+	launchMu sync.Mutex
+	// dockerImage switches launches to `docker run` of this vLLM OpenAI-server
+	// image. The card command is still the single source of truth: Console
+	// derives the container flags from it rather than storing them twice.
+	dockerImage string
+	mu          sync.Mutex
 	// perModel serializes start and stop for one id, so two clicks cannot race
 	// into two processes on one port.
 	perModel  map[string]*sync.Mutex
@@ -86,19 +95,22 @@ type ModelSupervisor struct {
 	crashes map[string][]time.Time
 }
 
-func NewModelSupervisor(binary string) *ModelSupervisor {
+func NewModelSupervisor(binary, dockerImage string) *ModelSupervisor {
 	return &ModelSupervisor{
-		binary:    binary,
-		perModel:  map[string]*sync.Mutex{},
-		processes: map[string]*managedProcess{},
-		crashes:   map[string][]time.Time{},
+		binary:      binary,
+		dockerImage: dockerImage,
+		perModel:    map[string]*sync.Mutex{},
+		processes:   map[string]*managedProcess{},
+		crashes:     map[string][]time.Time{},
 	}
 }
 
-// Configured reports whether Console was started with a vLLM binary. Without
-// one the Models page renders read-only rather than offering buttons that
-// cannot work.
-func (m *ModelSupervisor) Configured() bool { return m != nil && m.binary != "" }
+// Configured reports whether Console was started with a way to launch models —
+// a vLLM binary or a vLLM Docker image. Without either the Models page renders
+// read-only rather than offering buttons that cannot work.
+func (m *ModelSupervisor) Configured() bool {
+	return m != nil && (m.binary != "" || m.dockerImage != "")
+}
 
 // vllmArgs is the entire argument surface. The command is parsed and validated
 // into a token list here and executed directly — no shell is involved, so no
@@ -109,17 +121,123 @@ func vllmArgs(model config.ManagedModel) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return facts.Args, nil
+	args := facts.Args
+	hasHost := false
+	// Runtime listeners are private even when Advanced supplies a host flag.
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--host" && i+1 < len(args) {
+			args[i+1] = "127.0.0.1"
+			hasHost = true
+			i++
+		} else if strings.HasPrefix(args[i], "--host=") {
+			args[i] = "--host=127.0.0.1"
+			hasHost = true
+		}
+	}
+	if !hasHost {
+		args = append(args, "--host", "127.0.0.1")
+	}
+	return args, nil
+}
+
+// containerName is the deterministic docker name for one model, so a stale
+// container from a hard kill can be removed before the next start claims the
+// port. Served ids are already limited to [A-Za-z0-9._-], which docker accepts.
+func containerName(id string) string { return "umbratic-model-" + id }
+
+// dockerRunArgs wraps the card's own argument list into a docker run of the
+// vLLM OpenAI-server image. The transformation is small and mechanical:
+//
+//   - the container binds 0.0.0.0 so the published port can reach it, and the
+//     publish flag pins the host side to 127.0.0.1, so exposure is loopback
+//     exactly as it is with a host binary;
+//   - the positional model after `serve` becomes --model, which is what the
+//     image's entrypoint takes;
+//   - the selected local folder is mounted read-only at the same path;
+//   - offline mode blocks model downloads and no Hub tokens are passed.
+func dockerRunArgs(image string, model config.ManagedModel) ([]string, error) {
+	facts, err := model.Parse()
+	if err != nil {
+		return nil, err
+	}
+	// facts.Args is ["serve", "<model>", flags...]; Parse guarantees the shape.
+	flags := append([]string(nil), facts.Args[2:]...)
+	hostRewritten := false
+	for index := 0; index < len(flags); index++ {
+		if flags[index] == "--host" && index+1 < len(flags) {
+			flags[index+1] = "0.0.0.0"
+			hostRewritten = true
+		}
+		if strings.HasPrefix(flags[index], "--host=") {
+			flags[index] = "--host=0.0.0.0"
+			hostRewritten = true
+		}
+	}
+	if !hostRewritten {
+		flags = append(flags, "--host", "0.0.0.0")
+	}
+	if !filepath.IsAbs(facts.ModelPath) {
+		return nil, errors.New("select a local model folder; downloads are disabled")
+	}
+	var mount strings.Builder
+	writer := csv.NewWriter(&mount)
+	if err := writer.Write([]string{"type=bind", "src=" + facts.ModelPath, "dst=" + facts.ModelPath, "readonly"}); err != nil {
+		return nil, err
+	}
+	writer.Flush()
+	args := []string{
+		"run", "--rm",
+		"--name", containerName(model.ID),
+		"--ipc", "host",
+		"--mount", strings.TrimSuffix(mount.String(), "\n"),
+		"--env", "HF_HUB_OFFLINE=1", "--env", "TRANSFORMERS_OFFLINE=1",
+		"-p", fmt.Sprintf("127.0.0.1:%d:%d", facts.Port, facts.Port),
+	}
+	switch os.Getenv("UMBRATIC_RUNTIME_PROFILE") {
+	case "rocm", "rocm-integrated":
+		args = append(args, "--device", "/dev/kfd", "--device", "/dev/dri", "--group-add", "video", "--group-add", "render")
+	case "rocm-wsl":
+		args = append(args, "--device", "/dev/dxg", "--mount", "type=bind,src=/usr/lib/wsl,dst=/usr/lib/wsl,readonly")
+	case "", "cuda":
+		// Retain placement before IPC for a stable, inspectable launch contract.
+		args = append(args[:4], append([]string{"--gpus", "all"}, args[4:]...)...)
+	default:
+		return nil, errors.New("unsupported container runtime profile")
+	}
+	// Passed by name, so the docker client reads each value from its own
+	// environment and no secret or setting lands in argv. The vLLM knobs let a
+	// deployment adapt the runtime to its host — WSL, for one, has no UVA and
+	// needs VLLM_USE_V2_MODEL_RUNNER=0 — without baking that host's quirk in.
+	for _, name := range []string{
+		"VLLM_USE_V2_MODEL_RUNNER", "VLLM_WORKER_MULTIPROC_METHOD",
+	} {
+		if _, ok := os.LookupEnv(name); ok {
+			args = append(args, "--env", name)
+		}
+	}
+	args = append(args, image, "--model", facts.ModelPath)
+	return append(args, flags...), nil
+}
+
+// removeStaleContainer clears a container a hard-killed docker client left
+// behind. Best effort: when there is nothing to remove, docker says so and the
+// next start proceeds.
+func removeStaleContainer(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "rm", "--force", containerName(id))
+	cmd.Env = childEnvironment()
+	_ = cmd.Run()
 }
 
 // childEnvironment is an allowlist, never the parent environment. A GPU runtime
 // needs its CUDA and Hugging Face variables and nothing else; inheriting
 // wholesale would hand a child every secret Console was started with.
 var childEnvironmentAllowlist = []string{
-	"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER",
+	"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP", "USER", "XDG_CACHE_HOME",
 	"CUDA_HOME", "CUDA_VISIBLE_DEVICES", "LD_LIBRARY_PATH", "NVIDIA_VISIBLE_DEVICES",
-	"HF_HOME", "HF_HUB_CACHE", "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "TRANSFORMERS_CACHE",
-	"VLLM_CACHE_ROOT", "VLLM_WORKER_MULTIPROC_METHOD", "TORCH_HOME",
+	"HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE",
+	"VLLM_CACHE_ROOT", "VLLM_WORKER_MULTIPROC_METHOD", "VLLM_USE_V2_MODEL_RUNNER", "TORCH_HOME",
 }
 
 func childEnvironment() []string {
@@ -129,7 +247,7 @@ func childEnvironment() []string {
 			values = append(values, name+"="+value)
 		}
 	}
-	return values
+	return append(values, "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1")
 }
 
 func (m *ModelSupervisor) lockFor(id string) *sync.Mutex {
@@ -148,30 +266,67 @@ func (m *ModelSupervisor) lockFor(id string) *sync.Mutex {
 // the page back now.
 func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 	if !m.Configured() {
-		return errors.New("no vLLM binary is configured")
+		return errors.New("no vLLM binary or Docker image is configured")
 	}
 	if err := model.Validate(); err != nil {
 		return err
 	}
+	facts, err := model.Parse()
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(facts.ModelPath) {
+		return errors.New("select a local model folder; downloads are disabled")
+	}
+	info, err := os.Stat(facts.ModelPath)
+	if err != nil || !info.IsDir() {
+		return errors.New("the local model folder is missing or cannot be read")
+	}
+
 	lock := m.lockFor(model.ID)
 	if !lock.TryLock() {
 		return ErrBusy
 	}
 	defer lock.Unlock()
+	m.launchMu.Lock()
+	defer m.launchMu.Unlock()
 
 	m.mu.Lock()
-	if existing := m.processes[model.ID]; existing != nil && existing.cmd.Process != nil {
+	if m.closing {
 		m.mu.Unlock()
-		return errors.New("this model is already running")
+		return errors.New("Console is shutting down")
+	}
+	if existing := m.processes[model.ID]; existing != nil && existing.cmd.Process != nil {
+		select {
+		case <-existing.exited:
+		default:
+			m.mu.Unlock()
+			return errors.New("this model is already running")
+		}
 	}
 	m.mu.Unlock()
 
-	args, err := vllmArgs(model)
+	launchModel, allocation, err := m.allocation(model)
 	if err != nil {
 		return err
 	}
+	var cmd *exec.Cmd
+	if m.dockerImage != "" {
+		args, err := dockerRunArgs(m.dockerImage, launchModel)
+		if err != nil {
+			return err
+		}
+		// A previous hard kill can leave a named container holding the port.
+		removeStaleContainer(model.ID)
+		cmd = exec.Command("docker", args...)
+	} else {
+		args, err := vllmArgs(launchModel)
+		if err != nil {
+			return err
+		}
+		cmd = exec.Command(m.binary, args...)
+	}
 	logs := newSafeBuffer(modelLogLimit)
-	cmd := exec.Command(m.binary, args...)
 	configureModelProcess(cmd)
 	cmd.Env = childEnvironment()
 	cmd.Stdout, cmd.Stderr = logs, logs
@@ -181,13 +336,14 @@ func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	process := &managedProcess{
-		cmd:     cmd,
-		logs:    logs,
-		command: strings.TrimSpace(model.Command),
-		model:   model,
-		status:  ModelStatus{State: ModelStarting, PID: cmd.Process.Pid, Message: "Loading weights"},
-		cancel:  cancel,
-		exited:  make(chan struct{}),
+		allocation: allocation,
+		cmd:        cmd,
+		logs:       logs,
+		command:    strings.TrimSpace(model.Command),
+		model:      model,
+		status:     ModelStatus{State: ModelStarting, PID: cmd.Process.Pid, Message: "Starting model"},
+		cancel:     cancel,
+		exited:     make(chan struct{}),
 	}
 	m.mu.Lock()
 	m.processes[model.ID] = process
@@ -221,9 +377,13 @@ func (m *ModelSupervisor) reap(id string, cmd *exec.Cmd) {
 		message = "Stopped"
 		state = ModelStopped
 	}
+	recoverable := state == ModelFailed
+	if hint := startupFailure(process.logs.String()); recoverable && hint != "" {
+		message = hint
+		recoverable = false
+	}
 	process.status = ModelStatus{State: state, Message: message}
 	model := process.model
-	recoverable := state == ModelFailed
 	m.mu.Unlock()
 	if recoverable {
 		go m.recoverModel(model)
@@ -264,7 +424,7 @@ func (m *ModelSupervisor) recoverModel(model config.ManagedModel) {
 	m.mu.Unlock()
 	// An administrator stopped or restarted it while the delay ran; their
 	// intent wins over the recovery that was already scheduled.
-	if !stopped {
+	if stopped {
 		return
 	}
 	if err := m.Start(model); err != nil && !errors.Is(err, ErrBusy) {
@@ -299,6 +459,10 @@ func (m *ModelSupervisor) awaitReady(ctx context.Context, model config.ManagedMo
 			return
 		case <-ticker.C:
 			if modelListsItself(ctx, client, model) {
+				if err := probeModelRole(ctx, model); err != nil {
+					m.setStatus(model.ID, cmd, ModelStatus{State: ModelFailed, PID: processID(cmd), Message: err.Error()})
+					return
+				}
 				m.setStatus(model.ID, cmd, ModelStatus{
 					State:   ModelHealthy,
 					PID:     processID(cmd),
@@ -327,7 +491,20 @@ func modelListsItself(ctx context.Context, client *http.Client, model config.Man
 	}
 	// The served name is what a chat request must use, so that exact string
 	// appearing in the listing is the readiness signal.
-	return strings.Contains(string(body), strconv.Quote(model.ID))
+	var listing struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(body, &listing) != nil {
+		return false
+	}
+	for _, entry := range listing.Data {
+		if entry.ID == model.ID {
+			return true
+		}
+	}
+	return false
 }
 
 func processID(cmd *exec.Cmd) int {
@@ -380,6 +557,11 @@ func (m *ModelSupervisor) stopNow(id string) error {
 	case <-process.exited:
 	case <-time.After(5 * time.Second):
 	}
+	// Killing the docker client leaves the container itself running; the
+	// daemon has to be told, or the GPU and the port stay claimed.
+	if m.dockerImage != "" {
+		removeStaleContainer(id)
+	}
 	return nil
 }
 
@@ -390,14 +572,18 @@ func (m *ModelSupervisor) StopAll() {
 		return
 	}
 	m.mu.Lock()
+	m.closing = true
 	ids := make([]string, 0, len(m.processes))
-	for id := range m.processes {
+	for id := range m.perModel {
 		ids = append(ids, id)
 	}
 	m.mu.Unlock()
 	sort.Strings(ids)
 	for _, id := range ids {
+		lock := m.lockFor(id)
+		lock.Lock()
 		_ = m.stopNow(id)
+		lock.Unlock()
 	}
 }
 

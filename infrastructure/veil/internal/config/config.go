@@ -22,11 +22,13 @@ import (
 // synthesized from the single-model variables, so every code path downstream
 // reads the same shape whether or not an administrator configured a fleet.
 type ModelEntry struct {
-	ID              string `json:"id"`
-	ProviderBaseURL string `json:"provider_base_url"`
-	Display         string `json:"display"`
-	Reasoning       bool   `json:"reasoning"`
-	ContextLength   int    `json:"context_length"`
+	ID               string                  `json:"id"`
+	ProviderBaseURL  string                  `json:"provider_base_url"`
+	Display          string                  `json:"display"`
+	Reasoning        bool                    `json:"reasoning"`
+	ReasoningEfforts []string                `json:"reasoning_efforts"`
+	SamplingProfiles *model.SamplingProfiles `json:"sampling_profiles,omitempty"`
+	ContextLength    int                     `json:"context_length"`
 }
 
 // MaxModelIDBytes bounds a registry id. Ids travel in chat bodies and in
@@ -279,7 +281,7 @@ func Load() (Config, error) {
 	if cfg.ProviderBaseURL == "" {
 		return Config{}, errors.New("VEIL_PROVIDER_BASE_URL is required")
 	}
-	if cfg.DefaultModel == "" {
+	if cfg.DefaultModel == "" && cfg.Mode != model.ModeServer {
 		return Config{}, errors.New("VEIL_MODEL is required")
 	}
 	if cfg.ModelTimeout <= 0 {
@@ -401,6 +403,18 @@ func loadModelRegistry(cfg *Config) error {
 	seen := make(map[string]bool, len(entries))
 	for index := range entries {
 		entry := &entries[index]
+		if entry.SamplingProfiles != nil {
+			if err := entry.SamplingProfiles.Validate(); err != nil {
+				return err
+			}
+		}
+		seenEfforts := map[string]bool{}
+		for _, effort := range entry.ReasoningEfforts {
+			if !model.ValidReasoningLevel(effort) || effort == "none" || seenEfforts[effort] || len(entry.ReasoningEfforts) > 16 {
+				return errors.New("VEIL_MODELS has invalid reasoning options")
+			}
+			seenEfforts[effort] = true
+		}
 		entry.ID = strings.TrimSpace(entry.ID)
 		entry.Display = strings.TrimSpace(entry.Display)
 		entry.ProviderBaseURL = strings.TrimSpace(entry.ProviderBaseURL)

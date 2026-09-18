@@ -39,11 +39,10 @@ export function composerTimelineFromEvents(
     items.push({ type: "user", id: "user-prompt", text: visiblePrompt.text, rawText: prompt, reviewFeedback: visiblePrompt.feedback, attachedFiles: [] });
   }
 
-  // Assistant prose is the answer only once nothing follows it. The runner
-  // streams it as `assistant.delta` while it is generated. Guided tool-calling
-  // steps omit accompanying prose, so orientation and the tool rows are the
-  // mid-run story. A live burst streams as a message from its first token; if
-  // more work follows, it folds into the block like any other narration.
+  // Assistant prose streams as a message from its first token and stays where
+  // it streamed. The runner sends it as `assistant.delta`; the passage nothing
+  // follows within its turn is the answer, and earlier passages simply remain
+  // as what the run said between rounds of work.
   const flushAssistant = (streaming = false) => {
     const text = assistantBuffer.trim();
     if (!text) { assistantBuffer = ""; assistantNeedsSeparator = false; return; }
@@ -141,63 +140,74 @@ export function composerTimelineFromEvents(
     });
   };
 
-  // Prose the run wrote before its next piece of work joins the narration
-  // inside the block. Thinking is a different register, so a live thinking
-  // passage is closed first rather than concatenated into the sentence.
-  const foldProseIntoNarration = () => {
-    if (!assistantBuffer.trim()) return;
-    if (reasoningKind === "thinking" && reasoningBuffer.trim()) flushReasoning();
-    const separator = reasoningBuffer.trim() ? "\n\n" : "";
-    reasoningBuffer = `${reasoningBuffer}${separator}${assistantBuffer.trim()}`;
-    assistantBuffer = "";
-    assistantNeedsSeparator = false;
-    reasoningKind = undefined;
-  };
-
-  // Everything the run says before it goes back to work is narration, wherever
-  // in the turn it was said. A turn is therefore one Working block holding the
-  // whole account of the work — orientation, tools, the report between rounds,
-  // more tools — and the only prose left standing on the page is the answer.
+  // The transcript interleaves: prose stays where it streamed, and the work
+  // between passages — thinking and tools together — is its own collapsed
+  // block. Text the reader has seen never moves again; a new round of work
+  // opens a new block *after* the passage instead of folding the passage in.
   //
-  // Letting a mid-turn report stand as its own message instead was the previous
-  // rule, and it split one turn into "Worked for 4 seconds", a muted paragraph,
-  // "Worked for 2 seconds", and only then the answer: three blocks for one
-  // stretch of work, with a sentence marooned between them that read like a
-  // reply and was not one.
-  //
-  // The cost is that a paragraph the reader may be mid-way through moves when
-  // the next tool starts. It moves into the open block directly above it rather
-  // than off the page, and the block is expanded while the run is live, so the
-  // text lands close to where it was — which is the price of not stranding it.
-  const narrateAssistantForActivity = () => {
-    foldProseIntoNarration();
+  // Folding was the previous rule, and every glitch this file has been
+  // patched for traces back to it: a paragraph the reader was mid-way through
+  // retracting into a log, the block collapsing and reopening around it, an
+  // interim report styled as the answer and then demoted. The rule before
+  // that — interleaving — was abandoned for its presentation (heavy "Worked
+  // for" cards fragmenting the turn, interim prose muted until it read like a
+  // broken reply), not its structure, so the structure returns with the
+  // presentation fixed: blocks are collapsed rows, and every prose passage
+  // renders alike, with only the run's last one carrying answer affordances.
+  const standProseAndThought = () => {
+    flushAssistant();
     flushReasoning();
   };
 
+  type UserMessageEvent = Extract<BackendUiEvent, { type: "user.message" }>;
+  const deferredUserMessages: UserMessageEvent[] = [];
+  const emitUserMessage = (event: UserMessageEvent) => {
+    flushReasoning();
+    flushActivity();
+    flushAssistant();
+    const visiblePrompt = visibleReviewPrompt(event.text);
+    items.push({
+      type: "user",
+      id: `user-${items.length}-${event.text.length}`,
+      text: visiblePrompt.text,
+      rawText: event.text,
+      reviewFeedback: visiblePrompt.feedback,
+      attachedFiles: (event.attachedFiles ?? []).map(normalizeAttachment),
+    });
+    activityStartedAt = event.at;
+    activityEndedAt = undefined;
+  };
+  const releaseDeferredUserMessages = () => {
+    for (const deferred of deferredUserMessages.splice(0)) emitUserMessage(deferred);
+  };
+
   for (const event of events) {
+    // A held steer is released by the first event that is not more of the
+    // prose it landed inside, so its bubble sits after that message rather
+    // than inside it.
+    if (deferredUserMessages.length && event.type !== "assistant.delta") releaseDeferredUserMessages();
     if (event.type === "user.message") {
-      flushReasoning();
-      flushActivity();
-      flushAssistant();
-      const visiblePrompt = visibleReviewPrompt(event.text);
-      items.push({
-        type: "user",
-        id: `user-${items.length}-${event.text.length}`,
-        text: visiblePrompt.text,
-        rawText: event.text,
-        reviewFeedback: visiblePrompt.feedback,
-        attachedFiles: (event.attachedFiles ?? []).map(normalizeAttachment),
-      });
-      activityStartedAt = event.at;
-      activityEndedAt = undefined;
+      // A steer accepted mid-stream is chronologically inside the model's
+      // sentence, and rendering it there splits the sentence around a user
+      // bubble. The message is the user's the moment they sent it, but its
+      // place on the page is after the prose it interrupted — held here and
+      // released when that prose run ends.
+      if (assistantBuffer.trim()) {
+        deferredUserMessages.push(event);
+        continue;
+      }
+      emitUserMessage(event);
       continue;
     }
     if (event.type === "assistant.delta") {
-      // The first token closes the work window: the prose streaming below the
-      // block is the run talking, not working, so later tokens must not keep
-      // stretching "Worked for".
+      // The first token ends the working block: the run has stopped working
+      // and started talking, so the account of the work settles above this
+      // passage, and any further work opens a fresh block after it. The
+      // passage itself never moves again.
       if (!assistantBuffer) {
+        flushReasoning();
         markActivityTime(undefined, event.at);
+        flushActivity();
       }
       const separator = assistantNeedsSeparator
         && assistantBuffer.trim()
@@ -215,7 +225,7 @@ export function composerTimelineFromEvents(
       // finish updates the row that started it: the elapsed time the user
       // watched is the elapsed time that settles.
       if (event.phase === "started") {
-        narrateAssistantForActivity();
+        standProseAndThought();
         flushActivity();
         compactionIndex += 1;
         items.push({
@@ -239,9 +249,9 @@ export function composerTimelineFromEvents(
       continue;
     }
     if (event.type === "assistant.progress.delta") {
-      // Prose already buffered came first, so it joins the passage ahead of
-      // this line rather than being interleaved with it.
-      foldProseIntoNarration();
+      // Prose already buffered stands as its own passage; the narration
+      // starting here opens the next block after it.
+      flushAssistant();
       const nextKind = progressKind(event);
       if (reasoningBuffer.trim() && reasoningKind !== nextKind) flushReasoning();
       reasoningKind = nextKind;
@@ -276,7 +286,7 @@ export function composerTimelineFromEvents(
       continue;
     }
     if (event.type === "skill.requested") {
-      narrateAssistantForActivity();
+      standProseAndThought();
       skillIndex += 1;
       activitySegments.push({
         type: "skill",
@@ -291,7 +301,7 @@ export function composerTimelineFromEvents(
       continue;
     }
     if (event.type === "skill.loaded" || event.type === "skill.failed") {
-      narrateAssistantForActivity();
+      standProseAndThought();
       const existing = [...activitySegments].reverse().find(
         (segment): segment is Extract<ComposerActivitySegment, { type: "skill" }> =>
           segment.type === "skill" && segment.requestId === event.requestId,
@@ -324,7 +334,7 @@ export function composerTimelineFromEvents(
       continue;
     }
     if (event.type === "command.started") {
-      narrateAssistantForActivity();
+      standProseAndThought();
       const existingRun = runs.get(event.id);
       if (existingRun) {
         existingRun.command = event.command;
@@ -360,7 +370,7 @@ export function composerTimelineFromEvents(
       continue;
     }
     if (event.type === "command.output") {
-      narrateAssistantForActivity();
+      standProseAndThought();
       let run = runs.get(event.id);
       if (!run) {
         run = {
@@ -389,7 +399,7 @@ export function composerTimelineFromEvents(
       continue;
     }
     if (event.type === "command.finished") {
-      narrateAssistantForActivity();
+      standProseAndThought();
       let run = runs.get(event.id);
       if (!run) {
         run = {
@@ -431,17 +441,14 @@ export function composerTimelineFromEvents(
       flushAssistant();
     }
   }
-  // Live prose streams as a message from its first token, below the block —
-  // never inside it. Holding it in Working until the turn ended was the
-  // previous rule, and settling then re-parented the same words into a fresh
-  // element with different styling: the flash at the end of every worked
-  // answer. Streaming it in place means settling changes nothing the reader
-  // can see. The cost returns only when more work follows the prose — a
-  // mid-round report folds up into the block when the next tool starts, the
-  // same accepted move orientation makes.
-  const answering = assistantBuffer.trim().length > 0;
-  flushReasoning(taskState !== "running" || answering);
-  flushActivity(taskState !== "running" || answering);
+  // A steer still held at the end of the events shows below the live prose:
+  // released here, it flushes what has streamed so far and takes its place
+  // after it, which is also where it will settle once the run moves on.
+  releaseDeferredUserMessages();
+  // Streaming prose already closed any block when its first token arrived, so
+  // whatever block is still open here is live work with no prose after it.
+  flushReasoning(taskState !== "running");
+  flushActivity(taskState !== "running");
   flushAssistant(taskState === "running");
 
   // The turn's answer is the prose nothing follows *within its own turn*.

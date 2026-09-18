@@ -73,6 +73,7 @@ import {
   writeContextLengthSetting,
   writeLocalMtpSetting,
   writeReasoningEffortSetting,
+  writeSendOnEnterSetting,
   writeShowThinkingSetting,
   writeDictationSettings,
   writeModelEndpointSettings,
@@ -179,14 +180,19 @@ export async function submitSteeredRunnerTurn(
 /**
  * The models the connected server-mode Veil publishes.
  *
- * Empty in local mode and on a server that does not advertise `models.list` —
+ * Empty before enrollment, in local mode, and without `models.list` —
  * the renderer reads an empty list as "no picker here", which is the honest
  * answer in both cases.
  */
 export async function listServerModels(): Promise<ServerModelInfo[]> {
   if (readModelEndpointSettings().mode !== "server") return [];
+  if (companyConnectionStatus().state !== "enrolled") return [];
+  await ensureCompanySession(companyTransportOptions());
+  const provider = endpointProvider();
+  const health = await checkEndpointHealth(provider);
+  recordVeilFeatures(health.features);
   if (!connectedVeilSupports(veilFeature.modelsList)) return [];
-  return fetchServerModels(endpointProvider());
+  return fetchServerModels(provider);
 }
 
 export async function enrollCompanyConnection(input: unknown) {
@@ -209,7 +215,7 @@ export async function enrollCompanyConnection(input: unknown) {
     throw new Error("Remote Veil servers must use HTTPS.");
   }
   stopLocalVeil();
-  await enrollCompanyDevice({ baseUrl, enrollmentCode, deviceLabel: label }, companyTransportOptions());
+  await enrollCompanyDevice({ baseUrl, enrollmentCode, deviceLabel: label }, companyTransportOptions(baseUrl));
   const settings = writeModelEndpointSettings({
     mode: "server", baseUrl, modelId: "veil-managed", secret: "",
   });
@@ -234,23 +240,8 @@ export async function connectCompanyConnection() {
     }, 5000);
   });
   try {
-    return await Promise.race([
-      (async () => {
-        await connectCompanySession({ ...companyTransportOptions(), signal: controller.signal });
-        // Nothing routes to the local Veil once this succeeds.
-        stopLocalVeil();
-        const settings = writeModelEndpointSettings({
-          mode: "server",
-          baseUrl: connection.baseUrl,
-          modelId: "veil-managed",
-          secret: "",
-        });
-        const status = await getBackendStatus();
-        if (status.endpoint !== "ready") {
-          throw new Error(status.providers[0]?.message ?? "The company server is unavailable.");
-        }
-        return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
-      })(),
+    await Promise.race([
+      connectCompanySession({ ...companyTransportOptions(), signal: controller.signal }),
       timedOut,
     ]);
   } catch (cause) {
@@ -261,6 +252,14 @@ export async function connectCompanyConnection() {
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+  // Authentication succeeds independently of model readiness. The status read
+  // may report no model, but must not turn a valid login into a failure.
+  stopLocalVeil();
+  const settings = writeModelEndpointSettings({
+    mode: "server", baseUrl: connection.baseUrl, modelId: "veil-managed", secret: "",
+  });
+  const status = await getBackendStatus();
+  return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
 }
 
 export async function disconnectCompanyServerSession() {
@@ -319,7 +318,28 @@ export async function saveReasoningEffortSetting(input: unknown) {
 }
 
 export function saveShowThinkingSetting(input: unknown) {
-  return writeShowThinkingSetting(input === true);
+  return writeShowThinkingSetting(input !== false);
+}
+
+export function saveSendOnEnterSetting(input: unknown) {
+  return writeSendOnEnterSetting(input !== false);
+}
+
+/**
+ * Whether the app starts with the OS session. Read from the OS rather than
+ * stored: the login-items list is the truth and can be edited outside the app.
+ */
+export function launchAtLoginStatus(): { enabled: boolean; available: boolean } {
+  const available = process.platform === "darwin" || process.platform === "win32";
+  if (!available) return { enabled: false, available };
+  return { enabled: app.getLoginItemSettings().openAtLogin, available };
+}
+
+export function saveLaunchAtLoginSetting(input: unknown): { enabled: boolean; available: boolean } {
+  const status = launchAtLoginStatus();
+  if (!status.available) return status;
+  app.setLoginItemSettings({ openAtLogin: input === true });
+  return launchAtLoginStatus();
 }
 
 export async function saveContextLengthSetting(input: unknown) {
@@ -465,7 +485,7 @@ export async function resolveSelectedModel(
         displayName: entry.display,
         ...(entry.contextLength === undefined ? {} : { contextLength: entry.contextLength }),
         capabilities: health.capabilities
-          ? { ...health.capabilities, reasoning: entry.reasoning }
+          ? { ...health.capabilities, reasoning: entry.reasoning, reasoningEfforts: connectedVeilSupports(veilFeature.reasoningEffort) ? entry.reasoningEfforts : [] }
           : undefined,
       }));
       const chosen =
@@ -479,12 +499,14 @@ export async function resolveSelectedModel(
     providerId: configured.providerId,
     providerName: configured.providerName,
     baseUrl: configured.baseUrl,
-    status: health.status,
+    status: settings.mode === "server" && health.status === "unavailable" ? "degraded" : health.status,
     models,
     message:
       health.status === "ready" && settings.mode === "local"
         ? `Local Veil is running with ${settings.modelId}. Telemetry is off.`
-        : health.message,
+        : settings.mode === "server" && health.status === "unavailable"
+          ? "Connected. No model is available yet."
+          : health.message,
   };
   return { providers: [provider], models, selected };
 }

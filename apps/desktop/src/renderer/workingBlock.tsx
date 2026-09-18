@@ -38,6 +38,23 @@ function toggleId(id: string): (current: Set<string>) => Set<string> {
   };
 }
 
+/**
+ * What the collapsed row says the run is doing right now: the newest thing in
+ * the log with a name. Blocks are shut by default, so while the run is live
+ * this line is the reader's only signal beyond "Working" — it names the
+ * current tool, skill, or thinking passage without asking them to open the
+ * log to find out.
+ */
+function liveActivityHint(segments: ActivityItem["segments"], skills: SkillInfo[]): string | null {
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = segments[index];
+    if (segment.type === "command") return activityToolLabel(segment.run).label;
+    if (segment.type === "skill") return skills.find((skill) => skill.id === segment.skillId)?.name ?? segment.skillId;
+    if (segment.type === "reasoning" && segment.kind === "thinking") return "Thinking";
+  }
+  return null;
+}
+
 export function WorkingBlock({
   item,
   clock,
@@ -99,6 +116,12 @@ export function WorkingBlock({
               </span>
             ) : null}
           </strong>
+          {!expanded && !item.finished ? (
+            (() => {
+              const hint = liveActivityHint(item.segments, skills);
+              return hint ? <span className="activityHeaderHint">{hint}</span> : null;
+            })()
+          ) : null}
         </span>
         <ChevronRight className="activityChevron" size={13} />
       </button>

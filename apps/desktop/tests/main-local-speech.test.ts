@@ -44,9 +44,11 @@ test("the dictation model is loaded on first press and released when idle", () =
   // sessions never use.
   assert.match(dictationSource, /const runtime = await ensureLocalSpeech\(/);
   assert.match(dictationSource, /releaseLocalSpeech\(\)/);
-  // A minute of not dictating. The countdown only ever starts when a dictation
-  // ends and is cleared on the next press, so it cannot cut a long recording.
-  assert.equal(localSpeech.speechIdleTimeoutMs, 60 * 1000);
+  // Five minutes of not dictating. The countdown only ever starts when a
+  // dictation ends and is cleared on the next press, so it cannot cut a long
+  // recording — and a burst of back-to-back dictations pays the model load
+  // (and sees the loading notice) once, not on every press.
+  assert.equal(localSpeech.speechIdleTimeoutMs, 5 * 60 * 1000);
   // The port and key survive the stop, so Veil's configuration stays valid.
   assert.match(localSpeechSource, /supervisor\.endpoint\(\)/);
   assert.doesNotMatch(localSpeechSource, /createLlamaSupervisor\(\{ label: "llama" \}\)/);

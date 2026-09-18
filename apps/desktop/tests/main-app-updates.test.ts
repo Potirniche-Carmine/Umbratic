@@ -173,6 +173,18 @@ test("a feed that refuses this installation reports it as a licence, not a fault
   assert.deepEqual(plain(status.state), { phase: "unlicensed" });
 });
 
+test("a missing packaged feed identifies the installation problem", async () => {
+  const { module, updater } = load({ packaged: true });
+  updater.nextCheck = () => {
+    const error = Object.assign(new Error("ENOENT: open /app/Resources/app-update.yml"), { code: "ENOENT" });
+    updater.emit("error", error);
+    return Promise.reject(error);
+  };
+  assert.deepEqual(plain((await module.checkForAppUpdate()).state), {
+    phase: "failed", message: "Update settings are missing. Reinstall Umbratic",
+  });
+});
+
 test("an installation holding no usable token never reaches the feed at all", async () => {
   const useless = {
     "nothing stored": "",

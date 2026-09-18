@@ -75,7 +75,7 @@ Prefer the shortest useful label. Keep helper text only when it changes a decisi
 
 ## Verification
 
-Run focused checks while developing. Before finishing any repository change:
+Run focused checks while developing. Before finishing any code changes inside of the repository that is not just simple documentation:
 
 ```sh
 npm run test:all

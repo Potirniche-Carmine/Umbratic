@@ -27,8 +27,16 @@ export function defaultDesktopDataRoot(
 export function configureDesktopAppPaths(
   targetApp: Pick<App, "setAppLogsPath" | "setPath">,
   dataRoot: string,
+  environment: NodeJS.ProcessEnv = process.env,
 ): void {
   fs.mkdirSync(dataRoot, { recursive: true });
+  const temporary = temporaryDirectory(dataRoot);
+  fs.mkdirSync(temporary, { recursive: true, mode: 0o700 });
+  fs.chmodSync(temporary, 0o700);
+  targetApp.setPath("temp", temporary);
+  environment.TMPDIR = temporary;
+  environment.TMP = temporary;
+  environment.TEMP = temporary;
   targetApp.setPath("userData", dataRoot);
   targetApp.setPath("sessionData", electronSessionDirectory(dataRoot));
   targetApp.setPath("crashDumps", crashDumpsDirectory(dataRoot));
@@ -108,6 +116,10 @@ export function modelsDirectory(dataRoot: string): string {
 
 export function electronSessionDirectory(dataRoot: string): string {
   return path.join(dataRoot, "cache", "electron");
+}
+
+export function temporaryDirectory(dataRoot: string): string {
+  return path.join(dataRoot, "cache", "tmp");
 }
 
 export function electronLogsDirectory(dataRoot: string): string {

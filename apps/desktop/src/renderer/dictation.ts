@@ -182,6 +182,10 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
   const heardSoundRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const transcriptRef = useRef(onTranscript);
+  // Which press the in-flight start() belongs to. Cancel advances it, and a
+  // start that comes back from an await to a stale number abandons itself
+  // rather than opening the microphone for a press that is already over.
+  const startGenerationRef = useRef(0);
   transcriptRef.current = onTranscript;
 
   const stopMetering = useCallback(() => {
@@ -304,10 +308,23 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     setStatus((current) => (current.state === "idle" ? current : { ...current, state: "transcribing", level: 0 }));
-    void api.stopDictation().catch(() => undefined);
+    void api.stopDictation().then(
+      (result) => {
+        // Nothing was live to stop — the session already ended or was
+        // cancelled — so no final transcript is coming. Without this the
+        // composer waited on "transcribing" for an event that never arrives.
+        if (result?.stopping === false) {
+          setStatus((current) => (
+            current.state === "transcribing" ? { state: "idle", preview: "", level: 0, error: null } : current
+          ));
+        }
+      },
+      () => undefined,
+    );
   }, [api, stopMetering]);
 
   const start = useCallback(async () => {
+    const generation = ++startGenerationRef.current;
     setStatus({ state: "starting", preview: "", level: 0, error: null });
 
     // Consent first, and from the main process, so the platform asks the way a
@@ -320,12 +337,24 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
       return;
     }
 
+    if (generation !== startGenerationRef.current) return;
+
     // The model loads before the device opens. In local mode this is tens of
     // seconds of weights, and holding an open microphone through it would light
     // the system's recording indicator over a session that has not begun.
     try {
-      await api.startDictation({});
+      const outcome = await api.startDictation({});
+      // Cancelled during the load, on either side of the IPC boundary: the
+      // press is over, and opening the microphone now would flip a cancelled
+      // session back to "recording" seconds after the user dismissed it.
+      if (generation !== startGenerationRef.current || outcome?.started === false) {
+        if (generation === startGenerationRef.current) {
+          setStatus({ state: "idle", preview: "", level: 0, error: null });
+        }
+        return;
+      }
     } catch (cause) {
+      if (generation !== startGenerationRef.current) return;
       setStatus({ state: "idle", preview: "", level: 0, error: (cause as Error).message });
       return;
     }
@@ -351,6 +380,10 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
         setStatus({ state: "idle", preview: "", level: 0, error: "No microphone is available." });
         return;
       }
+    }
+    if (generation !== startGenerationRef.current) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
     }
     // What is actually recording, which after a fallback is not what was picked.
     const openLabel = microphoneLabel(stream.getAudioTracks()[0]?.label ?? "");
@@ -379,6 +412,12 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
       void context.close().catch(() => undefined);
       void api.cancelDictation().catch(() => undefined);
       setStatus({ state: "idle", preview: "", level: 0, error: "Audio capture could not start." });
+      return;
+    }
+
+    if (generation !== startGenerationRef.current) {
+      stream.getTracks().forEach((track) => track.stop());
+      void context.close().catch(() => undefined);
       return;
     }
 
@@ -424,16 +463,20 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
   const stateRef = useRef(status.state);
   stateRef.current = status.state;
 
-  const toggle = useCallback(() => {
-    if (stateRef.current === "idle") void start();
-    else if (stateRef.current === "recording") stop();
-  }, [start, stop]);
-
   const cancel = useCallback(() => {
+    // Whatever start() is mid-await belongs to a press that is now over; the
+    // stale generation makes it clean up after itself instead of opening the
+    // microphone for a session the main process already tore down.
+    startGenerationRef.current += 1;
     releaseDevice();
     void api.cancelDictation().catch(() => undefined);
     setStatus({ state: "idle", preview: "", level: 0, error: null });
   }, [api, releaseDevice]);
+
+  const toggle = useCallback(() => {
+    if (stateRef.current === "idle") void start();
+    else if (stateRef.current === "recording") stop();
+  }, [start, stop]);
 
   const dismissError = useCallback(() => {
     setStatus((current) => (current.error === null ? current : { ...current, error: null }));

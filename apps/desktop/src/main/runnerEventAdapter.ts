@@ -31,6 +31,7 @@ type ToolRun = {
   stdout: string[];
   stderr: string[];
   finished: boolean;
+  preparing?: boolean;
 };
 
 export type RunnerPermissionEvent = {
@@ -107,6 +108,12 @@ export class RunnerEventAdapter {
           progressKind(event),
         );
         return;
+      case "tool.preparing": {
+        if (this.toolRuns.has(event.toolCallId)) return;
+        const current = this.ensureToolRun(event.toolCallId, event.toolKind, "edit", "edit", event.toolKind);
+        current.preparing = true;
+        return;
+      }
       case "tool.requested":
         this.handleToolRequested(event);
         return;
@@ -306,6 +313,7 @@ export class RunnerEventAdapter {
   }
 
   failStream(message: string): void {
+    this.finishOpenToolRuns();
     this.options.onFailure(message);
   }
 
@@ -396,7 +404,8 @@ export class RunnerEventAdapter {
     const commandClass = event.commandClass
       ? (event.commandClass as CommandClass)
       : fallbackClass;
-    this.ensureToolRun(
+    const preparing = this.toolRuns.get(event.toolCallId)?.preparing;
+    const current = this.ensureToolRun(
       event.toolCallId,
       command,
       kind,
@@ -404,6 +413,16 @@ export class RunnerEventAdapter {
       toolKind,
       event.arguments,
     );
+    if (preparing) {
+      current.preparing = false;
+      current.command = command;
+      // Update the same row with the target once arguments finish.
+      this.options.emit({
+        type: "command.started", taskId: this.options.task.id,
+        id: current.commandId, command, cwd: this.options.task.worktreePath,
+        kind, commandClass, toolKind, input: event.arguments, at: eventAt(event),
+      });
+    }
   }
 
   private handleToolOutput(
@@ -630,7 +649,9 @@ export class RunnerEventAdapter {
         type: "command.finished",
         taskId: this.options.task.id,
         id: current.commandId,
-        exitCode: 0,
+        // Without a terminal tool result, success has not been confirmed.
+        exitCode: null,
+        status: "aborted",
       });
     }
   }

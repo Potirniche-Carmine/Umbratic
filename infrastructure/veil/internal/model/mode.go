@@ -35,6 +35,18 @@ func ParseMode(value string) (Mode, error) {
 
 type ReasoningEffort string
 
+func ValidReasoningLevel(value string) bool {
+	if value == "" || len(value) > 32 {
+		return false
+	}
+	for i, c := range value {
+		if !(c >= 'a' && c <= 'z') && !(i > 0 && (c >= '0' && c <= '9' || c == '_' || c == '-')) {
+			return false
+		}
+	}
+	return true
+}
+
 const (
 	// ReasoningNone says nothing about thinking: the model is left on whatever
 	// its chat template does by default. ReasoningOff is the opposite kind of

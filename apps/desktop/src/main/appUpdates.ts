@@ -137,6 +137,7 @@ function configureUpdater() {
 function failureState(error: unknown): UpdateState {
   const code = (error as { code?: string })?.code ?? "";
   const text = error instanceof Error ? error.message : String(error);
+  if (code === "ENOENT" && /app-update\.yml/.test(text)) return { phase: "failed", message: "Update settings are missing. Reinstall Umbratic" };
   if (/403/.test(text)) return { phase: "unlicensed" };
   if (code === "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND" || /404/.test(text)) return { phase: "failed", message: "No release is published for this platform yet" };
   if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|net::ERR|network/i.test(text)) return { phase: "failed", message: "Could not reach downloads.umbratic.ai" };

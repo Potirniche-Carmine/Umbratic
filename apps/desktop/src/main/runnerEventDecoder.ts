@@ -8,6 +8,7 @@ type RunnerEventBase = {
 };
 
 export type RunnerEvent =
+  | (RunnerEventBase & { type: "tool.preparing"; toolCallId: string; toolKind: "write" | "edit" | "apply_patch" | "artifact" })
   | (RunnerEventBase & { type: "assistant.delta"; text: string })
   | (RunnerEventBase & { type: "assistant.progress.delta"; text: string; kind?: "thinking" })
   | (RunnerEventBase & {
@@ -200,6 +201,7 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "assistant.delta",
   "assistant.progress.delta",
   "tool.requested",
+  "tool.preparing",
   "command.safety.decision",
   "tool.output",
   "tool.finished",
@@ -316,6 +318,8 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && (value.origin === "harness" || value.origin === "model")
         && hasString(value, "code")
         && hasString(value, "message");
+    case "tool.preparing":
+      return hasString(value, "toolCallId") && ["write", "edit", "apply_patch", "artifact"].includes(String(value.toolKind));
     case "tool.requested":
       return (
         hasString(value, "toolCallId")

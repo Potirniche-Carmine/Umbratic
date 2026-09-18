@@ -344,13 +344,13 @@ func TestLoadUsesConfiguredTelemetryPolicy(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresConfiguredModel(t *testing.T) {
+func TestLoadAllowsUnconfiguredServer(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("VEIL_MODEL", "")
 
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected missing model error")
+	cfg, err := Load()
+	if err != nil || cfg.DefaultModel != "" {
+		t.Fatalf("unconfigured server failed: %v", err)
 	}
 }
 

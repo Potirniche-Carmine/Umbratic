@@ -1,3 +1,5 @@
+import { companyTLS } from "./companyTrust";
+import { resolveReasoningEffort } from "../shared/desktopApi";
 import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -156,7 +158,9 @@ export function buildUmbraticRunnerConfig(
       // Same gating as `model`: an older Veil that never advertised the toggle
       // must see the body it has always seen.
       sendThinkingField: connectedVeilSupports(veilFeature.thinkingToggle),
-      thinking: readReasoningEffortSetting() === "off" ? "off" : "on",
+      thinking: endpointSettings.mode === "server" && connectedVeilSupports(veilFeature.reasoningEffort)
+        ? resolveReasoningEffort(selectedModel.capabilities?.reasoningEfforts ?? [], readReasoningEffortSetting())
+        : readReasoningEffortSetting() === "off" ? "off" : "on",
       sendReasoningVisibleField: connectedVeilSupports(veilFeature.reasoningVisible),
       reasoningVisible: readShowThinkingSetting() && readReasoningEffortSetting() !== "off",
       // Which side of the boundary `web_search` runs on, for the two cases
@@ -176,7 +180,7 @@ export function buildUmbraticRunnerConfig(
           .filter((header) => header.name.trim().toLowerCase() !== "authorization" && header.value)
           .map((header) => [header.name.trim(), header.value]),
       ),
-      mtls: endpointSettings.mode === "server" ? companyEndpoint.mtls : undefined,
+      mtls: endpointSettings.mode === "server" ? companyTLS(endpointSettings.baseUrl, companyEndpoint.mtls) : undefined,
     },
   };
 }

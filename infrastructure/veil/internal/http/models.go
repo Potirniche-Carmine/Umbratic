@@ -24,12 +24,13 @@ type availabilityCache struct {
 }
 
 type modelListEntry struct {
-	ID            string          `json:"id"`
-	Display       string          `json:"display"`
-	ContextLength int             `json:"context_length,omitempty"`
-	Capabilities  map[string]bool `json:"capabilities"`
-	Available     bool            `json:"available"`
-	Default       bool            `json:"default"`
+	ID               string          `json:"id"`
+	Display          string          `json:"display"`
+	ContextLength    int             `json:"context_length,omitempty"`
+	Capabilities     map[string]bool `json:"capabilities"`
+	Available        bool            `json:"available"`
+	Default          bool            `json:"default"`
+	ReasoningEfforts []string        `json:"reasoning_efforts"`
 }
 
 // handleModels answers what this Veil can route to. Registration is
@@ -37,6 +38,10 @@ type modelListEntry struct {
 // than one list that quietly omits a stopped model — a client that has a
 // stopped model selected needs to see it, dimmed, not watch it disappear.
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.DefaultModel == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"models": []modelListEntry{}})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
 	defer cancel()
 
@@ -48,12 +53,13 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			display = entry.ID
 		}
 		entries = append(entries, modelListEntry{
-			ID:            entry.ID,
-			Display:       display,
-			ContextLength: entry.ContextLength,
-			Capabilities:  map[string]bool{"reasoning": s.model.ThinkingSupported(ctx, entry.ID)},
-			Available:     available[entry.ID],
-			Default:       entry.ID == s.cfg.DefaultModel,
+			ID:               entry.ID,
+			Display:          display,
+			ContextLength:    entry.ContextLength,
+			Capabilities:     map[string]bool{"reasoning": s.model.ThinkingSupported(ctx, entry.ID)},
+			Available:        available[entry.ID],
+			Default:          entry.ID == s.cfg.DefaultModel,
+			ReasoningEfforts: entry.ReasoningEfforts,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": entries})

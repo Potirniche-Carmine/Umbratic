@@ -435,9 +435,14 @@ async function buildLlamaServer() {
     .map((entry) => entry.name)
     .filter((name) => name === llamaServerBinaryName || (isLoadableLibrary(name) && !isOtherToolLibrary(name)));
   for (const name of shipped) {
-    const packaged = path.join(llamaTarget, name);
-    fs.copyFileSync(path.join(binDir, name), packaged);
+    const source = path.join(binDir, name);
+    // Under the name dyld will ask for, not the name the build tree used: on
+    // macOS those differ, and the difference is covered there by symlinks that
+    // a plain file copy leaves behind.
+    const packaged = path.join(llamaTarget, process.platform === "darwin" ? machOShippedName(source) : name);
+    fs.copyFileSync(source, packaged);
     if (process.platform !== "win32") fs.chmodSync(packaged, 0o755);
+    if (process.platform === "darwin") relocateMachO(packaged);
   }
   if (!shipped.includes(llamaServerBinaryName)) {
     throw new Error(`llama-server ${pin.tag} built without producing ${llamaServerBinaryName}.`);
@@ -457,6 +462,66 @@ function isLoadableLibrary(name: string): boolean {
 }
 
 /**
+ * The name a macOS library must ship under: the basename of its install name.
+ *
+ * CMake writes versioned dylibs — libllama.0.1.0.dylib — whose recorded
+ * install name is the SONAME, libllama.0.dylib, and bridges the difference
+ * with symlinks in the build tree. Every load command in llama-server names
+ * the SONAME, so that is the filename the package carries: one real file per
+ * library, rather than a symlink chain that the copy, the archive, and
+ * signing would each have to preserve intact.
+ */
+function machOShippedName(file: string): string {
+  const name = path.basename(file);
+  // Executables and dlopen'd .so modules are found by their own names.
+  if (!/\.dylib$/i.test(name)) return name;
+  const output = run("otool", ["-D", file], path.dirname(file), `Reading the install name of ${name}`);
+  const installName = output.trim().split(/\r?\n/).pop()?.trim() ?? "";
+  return installName.startsWith("@rpath/") ? path.basename(installName) : name;
+}
+
+/** Every LC_RPATH recorded in a Mach-O file. */
+function machORpaths(file: string): string[] {
+  const lines = run("otool", ["-l", file], path.dirname(file), `Reading the rpaths of ${path.basename(file)}`)
+    .split(/\r?\n/);
+  const rpaths: string[] = [];
+  lines.forEach((line, index) => {
+    if (!/\bcmd LC_RPATH\b/.test(line)) return;
+    for (const candidate of lines.slice(index + 1, index + 4)) {
+      const match = candidate.match(/^\s*path (.+) \(offset \d+\)$/);
+      if (match) {
+        rpaths.push(match[1]);
+        return;
+      }
+    }
+  });
+  return rpaths;
+}
+
+/**
+ * Points a copied Mach-O file at the libraries beside it, and at nothing else.
+ *
+ * The build tree's binaries carry an LC_RPATH naming the absolute build
+ * directory under .llama-cache. On the machine that built them the path
+ * exists, so the packaged runtime passes every local test — and on any other
+ * machine dyld reports "Library not loaded" and the process dies at spawn,
+ * which the app can only report as a runtime that failed to start. Replacing
+ * the recorded paths with @loader_path makes the package the only place the
+ * runtime ever looks.
+ */
+function relocateMachO(file: string) {
+  const name = path.basename(file);
+  const edits: string[] = [];
+  for (const rpath of new Set(machORpaths(file))) edits.push("-delete_rpath", rpath);
+  edits.push("-add_rpath", "@loader_path");
+  run("install_name_tool", [...edits, file], path.dirname(file), `Relocating ${name}`);
+  // Editing load commands invalidates the code signature, and arm64 macOS
+  // refuses to run an invalidly signed binary even locally. Ad hoc is enough
+  // here; release signing replaces it.
+  run("codesign", ["--force", "--sign", "-", file], path.dirname(file), `Re-signing ${name}`);
+}
+
+/**
  * llama.cpp builds one implementation library per tool — cli, bench,
  * perplexity, quantize — and Umbratic runs only the server. Shipping the rest
  * puts code in the install that nothing can ever call, which is the opposite of
@@ -464,7 +529,9 @@ function isLoadableLibrary(name: string): boolean {
  * a missing import fails at process load, and verify:package runs the binary.
  */
 function isOtherToolLibrary(name: string): boolean {
-  return /^llama-.*-impl\.(?:dll|dylib|so)/i.test(name) && !/^llama-server-impl\./i.test(name);
+  // With or without the "lib" prefix: Windows names these llama-cli-impl.dll,
+  // macOS libllama-cli-impl.dylib.
+  return /^(?:lib)?llama-.*-impl\.(?:dll|dylib|so)/i.test(name) && !/^(?:lib)?llama-server-impl\./i.test(name);
 }
 
 // Single-config generators put the output in bin/; MSVC adds a per-config level.

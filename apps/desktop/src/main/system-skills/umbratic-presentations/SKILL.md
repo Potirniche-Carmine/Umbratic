@@ -10,6 +10,12 @@ the file and checks it. Never write `pptxgenjs`, `python-pptx`, or any other
 library code, and never shell out to PowerPoint or LibreOffice — there is
 nothing to shell out to.
 
+Before each create, read `references/spec.md` with `read_skill`, using this
+skill's id and `resource: "references/spec.md"`. Before each edit, read
+`references/ops.md` the same way. These are skill resources, not workspace
+files. Read the applicable reference completely before constructing the
+spec or ops; examples in this file do not replace that reference.
+
 ## Before you build anything
 
 **A file the user named or attached: `inspect` it first.** The result tells you
@@ -93,7 +99,7 @@ again — at most three rounds, and the spec or the ops must change between them
 The recurring error is `text-overflow`, and the fix is always the same: shorten
 it or split the slide.
 
-Files land in `.umbratic/artifacts/pptx/` unless the user gave a path.
+Files land in `artifacts/pptx/` unless the user gave a path.
 
 Report: the path, `origin` and `editSurface`, how many rounds it took, any
 warning you decided to leave, and every assumption you made. Never paste the

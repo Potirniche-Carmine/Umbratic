@@ -72,6 +72,20 @@
   position: relative;
 }
 
+/* The same scope, stated rather than offered, when there is only one of it.
+   No border and no chevron: a pill that looks pressable but is not is the
+   thing this replaced. */
+.reviewScopeLabel {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  padding: 0 4px;
+  color: var(--faint);
+  font-size: 11.5px;
+  font-weight: 620;
+  letter-spacing: -0.005em;
+}
+
 .reviewScopeMenu {
   position: absolute;
   top: calc(100% + 7px);
@@ -362,10 +376,15 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
 }
 
+/* Sized for its longer label and centred, so switching between "Leave
+   feedback" and "Done" neither re-centres the word nor slides the layout
+   control beside it along the toolbar. */
 .reviewFeedbackModeButton {
   display: inline-flex;
+  min-width: 128px;
   min-height: 28px;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
@@ -419,6 +438,13 @@
   margin: 0 0 15px;
   border-radius: 4px;
 }
+
+.documentReviewTable { overflow-x: auto; }
+.documentReviewTable table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.documentReviewTable th,
+.documentReviewTable td { min-width: 100px; padding: 10px 12px; border: 1px solid var(--line-strong); vertical-align: top; text-align: left; overflow-wrap: break-word; }
+.documentReviewTable th { background: var(--surface-2); font-weight: 600; }
+.documentReviewTable p { font-size: inherit; }
 
 .documentReviewBlock.style-title { margin-bottom: 8px; }
 .documentReviewBlock.style-subtitle { margin-bottom: 32px; }
@@ -528,16 +554,7 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 28%, transparent);
 }
 
-.documentReviewPaper > .inlineReviewComment {
-  position: relative;
-  left: auto;
-  width: 100%;
-  margin: 10px 0 20px;
-  font-family: var(--app-font);
-}
-
 .reviewFeedbackModeButton:disabled {
   opacity: 0.48;
   cursor: not-allowed;
 }
-

@@ -171,6 +171,7 @@ export async function runRunnerTask(
   const task = getTask(taskIdValue);
   let run: RunnerProcess | null = null;
   let runnerFailureDetails: { category?: string; code?: string; detail?: string } = {};
+  let delegatedToWorktree = false;
   let intent = intentPrompt ?? task.prompt;
   try {
     // Sending a prompt is the explicit ask to use the model: load it if it is
@@ -228,7 +229,6 @@ export async function runRunnerTask(
     task.diagnosticLogPath = run.diagnosticLogPath;
     saveTask(task);
 
-    let delegatedToWorktree = false;
     let completed = false;
     let resolveCompletion!: () => void;
     let rejectCompletion!: (error: Error) => void;
@@ -265,7 +265,9 @@ export async function runRunnerTask(
     // preview, capability probe, and attachment staging describe the moment the
     // turn begins, not the moment the user typed.
     const launchQueuedPrompt = (pending: PendingTaskPrompt) => {
-      appendUserMessage(task, pending.prompt, pending.attachments);
+      // A steer already joined the transcript when it was accepted; appending
+      // it again here would show the same message twice.
+      if (!pending.alreadyInTranscript) appendUserMessage(task, pending.prompt, pending.attachments);
       void runnerPromptForTask(task, pending.prompt, pending.attachments,
         selectedForRun.contextLength ?? readContextLengthSetting(), { useDurableContext: true })
         .then((parts) => {
@@ -456,13 +458,38 @@ export async function runRunnerTask(
     // rejected with no awaiter, and the queued message was silently lost.
     // Owning the re-arm here (completed is reset before awaiting again) also
     // closes the race where the release event lands after this line.
-    while (
-      !run.abortController.signal.aborted
-      && taskStillRunning(task)
-      && (!completed || pendingTaskFollowUps.has(task.id))
+    const runProcess = run as RunnerProcess;
+    const drainQueuedTurns = async () => {
+      while (
+        !runProcess.abortController.signal.aborted
+        && taskStillRunning(task)
+        && (!completed || pendingTaskFollowUps.has(task.id))
+      ) {
+        if (completed) armCompletion();
+        await waitForCompletion();
+      }
+    };
+    await drainQueuedTurns();
+    // A steer the runner accepted but never released: the run settled between
+    // acceptance and the single dequeue check at final answer, and nothing
+    // else ever drains the runner's queue — the chat would sit on "Working"
+    // forever. The desktop still holds the prompt (and the user already sees
+    // it in the transcript), so it is dropped from the runner's queue and run
+    // as the next turn from here.
+    for (
+      let leftoverSteer = pendingTaskSteers.get(task.id);
+      leftoverSteer && !run.abortController.signal.aborted && taskStillRunning(task);
+      leftoverSteer = pendingTaskSteers.get(task.id)
     ) {
-      if (completed) armCompletion();
+      pendingTaskSteers.delete(task.id);
+      await runnerRequest<void>(run, `/session/${encodeURIComponent(session.id)}/queue`, {
+        method: "POST",
+        body: { action: "drop", actionId: leftoverSteer.actionId },
+      }).catch(() => undefined);
+      armCompletion();
+      launchQueuedPrompt(leftoverSteer);
       await waitForCompletion();
+      await drainQueuedTurns();
     }
 
     if (delegatedToWorktree || task.state === "awaiting_worktree_approval") {
@@ -490,10 +517,23 @@ export async function runRunnerTask(
     task.state = "review_ready";
     task.reviewPatchHash = reviewPatchHash(reviewFiles);
     saveTask(task);
-    // Between-turn reindex, then insights for exactly this diff, both awaited
-    // so the panel's first render is already ordered. Each degrades to absence
-    // rather than throwing when the indexer is missing, which leaves the panel
-    // on today's path ordering.
+    // The changed files are announced before the indexer runs, not after. A
+    // cold workspace index takes minutes on a first run — Windows especially,
+    // with Defender scanning every read — and holding review.ready behind it
+    // left the composer showing nothing until the review panel was opened by
+    // hand, which takes the direct refresh path. The panel starts on path
+    // order and re-sorts below once insights land.
+    emit({ type: "assistant.done", taskId: task.id });
+    emit({
+      type: "review.ready",
+      taskId: task.id,
+      changedFiles: task.changedFiles,
+      reviewFiles: rendererReviewFiles(reviewFiles),
+      latestTest: task.latestTest,
+    });
+    // Between-turn reindex, then insights for exactly this diff. Each degrades
+    // to absence rather than throwing when the indexer is missing, which
+    // leaves the panel on path ordering.
     await refreshWorkspaceGraph(task.worktreePath);
     const orderedReviewFiles = await prioritizedReviewFiles(
       task.worktreePath,
@@ -501,14 +541,18 @@ export async function runRunnerTask(
       task.reviewPatchHash,
       reviewFiles,
     );
-    emit({ type: "assistant.done", taskId: task.id });
-    emit({
-      type: "review.ready",
-      taskId: task.id,
-      changedFiles: task.changedFiles,
-      reviewFiles: rendererReviewFiles(orderedReviewFiles),
-      latestTest: task.latestTest,
-    });
+    const pathOrder = (files: typeof reviewFiles) => files.map((file) => file.path).join("\n");
+    // Only while the review is still open: a review approved or rejected
+    // during the index run must not be re-announced.
+    if (task.state === "review_ready" && pathOrder(orderedReviewFiles) !== pathOrder(reviewFiles)) {
+      emit({
+        type: "review.ready",
+        taskId: task.id,
+        changedFiles: task.changedFiles,
+        reviewFiles: rendererReviewFiles(orderedReviewFiles),
+        latestTest: task.latestTest,
+      });
+    }
     run.abortController.abort();
     await stream.done.catch(() => undefined);
   } catch (error) {
@@ -520,6 +564,15 @@ export async function runRunnerTask(
     pendingTaskFollowUps.delete(task.id);
     if (run) {
       stopRunnerProcess(run);
+    }
+    // No exit leaves the record on "running": the early returns above (an
+    // external stop with no state change, a run that settled while another
+    // flow flipped nothing) used to do exactly that, and a task stuck on
+    // "running" shows "Working…" until the next app launch repairs it.
+    if (!delegatedToWorktree && taskStillRunning(task)) {
+      task.state = "completed";
+      saveTask(task);
+      emit({ type: "assistant.done", taskId: task.id });
     }
   }
 }

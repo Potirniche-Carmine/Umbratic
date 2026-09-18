@@ -9,7 +9,7 @@ import (
 const validCommand = "serve Qwen/Qwen3-32B --host 127.0.0.1 --port 8001 --served-model-name qwen3-32b --max-model-len 32768 --gpu-memory-utilization 0.45 --kv-cache-dtype fp8"
 
 func validModel() ManagedModel {
-	return ManagedModel{ID: "qwen3-32b", DisplayName: "Qwen 32B", Command: validCommand}
+	return ManagedModel{ID: "qwen3-32b", Command: validCommand}
 }
 
 func TestManagedModelValidation(t *testing.T) {
@@ -24,8 +24,6 @@ func TestManagedModelValidation(t *testing.T) {
 		"slash in id":        func(m *ManagedModel) { m.ID = "org/model" },
 		"empty id":           func(m *ManagedModel) { m.ID = "" },
 		"oversized id":       func(m *ManagedModel) { m.ID = "a" + strings.Repeat("b", 128) },
-		"empty display":      func(m *ManagedModel) { m.DisplayName = "  " },
-		"newline in display": func(m *ManagedModel) { m.DisplayName = "Qwen\n32B" },
 		"empty command":      func(m *ManagedModel) { m.Command = "  " },
 	}
 	for name, mutate := range cases {
@@ -147,7 +145,7 @@ func TestFormatCommandPutsOneFlagPerLine(t *testing.T) {
 	}
 
 	// And what it writes, it can read back.
-	round := ManagedModel{ID: "qwen3-32b", DisplayName: "Q", Command: FormatCommand(facts.Args)}
+	round := ManagedModel{ID: "qwen3-32b", Command: FormatCommand(facts.Args)}
 	if err := round.Validate(); err != nil {
 		t.Fatalf("a formatted command must parse again: %v", err)
 	}
@@ -222,7 +220,7 @@ func TestCommandIsBounded(t *testing.T) {
 func TestManagedFleetRefusesCollisions(t *testing.T) {
 	first := validModel()
 	second := ManagedModel{
-		ID: "small", DisplayName: "Small",
+		ID:      "small",
 		Command: "serve Qwen/Qwen3-4B --port 8002 --served-model-name small",
 	}
 
@@ -237,18 +235,18 @@ func TestManagedFleetRefusesCollisions(t *testing.T) {
 	}
 
 	sharedPort := ManagedModel{
-		ID: "small", DisplayName: "Small",
+		ID:      "small",
 		Command: "serve Qwen/Qwen3-4B --port 8001 --served-model-name small",
 	}
 	if err := ValidateManagedModels([]ManagedModel{first, sharedPort}, 8177, 8080); err == nil {
 		t.Fatal("two models cannot share one port")
 	}
 
-	onConsole := ManagedModel{ID: "c", DisplayName: "C", Command: "serve m --port 8177 --served-model-name c"}
+	onConsole := ManagedModel{ID: "c", Command: "serve m --port 8177 --served-model-name c"}
 	if err := ValidateManagedModels([]ManagedModel{onConsole}, 8177, 8080); err == nil {
 		t.Fatal("a model must not take Console's own port")
 	}
-	onVeil := ManagedModel{ID: "v", DisplayName: "V", Command: "serve m --port 8080 --served-model-name v"}
+	onVeil := ManagedModel{ID: "v", Command: "serve m --port 8080 --served-model-name v"}
 	if err := ValidateManagedModels([]ManagedModel{onVeil}, 8177, 8080); err == nil {
 		t.Fatal("a model must not take Veil's own port")
 	}
@@ -260,8 +258,9 @@ func TestModelsEnvJSONMatchesVeilsContract(t *testing.T) {
 	}
 
 	reasoning := validModel()
+	reasoning.ReasoningEfforts = "off,on"
 	plain := ManagedModel{
-		ID: "small", DisplayName: "Small",
+		ID:      "small",
 		Command: "serve Qwen/Qwen3-4B --port 8002 --served-model-name small --max-model-len 32768",
 	}
 
@@ -280,24 +279,24 @@ func TestModelsEnvJSONMatchesVeilsContract(t *testing.T) {
 	if first["id"] != "qwen3-32b" || first["provider_base_url"] != "http://127.0.0.1:8001/v1" {
 		t.Fatalf("the entry must address the port the command sets: %#v", first)
 	}
-	if first["display"] != "Qwen 32B" || first["context_length"] != float64(32768) {
+	if first["display"] != "qwen3-32b" || first["context_length"] != float64(32768) {
 		t.Fatalf("registry metadata must travel: %#v", first)
 	}
 	// Console does not guess whether a model thinks: the chat-template kwarg
 	// that controls it is named differently per family, so the administrator
 	// sets it in the command and the client may still override per request.
-	if entries[0]["reasoning"] != true || entries[1]["reasoning"] != true {
+	if entries[0]["reasoning"] != true || entries[1]["reasoning"] != false {
 		t.Fatalf("managed models leave the thinking choice to the command and the client: %#v", entries)
 	}
 	// Exactly the five keys Veil's strict parser accepts.
-	if len(first) != 5 {
+	if len(first) != 6 {
 		t.Fatalf("VEIL_MODELS entries carry exactly the contract keys: %#v", first)
 	}
 }
 
 func TestDefaultCommandIsValidForANewModel(t *testing.T) {
 	model := ManagedModel{
-		ID: "new-model", DisplayName: "New model",
+		ID:      "new-model",
 		Command: DefaultCommand("org/weights", "new-model", 8003),
 	}
 	if err := model.Validate(); err != nil {
@@ -306,14 +305,14 @@ func TestDefaultCommandIsValidForANewModel(t *testing.T) {
 	if model.Port() != 8003 {
 		t.Fatalf("the suggested port must reach the command: %d", model.Port())
 	}
-	if !strings.Contains(model.Command, "\n--kv-cache-dtype fp8") {
-		t.Fatalf("fp8 is the default 8-bit KV cache: %q", model.Command)
+	if strings.Contains(model.Command, "--kv-cache-dtype") || strings.Contains(model.Command, "--gpu-memory-utilization") {
+		t.Fatalf("new models must leave precision and allocation to the runtime profile: %q", model.Command)
 	}
 }
 
 func speechModel() ManagedModel {
 	return ManagedModel{
-		ID: "qwen3-asr", DisplayName: "Qwen3 ASR",
+		ID:      "qwen3-asr",
 		Command: "serve Qwen/Qwen3-ASR-1.7B --port 8010 --served-model-name qwen3-asr",
 		Role:    RoleSpeech,
 	}

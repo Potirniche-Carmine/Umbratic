@@ -35,6 +35,21 @@ npm run publish:release
    Signs, notarizes (a few minutes — Apple's queue), smoke-tests the package.
    Output lands in `target/release/desktop/`.
 
+   Device credentials and tokens use Electron's `safeStorage`: SQLite holds
+   encrypted values and macOS Keychain protects the encryption key. macOS may
+   ask for access initially. With persistent authorization, ordinary updates
+   keep access when the app name, bundle ID, and Developer ID team stay the
+   same. A changed signer, reset Keychain, or changed permissions can require
+   authorization again. Mac packaging fails if signing is unavailable.
+
+   While iterating on the installer itself, skip the identity and the queue:
+   ```bash
+   npm run desktop:release -- --unsigned
+   ```
+   The package is ad-hoc signed — it runs on this machine, and publishing
+   refuses it. Ad-hoc builds do not have a stable Keychain identity; use signed
+   builds to test enrollment and access across updates.
+
 4. **Publish.**
    ```bash
    npm run publish:release
@@ -67,8 +82,9 @@ first launch the app looks after its own updates. There is no download page.
 ## Rules
 
 1. **Never change the signing identity casually.** macOS updates need the same
-   Team ID; Windows updates need the same publisher name. Changing either is a
-   coordinated event with a plan for the installed base.
+   Team ID, bundle ID (`ai.umbratic.desktop`), and app name (`Umbratic`) for
+   continued Keychain access; Windows updates need the same publisher name.
+   Changing these is a coordinated event with a plan for the installed base.
 2. **Never re-upload a version's installer with different bytes.** Bump the
    version instead. The script refuses; do not work around it.
 3. **Never build from an untagged or dirty tree.** `v0.0.4` must be the same
@@ -104,7 +120,7 @@ the signature check, and discards it.
 | `apps/desktop/src/main/appUpdates.ts` | The in-app side. Checks a few minutes after launch and every six hours; no on-demand check exists. Settings → About holds the one switch. |
 | `infrastructure/downloads-worker/` | The feed. The only route to the bucket. See [../setup/update-feed.md](../setup/update-feed.md). |
 | `scripts/publish-release.ts` | Uploads installers first, the channel file last, so the feed never names a file that is not there. |
-| `~/.umbratic/release.env` | The machine's identity — notarization key, signing account, R2 credentials. |
+| `artifacts/release-work/release.env` in the repo on Mac; `~/.umbratic/release.env` elsewhere | The machine's identity — notarization key, signing account, R2 credentials. |
 
 Windows x64 and arm64 are separate builds with their own channel files, because
 their sidecars are compiled for the machine that builds them. Each is published

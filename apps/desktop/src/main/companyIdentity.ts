@@ -1,3 +1,4 @@
+import { certificateTransport, companyTLS, enrollmentDetails } from "./companyTrust";
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 
@@ -27,6 +28,9 @@ type SessionCache = {
 
 let sessionCache: SessionCache | null = null;
 let sessionDisconnected = false;
+let sessionInFlight: Promise<string> | null = null;
+let sessionController: AbortController | null = null;
+let sessionGeneration = 0;
 
 function route(baseUrl: string, path: string): string {
   const base = new URL(baseUrl);
@@ -82,11 +86,17 @@ export async function enrollCompanyDevice(
 ): Promise<CompanyDeviceCredential> {
   sessionDisconnected = false;
   const baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
-  const enrollmentCode = input.enrollmentCode.trim();
+  const details = enrollmentDetails(baseUrl, input.enrollmentCode.trim());
+  const enrollmentCode = details.code;
+  transport = { ...transport, mtls: certificateTransport(details.ca, transport.mtls) };
   if (!enrollmentCode.startsWith("umbr_") || enrollmentCode.length > 512) {
     throw new Error("Enter a valid Enrollment code.");
   }
   assertCompanyCredentialStorageAvailable();
+  sessionGeneration += 1;
+  sessionController?.abort();
+  sessionInFlight = null;
+  sessionCache = null;
   const pair = crypto.generateKeyPairSync("ed25519");
   const publicJwk = pair.publicKey.export({ format: "jwk" });
   if (typeof publicJwk.x !== "string") {
@@ -106,6 +116,7 @@ export async function enrollCompanyDevice(
     throw new Error("Veil returned invalid enrollment details.");
   }
   const credential: CompanyDeviceCredential = {
+    caPem: details.ca,
     baseUrl,
     orgUid,
     orgName,
@@ -128,13 +139,39 @@ export async function ensureCompanySession(transport: TransportOptions = {}): Pr
   if (sessionCache && sessionCache.expiresAt > Date.now() + 90_000) {
     return sessionCache.token;
   }
+  // Veil keeps one challenge per device. All concurrent status/model reads
+  // must share the exchange or they invalidate each other's challenges.
+  if (sessionInFlight) return sessionInFlight;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  transport.signal?.addEventListener("abort", abort, { once: true });
+  if (transport.signal?.aborted) controller.abort();
+  sessionController = controller;
+  const pending = createCompanySession({ ...transport, signal: controller.signal }, sessionGeneration);
+  sessionInFlight = pending;
+  try {
+    return await pending;
+  } finally {
+    transport.signal?.removeEventListener("abort", abort);
+    if (sessionInFlight === pending) {
+      sessionInFlight = null;
+      sessionController = null;
+    }
+  }
+}
+
+async function createCompanySession(transport: TransportOptions, generation: number): Promise<string> {
   const credential = readCompanyDeviceCredential();
   if (!credential) {
     throw new Error("This device is not enrolled with a company server.");
   }
+  transport = { ...transport, mtls: companyTLS(credential.baseUrl, transport.mtls) };
   const challenge = await post(credential.baseUrl, "/api/session/challenge", {
     device_uid: credential.deviceUid,
   }, transport);
+  if (generation !== sessionGeneration || transport.signal?.aborted) {
+    throw new Error("The company connection changed. Try again.");
+  }
   const challengeUid = typeof challenge.challenge_uid === "string" ? challenge.challenge_uid : "";
   const challengeText = typeof challenge.challenge === "string" ? challenge.challenge : "";
   if (!challengeUid.startsWith("chal_") || !challengeText.startsWith("umbratic-device-session-v1.")) {
@@ -153,14 +190,17 @@ export async function ensureCompanySession(transport: TransportOptions = {}): Pr
   const token = typeof session.session_token === "string" ? session.session_token : "";
   const orgName = typeof session.org_name === "string" ? session.org_name.trim() : "";
   const expiresAt = typeof session.expires_at === "string" ? Date.parse(session.expires_at) : Number.NaN;
+  if (generation !== sessionGeneration || transport.signal?.aborted) {
+    throw new Error("The company connection changed. Try again.");
+  }
+  if (!token.startsWith("umbs_") || !orgName || !Number.isFinite(expiresAt)) {
+    throw new Error("Veil returned an invalid company session.");
+  }
   // Veil mints this alongside the session; the update feed accepts it for
   // thirty days. Collecting it here is the whole of the app's part in it —
   // nothing asks the user for a key, and a company that stops running Veil
   // simply stops receiving new ones.
   if (typeof session.update_token === "string") writeUpdateFeedTokenSetting(session.update_token);
-  if (!token.startsWith("umbs_") || !orgName || !Number.isFinite(expiresAt)) {
-    throw new Error("Veil returned an invalid company session.");
-  }
   if (credential.orgName !== orgName) {
     writeCompanyDeviceCredential({ ...credential, orgName });
   }
@@ -186,14 +226,18 @@ export function currentCompanySessionToken(): string {
 export async function disconnectCompanySession(transport: TransportOptions = {}): Promise<void> {
   const credential = readCompanyDeviceCredential();
   const token = currentCompanySessionToken();
+  sessionGeneration += 1;
+  sessionCache = null;
+  sessionDisconnected = true;
+  sessionController?.abort();
+  // Let an old exchange finish before a reconnect can issue a new challenge.
+  await sessionInFlight?.catch(() => undefined);
   if (credential && token) {
     await postProviderJson(route(credential.baseUrl, "/api/session/logout"), {}, {
       ...transport,
       headers: { ...(transport.headers ?? {}), Authorization: `Bearer ${token}` },
     }).catch(() => undefined);
   }
-  sessionCache = null;
-  sessionDisconnected = true;
 }
 
 export async function disconnectCompanyDevice(transport: TransportOptions = {}): Promise<void> {

@@ -17,23 +17,9 @@
 </nav>
 {{end}}
 
-{{/*
-  The page's one banner slot.
-
-  Every banner used to be a fixed-position card at the same coordinates, so two
-  of them landed on top of each other and rendered as one unreadable smear of
-  overlapping text — and none of them ever went away. Both are fixed here: this
-  is a stack, and everything in it retires itself after five seconds.
-
-  What reaches it is also much less. Every successful save used to announce
-  itself, which is what there was so much of; a form that comes back showing
-  what it saved has already said so, and those are gone. What is left is errors
-  and the one answer a button exists to give: "Test connection" has no other
-  way to report that the connection worked.
-*/}}
 {{define "banners"}}
 <div class="banner-stack" aria-live="assertive">
-  {{if .Error}}<p class="banner error" role="alert" data-dismiss-after="5000">{{.Error}}</p>{{end}}
-  {{if .Notice}}<p class="banner notice" role="status" data-dismiss-after="5000">{{.Notice}}</p>{{end}}
+  {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
+  {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
 </div>
 {{end}}

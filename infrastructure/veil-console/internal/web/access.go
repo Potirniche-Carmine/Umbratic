@@ -112,9 +112,14 @@ func (s *Server) accessCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.store.Audit(r.Context(), "access.enrollment_code.issue", "success", time.Now())
+	enrollment, err := s.enrollmentMaterial(code.EnrollmentCode)
+	if err != nil {
+		s.renderAccessMutationError(w, r, http.StatusServiceUnavailable, "The enrollment certificate could not be read.")
+		return
+	}
 	s.render(w, "enrollment-code-created.html", pageData{
 		Title: "Enrollment code", CSRF: csrfCookie(r),
-		EnrollmentCode: code.EnrollmentCode, EnrollmentExpires: formatExactTime(code.ExpiresAt),
+		EnrollmentCode: enrollment, EnrollmentExpires: formatExactTime(code.ExpiresAt),
 	})
 }
 
@@ -142,9 +147,14 @@ func (s *Server) accessIssueCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.store.Audit(r.Context(), "access.enrollment_code.issue", "success", time.Now())
+	enrollment, err := s.enrollmentMaterial(code.EnrollmentCode)
+	if err != nil {
+		s.renderAccessMutationError(w, r, http.StatusServiceUnavailable, "The enrollment certificate could not be read.")
+		return
+	}
 	s.render(w, "enrollment-code-created.html", pageData{
 		Title: "Enrollment code", CSRF: csrfCookie(r),
-		EnrollmentCode: code.EnrollmentCode, EnrollmentExpires: formatExactTime(code.ExpiresAt),
+		EnrollmentCode: enrollment, EnrollmentExpires: formatExactTime(code.ExpiresAt),
 	})
 }
 

@@ -382,6 +382,9 @@
 
   .reviewSidebar { transform: none !important; }
 
+  /* The dock appears in place; only its travel is given up. */
+  .reviewFeedbackDock { animation-name: none !important; }
+
   /* Reduced motion means nothing should travel, not that a message should go
      before it can be read. The cap above is right for an entrance, whose
      duration is only how fast it moves; this confirmation's duration is how

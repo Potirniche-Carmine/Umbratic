@@ -5,6 +5,7 @@ asar: true
 asarUnpack:
   - "**/*.node"
 npmRebuild: false
+afterPack: scripts/after-pack.cjs
 electronDist: ../../node_modules/electron/dist
 directories:
   output: ../../target/release/desktop
@@ -40,9 +41,11 @@ publish:
 mac:
   icon: assets/icons/icon.icns
   category: public.app-category.developer-tools
-  # Signed with whatever Developer ID Application identity the keychain holds,
-  # and notarized when the APPLE_* variables from ~/.umbratic/release.env are
-  # present; without either the build is unsigned and only for looking at.
+  # Keep appId, productName, and the Developer ID team stable across releases
+  # so Keychain recognizes updates as the same app. Only --unsigned local
+  # packages may skip signing. APPLE_* variables configure notarization.
+  forceCodeSigning: true
+  type: distribution
   # The hardened runtime is on by default. The entitlements add the microphone
   # to electron-builder's defaults, for the app and everything inside it.
   entitlements: assets/entitlements.mac.plist
@@ -57,8 +60,30 @@ mac:
       arch: [arm64]
     - target: zip
       arch: [arm64]
+# The drag-to-install window: the same dark surface as the app icon and the
+# NSIS wizard, with the drop points pinned where the background's arrow
+# expects them. The background is generated — see generate:dmg-background.
 dmg:
   icon: assets/icons/icon.icns
+  background: assets/dmg/background.tiff
+  window:
+    width: 540
+    height: 380
+  iconSize: 100
+  # Finder paints labels black over any background picture, invisible on this
+  # surface, so the background carries white wordmarks instead and the real
+  # labels are kept at the smallest size Finder allows.
+  iconTextSize: 10
+  contents:
+    - { x: 140, y: 190, type: file }
+    - { x: 400, y: 190, type: link, path: /Applications }
+    # The two support files Finder shows to anyone browsing with hidden files
+    # on, parked outside the 540pt window so the layout stays clean either
+    # way. dmgbuild places them itself but offers no way to position them, so
+    # each is re-declared as a copy of the identical bytes — the copy lands on
+    # the file dmgbuild already wrote, and the position comes along with it.
+    - { x: 700, y: 130, type: file, path: assets/dmg/background.tiff, name: .background.tiff }
+    - { x: 700, y: 290, type: file, path: assets/icons/icon.icns, name: .VolumeIcon.icns }
 win:
   icon: assets/icons/icon.ico
   # x64 and arm64 are separate builds carrying differently-compiled sidecars,

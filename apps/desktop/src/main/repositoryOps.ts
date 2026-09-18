@@ -79,6 +79,23 @@ export async function pickRepository(): Promise<{ canceled: true } | { canceled:
   return { canceled: false, repository: await inspectRepository(result.filePaths[0]) };
 }
 
+/**
+ * Where the attach dialog opens when the chat has no folder.
+ *
+ * app.getPath("documents") does not return a fallback — it throws when
+ * Windows cannot resolve the known folder, which OneDrive folder redirection
+ * and roaming profiles make a normal condition, and the throw would surface
+ * as "Failed to get 'documents' path" before the dialog ever opened. The home
+ * directory always resolves.
+ */
+function documentsDirectoryOrHome(): string {
+  try {
+    return app.getPath("documents") || os.homedir();
+  } catch {
+    return os.homedir();
+  }
+}
+
 export async function pickAttachmentFiles(input: unknown): Promise<{ canceled: true } | { canceled: false; files: ChatAttachment[] }> {
   if (!isRecord(input)) {
     throw new Error("Invalid attachment input.");
@@ -88,7 +105,7 @@ export async function pickAttachmentFiles(input: unknown): Promise<{ canceled: t
   const repository = repositoryId ? readProjects().find((project) => project.id === repositoryId) : undefined;
   const defaultPath = repository?.rootPath && fs.existsSync(repository.rootPath)
     ? path.resolve(repository.rootPath)
-    : app.getPath("documents") || os.homedir();
+    : documentsDirectoryOrHome();
   const options: OpenDialogOptions = {
     title: "Attach Files",
     defaultPath,

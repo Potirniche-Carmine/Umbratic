@@ -44,7 +44,7 @@ pub(crate) fn chat_request_body(
             .provider
             .thinking
             .as_deref()
-            .filter(|value| *value == "on" || *value == "off")
+            .filter(|value| crate::config::valid_reasoning_level(value))
     {
         object.insert("thinking".into(), Value::String(thinking.to_owned()));
     }

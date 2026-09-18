@@ -56,6 +56,8 @@ export type PendingTaskPrompt = {
   actionId: string;
   prompt: string;
   attachments: ChatAttachment[];
+  /** Set when the message joined the transcript at acceptance (steers do), so launching it later must not append it again. */
+  alreadyInTranscript?: boolean;
 };
 export type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }

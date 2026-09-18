@@ -15,13 +15,17 @@ One token per machine, so either can be revoked alone.
 
 ## 2. The env file (both machines)
 
+From the repository root on Mac:
+
 ```bash
-mkdir -p ~/.umbratic && chmod 700 ~/.umbratic
-cp docs/release.env.example ~/.umbratic/release.env
-chmod 600 ~/.umbratic/release.env
+release_dir="$PWD/artifacts/release-work"
+mkdir -p "$release_dir"
+chmod 700 "$release_dir"
+cp docs/release.env.example "$release_dir/release.env"
+chmod 600 "$release_dir/release.env"
 ```
 
-On Windows the path is `%USERPROFILE%\.umbratic\release.env`.
+On Windows the path is `%USERPROFILE%\.umbratic\release.env`; Linux uses `~/.umbratic/release.env`.
 
 Fill in the R2 values now. Signing values come from step 3 or 4.
 
@@ -50,7 +54,7 @@ apps signed with the old one.
 1. [App Store Connect](https://appstoreconnect.apple.com) → Users and Access →
    **Integrations** → *App Store Connect API* → *Team Keys*.
 2. **Generate API Key**, role **Developer**.
-3. Download the `.p8` (shown once) into `~/.umbratic/`.
+3. Download the `.p8` (shown once) into the repository's ignored `artifacts/release-work/` directory.
 4. Note the **Key ID** and the **Issuer ID** from the top of the page.
 5. Put all three in `release.env`: `APPLE_API_KEY` (the path),
    `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`.

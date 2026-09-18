@@ -102,8 +102,10 @@ test("after tools, live prose streams as the answer from its first token", () =>
     { type: "command.finished", taskId: "task-1", id: "edit-1", exitCode: 0, at: "2026-01-01T00:00:04.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "The endpoint is live at `/health`.", at: "2026-01-01T00:00:05.000Z" },
   ];
-  // The answer is a message below the block from the first token, and the
-  // block is done: its elapsed window closed when the prose began.
+  // The answer streams as a message below the block from its first token, and
+  // that token finishes the block: the run stopped working and started
+  // talking. If more work follows, it opens a new block after this passage —
+  // a finished block never reopens, so finishing it here has no stutter.
   const live = JSON.parse(JSON.stringify(composerTimelineFromEvents(liveEvents, undefined, "running")));
   assert.deepEqual(live.map((item) => item.type), ["user", "activity", "assistant"]);
   assert.equal(live[1].finished, true);
@@ -128,7 +130,7 @@ test("after tools, live prose streams as the answer from its first token", () =>
   assert.equal(settled[2].final, true);
 });
 
-test("a finished Working block stays open for the tuck delay, then closes", () => {
+test("blocks are collapsed by default and stay open once opened by hand", () => {
   const workingEvents = [
     { type: "user.message", taskId: "task-1", text: "tour", at: "2026-01-01T00:00:00.000Z" },
     {
@@ -144,34 +146,33 @@ test("a finished Working block stays open for the tuck delay, then closes", () =
     { type: "command.finished", taskId: "task-1", id: "ls-1", exitCode: 0, at: "2026-01-01T00:00:02.000Z" },
   ];
   const working = JSON.parse(JSON.stringify(composerTimelineFromEvents(workingEvents, undefined, "running")));
-  const answering = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+  const answeringEvents = [
     ...workingEvents,
     { type: "assistant.delta", taskId: "task-1", text: "It is a static site.", at: "2026-01-01T00:00:03.000Z" },
-  ], undefined, "running")));
+  ];
+  const answering = JSON.parse(JSON.stringify(composerTimelineFromEvents(answeringEvents, undefined, "running")));
   assert.equal(working[1].finished, false);
+  // Prose finishes the block it follows; were more work to come, it would
+  // open a new block after the passage rather than reopening this one.
   assert.equal(answering[1].finished, true);
+  const settled = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    ...answeringEvents,
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:04.000Z" },
+  ], undefined, "completed")));
+  assert.equal(settled[1].finished, true);
 
   const { reconcileActivityDisclosureState } = loadTypeScriptModule(
     new URL("../src/renderer/composerActivity.ts", import.meta.url),
   );
-  const liveDisclosure = reconcileActivityDisclosureState(new Set(), working, "task-1", new Set());
-  assert.deepEqual([...liveDisclosure.expandedIds], [working[1].id]);
-  // The block finished when the answer began. The tuck delay holds it open a
-  // beat so the collapse is not part of the same burst as the first tokens.
-  const holdingDisclosure = reconcileActivityDisclosureState(
-    liveDisclosure.expandedIds,
-    answering,
-    "task-1",
-    liveDisclosure.autoOpenedKeys,
-    true,
-  );
-  assert.deepEqual([...holdingDisclosure.expandedIds], [answering[1].id]);
-  const tuckedDisclosure = reconcileActivityDisclosureState(
-    holdingDisclosure.expandedIds,
-    answering,
-    "task-1",
-    holdingDisclosure.autoOpenedKeys,
-    false,
-  );
-  assert.deepEqual([...tuckedDisclosure.expandedIds], []);
+  // Collapsed by default, live or not: the header row summarizes the work,
+  // and the log opens only by hand — so the transcript's shape never changes
+  // under the reader.
+  const liveDisclosure = reconcileActivityDisclosureState(new Set(), working);
+  assert.deepEqual([...liveDisclosure], []);
+  // Opened by hand, it stays open — settling does not take the choice back.
+  const openedByHand = reconcileActivityDisclosureState(new Set([working[1].id]), settled);
+  assert.deepEqual([...openedByHand], [settled[1].id]);
+  // State for a block that no longer exists is dropped.
+  const pruned = reconcileActivityDisclosureState(new Set(["activity-99"]), settled);
+  assert.deepEqual([...pruned], []);
 });

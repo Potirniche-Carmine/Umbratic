@@ -219,6 +219,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleModels(w, r)
 		return
 	}
+	if s.cfg.DefaultModel == "" && needsChatModel(r.URL.Path) {
+		writeCodedError(w, http.StatusServiceUnavailable, "model_not_configured", "Add and start a chat model in Console.")
+		return
+	}
 	if r.URL.Path == "/api/model/context" {
 		if r.Method != http.MethodGet {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -711,6 +715,10 @@ func (s *Server) handleModelContext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.DefaultModel == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "state": "model_not_configured", "features": Features(false, false, s.cfg.SpeechEnabled(), s.webSearchAvailable())})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
 	defer cancel()
 

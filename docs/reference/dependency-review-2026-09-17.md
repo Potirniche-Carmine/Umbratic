@@ -1,16 +1,17 @@
-# Dependency reconciliation — 2026-09-17
+# Dependency reconciliation — updated 2026-09-18
 
-Reviewed all three open Dependabot PRs against `main` at `27f7d1d` and
-combined their changes with the additional fixes found by current dependency
-scanners. These are dependency-only changes; no application behavior or test
-gate is changed.
+Reconciled the three Dependabot PRs and additional scanner findings against
+`release/v0.0.2` at `48611f7`. The initial review used `main`; PR #95 targets
+the release branch, and its conflicts are resolved. Release version 0.0.2,
+release tooling, and existing futures 0.3.34 updates are preserved. These are
+dependency-only changes; no application behavior or test gate is changed.
 
 ## Dependabot updates
 
 | PR | Dependency | Update | Review |
 | --- | --- | --- | --- |
-| [#91](https://github.com/UmbraticAI/Umbratic/pull/91) | uuid | 1.24.0 → 1.26.0 | Adds serialization and UUIDv7 precision features. Existing UUIDv4 usage needs no adaptation. |
-| [#92](https://github.com/UmbraticAI/Umbratic/pull/92) | rust_xlsxwriter | 0.98.1 → 0.99.0 | Includes truncated PNG/JPEG panic and BMP height overflow fixes. Renames `TableNameReused` to `NameReused`; the application does not match that variant. Existing workbook tests exercise defined names and round trips. |
+| [#91](https://github.com/UmbraticAI/Umbratic/pull/91) | uuid | 1.25.0 → 1.26.0 | Adds serialization and UUIDv7 precision features. Existing UUIDv4 usage needs no adaptation. |
+| [#92](https://github.com/UmbraticAI/Umbratic/pull/92) | rust_xlsxwriter | 0.98.2 → 0.99.0 | The release already includes the truncated PNG/JPEG panic and BMP height overflow fixes from 0.98.2. Renames `TableNameReused` to `NameReused`; the application does not match that variant. Existing workbook tests exercise defined names and round trips. |
 | [#93](https://github.com/UmbraticAI/Umbratic/pull/93) | tree-sitter | 0.26.11 → 0.26.13 | Parser recovery and query correctness fixes. The C build script is byte-for-byte unchanged. |
 
 These PRs are version updates, not evidence that all dependency security
@@ -21,9 +22,9 @@ Dependabot security alerts are disabled for this repository.
 
 | Dependency | Update | Finding |
 | --- | --- | --- |
-| fast-uri | 3.1.5 → 3.1.6 | Four high-severity host confusion / SSRF advisories: GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp. |
+| fast-uri | 3.1.6 retained from release | Four high-severity host confusion / SSRF advisories: GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp. |
 | js-yaml | 4.3.1 → 4.3.2 | [GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh): CPU denial of service through empty merge sources. |
-| @xmldom/xmldom (plist dependency) | 0.8.14 → 0.8.15 | Eight advisories affecting XML validation, injection, and resource consumption. The application's direct 0.9.12 copy was already patched and remains unchanged. |
+| @xmldom/xmldom (plist dependency) | 0.8.15 retained from release | Eight advisories affecting XML validation, injection, and resource consumption. The application's direct 0.9.12 copy was already patched and remains unchanged. |
 | rustls | 0.23.43 → 0.23.45 | [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285): TLS 1.3 handshake encryption-level validation. The runner manifest now requires the fixed minimum. |
 | rustls-webpki | 0.103.13 → 0.103.15 | Updated with rustls by Cargo's dependency resolver. |
 | chacha20 | 0.10.1 → 0.10.2 | Removes the yanked release flagged by `cargo audit --deny warnings`. |
@@ -33,7 +34,7 @@ Dependabot security alerts are disabled for this repository.
 
 - No npm packages or Cargo dependency edges were added or removed. Go changes
   only `golang.org/x/crypto`; `go mod verify` passes.
-- The three changed npm packages have no lifecycle scripts or platform/native
+- The changed js-yaml package has no lifecycle scripts or platform/native
   constraints. Existing native and lifecycle allowlists remain unchanged.
 - Of the six changed Rust crates, only tree-sitter and rustls have build
   scripts. Both scripts are unchanged from their previous versions; their
@@ -61,19 +62,24 @@ exist or an audit of the separately vendored model runtime.
 
 ## Validation
 
+Security audit rerun against the reconciled release branch:
+
 - `npm run supply-chain:check`: passed.
 - `npm run supply-chain:audit`: passed, with the module-only caveat above.
-- `npm audit --audit-level=low`: passed, zero vulnerabilities.
-- Console `go mod verify`, `go vet ./...`, and `go test -race ./...`: passed.
-- `npm run test:all`: stopped at the pre-existing source-size gate:
-  `apps/desktop/src/renderer/main.tsx` has 4,895 lines against a 4,873 baseline.
-  The file is unchanged and has the same 4,895 lines in the base commit.
-  Cargo formatting, Clippy, Go vet, and both Go race suites passed before
-  that gate. All remaining test/build steps were run separately.
-- PDF, code-index, artifacts, and runner unit/integration suites: passed.
-- Desktop release compilation, TypeScript checks, native tests, and production
-  build: passed. The first desktop unit run failed at two test-file loads
-  (`main-capabilities` and `main-local-veil`); both passed individually, and
-  the complete unchanged unit-suite rerun passed all 565 tests. The initial
-  failure was not reproduced, so its cause remains unconfirmed.
-- Veil and Console regular Go test suites: passed.
+- npm install/audit reports zero vulnerabilities; 314 signatures and 61
+  attestations verified.
+
+- Cargo formatting, workspace Clippy, and Go vet for both services passed.
+- The production Rust workspace compiled successfully with `--locked --release`.
+  Main-process TypeScript compilation also passed when invoked directly.
+  The Vite build stalled and was stopped; the full desktop build is incomplete.
+- `npm run test:all` was attempted on the reconciled release branch. Go race
+  test executables stalled before their entry points. Separately running the
+  remaining suite passed the 16 PDF library tests but stalled at PDF CLI
+  process startup. macOS `sample` showed both `veil.test` and `umbratic-pdf`
+  stopped in `_dyld_start`, with no application frames. The stalled process
+  trees were terminated; the release test rerun is incomplete.
+- The unchanged release source-size gate also fails: renderer/main.tsx has
+  5,040 lines against its 4,873-line baseline, identical to the release base.
+- Earlier tests on the main-based dependency branch passed after the documented
+  desktop rerun, but those results do not establish a passing release suite.

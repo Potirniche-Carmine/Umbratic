@@ -9,6 +9,7 @@ export type StoredProtectedString = {
 };
 
 type StoredCompanyDeviceCredential = {
+  caPem?: string;
   baseUrl: string;
   orgUid: string;
   orgName: string;
@@ -59,6 +60,7 @@ export function decodeCompanyDeviceCredential(value: unknown): CompanyDeviceCred
   const privateKeyPkcs8 = readProtectedString(value.privateKeyPkcs8);
   if (!privateKeyPkcs8) return null;
   return {
+    caPem: typeof value.caPem === "string" ? value.caPem : undefined,
     baseUrl: value.baseUrl as string,
     orgUid: value.orgUid as string,
     orgName: value.orgName as string,
@@ -72,6 +74,7 @@ export function decodeCompanyDeviceCredential(value: unknown): CompanyDeviceCred
 
 export function encodeCompanyDeviceCredential(input: CompanyDeviceCredential): StoredCompanyDeviceCredential {
   return {
+    caPem: input.caPem,
     baseUrl: input.baseUrl,
     orgUid: input.orgUid,
     orgName: input.orgName,

@@ -5,7 +5,6 @@ export type ReviewLineSelection = {
   hunkId: string;
   side: DiffSide;
   lines: number[];
-  rowId: string;
 };
 
 function DiffCode({ cell }: { cell: DiffCell }) {
@@ -73,21 +72,20 @@ function DiffRowComponent({
   row,
   selection,
   commenting,
-  newSideOnly,
   onSelect,
 }: {
   row: SideBySideRow;
   selection: ReviewLineSelection | null;
   commenting: boolean;
-  newSideOnly: boolean;
   onSelect(event: React.MouseEvent | React.KeyboardEvent, cell: DiffCell, row: SideBySideRow): void;
 }) {
   const isSelected = (cell: DiffCell) => !!selection && selection.hunkId === row.hunkId && selection.side === cell.side && cell.line !== null && selection.lines.includes(cell.line);
-  // Side by side shows both files, but feedback is about the one that exists
-  // now: a comment on a line the change deleted has nothing left to attach to.
-  // Unified has no new-side copy of a deletion, so there it stays selectable.
-  const canSelect = (cell: DiffCell) =>
-    cell.line !== null && cell.origin !== "empty" && (!newSideOnly || cell.side === "new");
+  // Any real line on either side, in both layouts. Side by side used to accept
+  // the new side only, on the grounds that a deleted line has nothing left to
+  // attach to — but unified accepted those same deletions, so the rule only
+  // ever made half of one layout swallow clicks in silence. Nothing about the
+  // armed mode said which half, which is what made feedback feel broken.
+  const canSelect = (cell: DiffCell) => cell.line !== null && cell.origin !== "empty";
   return (
     <div className={`reviewDiffRow kind-${row.kind}`} data-row-id={row.id}>
       <DiffCellView cell={row.left} selectable={canSelect(row.left)} selected={isSelected(row.left)} commenting={commenting} onSelect={(event, cell) => onSelect(event, cell, row)} />
@@ -107,7 +105,6 @@ function cellIsSelected(selection: ReviewLineSelection | null, row: SideBySideRo
 export const DiffRow = React.memo(DiffRowComponent, (previous, next) => (
   previous.row === next.row
   && previous.commenting === next.commenting
-  && previous.newSideOnly === next.newSideOnly
   && previous.onSelect === next.onSelect
   && cellIsSelected(previous.selection, previous.row, previous.row.left) === cellIsSelected(next.selection, next.row, next.row.left)
   && cellIsSelected(previous.selection, previous.row, previous.row.right) === cellIsSelected(next.selection, next.row, next.row.right)

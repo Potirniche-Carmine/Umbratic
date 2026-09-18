@@ -28,7 +28,7 @@ import type {
   UserNotes,
   WorkspaceMode,
 } from "../shared/desktopApi";
-import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
+import { DEFAULT_REASONING_EFFORT, isReasoningEffort, resolveReasoningEffort } from "../shared/desktopApi";
 import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
 import {
   attachmentDetail,
@@ -175,6 +175,7 @@ import { ConnectionSettingsPanel, useConnectionSettings } from "./ConnectionSett
 import { AppearanceSettingsPanel } from "./AppearanceSettings";
 import { VoiceSettings } from "./VoiceSettings";
 import { SettingsNav, type SettingsTab } from "./SettingsNav";
+import { GeneralSettingsPanel } from "./GeneralSettings";
 import { TelemetrySettingsPanel } from "./TelemetrySettings";
 import { RemoteChatBadge, RemoteHostPicker } from "./RemoteControls";
 import { RemoteSettingsPanel, useRemoteSettings } from "./RemoteSettings";
@@ -195,7 +196,6 @@ import {
   AssistantAnswerContent,
   MarkdownContent,
 } from "./markdownContent";
-import { useActivityTuckDelay } from "./activityTuck";
 import { WorkingBlock } from "./workingBlock";
 import { filterSkillsBySource, skillPreviewMarkdown } from "./skillDisplay";
 import { reviewCloseSpring, reviewOpenSpring, reviewSpringStep, type ReviewSpring } from "./reviewSpring";
@@ -255,7 +255,7 @@ const defaultStartupSettings: DesktopStartupSettings = {
   harnessProfile: defaultHarnessProfileId,
   contextLength: DEFAULT_CONTEXT_LENGTH,
   reasoningEffort: DEFAULT_REASONING_EFFORT,
-  showThinking: false, webTools: false,
+  showThinking: true, sendOnEnter: true, webTools: false,
 };
 const initialPrompt = "";
 const emptyReviewFiles: ReviewFile[] = [];
@@ -298,6 +298,11 @@ const reviewDefaultWidth = 440;
 const reviewOpenWidthRatio = 0.65;
 const reviewMaxWidthRatio = 0.95;
 const sidebarMaxRatio = 0.28;
+/// Every control that opens the review panel. A pointerdown on one of these is
+/// not a click away from the panel: the button's own click lands after the
+/// pointerdown, so closing here would only make it reopen what had just
+/// started sliding out.
+const reviewOpeningControls = ".composerReviewToggle, .reviewSummaryCard, .documentResponseLink, .reviewReferenceToken";
 
 function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const initialHarnessProfile = isHarnessProfileId(startupSettings.harnessProfile) ? startupSettings.harnessProfile : defaultHarnessProfileId;
@@ -342,7 +347,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     previewEnvironment ? new Set(previewEnvironment.reviewFiles.map((file) => file.path)) : new Set(),
   );
   const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set());
-  const autoOpenedActivityIdsRef = useRef<Set<string>>(new Set());
   const [expandedActivityToolIds, setExpandedActivityToolIds] = useState<Set<string>>(() => new Set());
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -365,14 +369,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [updateReadyVersion, setUpdateReadyVersion] = useState<string | null>(null);
   // The dictation offer, raised by pressing a microphone that is not set up.
   const [dictationSetupOffer, setDictationSetupOffer] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [contextLength, setContextLength] = useState(initialContextLength);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
     isReasoningEffort(startupSettings.reasoningEffort) ? startupSettings.reasoningEffort : DEFAULT_REASONING_EFFORT,
   );
-  const [showThinking, setShowThinking] = useState(startupSettings.showThinking === true);
+  const [showThinking, setShowThinking] = useState(startupSettings.showThinking !== false);
+  const [sendOnEnter, setSendOnEnter] = useState(startupSettings.sendOnEnter !== false);
+  const [launchAtLogin, setLaunchAtLogin] = useState<{ enabled: boolean; available: boolean }>({ enabled: false, available: false });
+  useEffect(() => {
+    let current = true;
+    void api.getLaunchAtLogin().then(
+      (status) => { if (current) setLaunchAtLogin(status); },
+      () => undefined,
+    );
+    return () => { current = false; };
+  }, [api]);
   const [harnessDraftContextLength, setHarnessDraftContextLength] = useState(initialContextLength);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
   const [harnessSaving, setHarnessSaving] = useState(false);
@@ -500,6 +514,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // rebuilt on every chat that arrives.
   const chatJumpTargetsRef = useRef<ChatRecord[]>([]);
   const shortcutsBlockedRef = useRef(false);
+  const settingsToggleAllowedRef = useRef(false);
   const visibleTaskIdRef = useRef<string | null>(previewEnvironment?.task.id ?? null);
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
 
@@ -583,6 +598,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // direction on how hard to think, which is what keeps the section out of the
   // menu rather than showing a choice the chat template would ignore.
   const modelReasoningEfforts = selectedModel?.capabilities?.reasoningEfforts ?? [];
+  // The level this model is actually running at. The stored effort is one
+  // setting across every model while each model grades thinking its own way,
+  // so the stored level is often not one this model reads — and a menu that
+  // checked the stored level checked nothing at all, leaving the composer with
+  // no answer to "is this thing thinking". Resolved through the same helper
+  // the runtime starts the model with, so the checked row is the truth.
+  const activeReasoningEffort = resolveReasoningEffort(modelReasoningEfforts, reasoningEffort) ?? reasoningEffort;
   const harnessDirty = harnessDraftProfile !== harnessProfile || harnessDraftContextLength !== contextLength;
   const harnessDraftContextIndex = Math.max(
     0,
@@ -614,6 +636,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const telemetrySyncEnabled = backend?.diagnostics.telemetry.syncEnabled ?? endpointSettings.mode === "server";
   const localLogInfo = backend?.diagnostics.localLogs ?? { bytes: 0, entries: 0 };
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
+  // A chat that already ran without a folder keeps running without one: its
+  // task's workspace is the hidden scratch directory, and pointing the chat
+  // at a real folder later would silently swap the workspace its history
+  // happened in.
+  const chatStartedWithoutFolder = Boolean(activeChat && !activeChat.repositoryPath && activeChat.taskId);
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
   const isGenerating = task?.state === "running";
   const hasComposerMessage = prompt.trim().length > 0 || reviewPromptFeedback.length > 0;
@@ -628,8 +655,21 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const canQueue = hasComposerMessage && isGenerating && !busy && !steerPending && !closedChatNotice;
   // Per file, never per turn: undo puts one reviewed file back, and taking
   // back more than that is a thing to ask the model for.
+  //
+  // A finished turn still has the checkpoint it was taken from, and a turn
+  // that was stopped part-way — which also lands on "completed" — is the one
+  // people most want back, so both undo as readily as a review that is
+  // waiting. What is genuinely out of reach is work that has already left the
+  // task: approved, merged, or rejected.
   const canUndoFile =
-    !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
+    !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && !busy;
+  // A grey button with no reason reads as broken. Every state that turns undo
+  // off says which one it is in, in the button's own tooltip.
+  const undoUnavailableReason = !task
+    ? "Undo restores a file to how a turn found it, and this review is of the folder rather than of a turn."
+    : busy
+      ? "Another action is still finishing."
+      : `This turn's work has already been ${task.state === "merged" ? "merged" : task.state === "rejected" ? "rejected" : "approved"}.`;
   const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
   const approvalPending = task?.state === "awaiting_worktree_approval" || !!pendingPermission;
   const reviewEmptyLabel = !task
@@ -688,7 +728,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const composerItemSoftLimit = 120;
     return items.length <= composerItemSoftLimit ? items : items.slice(-composerItemSoftLimit);
   }, [task?.prompt, task?.state, visibleEvents]);
-  const keepFinishedOpen = useActivityTuckDelay(composerItems);
   const lastAssistantItemId = [...composerItems].reverse().find((item) => item.type === "assistant")?.id;
   const reviewReadyForDisplay =
     task?.state === "review_ready"
@@ -995,20 +1034,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         }
       }
     }
-    setExpandedActivityIds((current) => {
-      const next = reconcileActivityDisclosureState(
-        current,
-        composerItems,
-        task?.id,
-        autoOpenedActivityIdsRef.current,
-        keepFinishedOpen,
-      );
-      autoOpenedActivityIdsRef.current = next.autoOpenedKeys;
-      for (const id of next.newlyOpenedIds) {
-        activityFollowScrollRef.current.set(id, true);
-      }
-      return next.expandedIds;
-    });
+    setExpandedActivityIds((current) => reconcileActivityDisclosureState(current, composerItems));
     setExpandedActivityToolIds((current) => {
       let changed = false;
       const next = new Set(current);
@@ -1019,7 +1045,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       }
       return changed ? next : current;
     });
-  }, [composerItems, keepFinishedOpen, task?.id]);
+  }, [composerItems]);
 
   useEffect(() => {
     void refreshStatus();
@@ -1173,13 +1199,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // Whether something is layered over the app. Shared by the focus trap below
   // and by the global shortcuts, which must not reach past a dialog to a
   // composer the user cannot currently see.
-  const modalOpen =
-    settingsOpen
-    || !!previewAttachment?.previewDataUrl
+  const nonSettingsModalOpen =
+    !!previewAttachment?.previewDataUrl
     || !!deleteCandidate
     || showElevatedPermissionsDialog
     || approvalPending
     || !!responseFeedbackDialog;
+  const modalOpen = settingsOpen || nonSettingsModalOpen;
 
   /** Opens the microphone, or offers the way in when dictation is not set up. */
   function toggleDictation() {
@@ -1226,7 +1252,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     // deleting outright: a chat is gone for good, and a chord is far easier to
     // press by accident than a button is to click by accident.
     "chat.delete": () => { if (activeChat) setDeleteCandidate({ kind: "chat", chat: activeChat }); },
-    "app.settings": () => openSettings(),
+    "app.settings": () => (settingsOpen ? closeSettingsDialog() : openSettings()),
     "app.shortcuts": () => openSettings("keyboard"),
     "review.toggle": () => (reviewClosing ? openReviewPanel() : toggleReviewPanel()),
     "composer.focus": () => textareaRef.current?.focus(),
@@ -1239,11 +1265,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // Read the same way, so a chord cannot reach past a dialog to a window the
   // user cannot currently see.
   shortcutsBlockedRef.current = modalOpen;
+  // The one exception: the settings chord keeps working while the settings
+  // dialog itself is what is open, so the key that opened it closes it.
+  settingsToggleAllowedRef.current = settingsOpen && !nonSettingsModalOpen;
 
   useEffect(() => {
     const runShortcut = (event: KeyboardEvent) => {
       // Never on the auto-repeat of a held key, and never mid-IME sequence.
-      if (shortcutsBlockedRef.current || event.repeat || event.isComposing) return;
+      if (event.repeat || event.isComposing) return;
+      if (shortcutsBlockedRef.current) {
+        // Behind the settings dialog the settings chord still lands — it
+        // toggles the dialog closed. Every other modal keeps every chord out.
+        const blockedShortcut = shortcutForEvent(event);
+        if (blockedShortcut?.id === "app.settings" && settingsToggleAllowedRef.current) {
+          event.preventDefault();
+          shortcutActionsRef.current["app.settings"]?.();
+        }
+        return;
+      }
       // The number keys first: they are nine chords for one gesture, so they
       // are matched by position rather than looked up in the table. A number
       // with no chat under it is left alone rather than swallowed.
@@ -2076,7 +2115,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         const nextRepository = result.repository;
         mergeProject(nextRepository);
         setRepository(nextRepository);
-        const chatWithoutProject = activeChatId ? chats.find((chat) => chat.id === activeChatId && !chat.repositoryPath) : undefined;
+        // Only a chat that has not run yet may take the folder; one with a
+        // task keeps the workspace it started in.
+        const chatWithoutProject = activeChatId
+          ? chats.find((chat) => chat.id === activeChatId && !chat.repositoryPath && !chat.taskId)
+          : undefined;
         if (chatWithoutProject) {
           const nextChat = await api.updateChatProject({
             chatId: chatWithoutProject.id,
@@ -2260,6 +2303,25 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       setShowThinking(await api.saveShowThinking(next));
     } catch (cause) {
       setShowThinking(previous);
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function updateSendOnEnter(next: boolean) {
+    const previous = sendOnEnter;
+    setSendOnEnter(next);
+    try {
+      setSendOnEnter(await api.saveSendOnEnter(next));
+    } catch (cause) {
+      setSendOnEnter(previous);
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function updateLaunchAtLogin(next: boolean) {
+    try {
+      setLaunchAtLogin(await api.saveLaunchAtLogin(next));
+    } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -2916,6 +2978,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     openReviewPanel();
   }
 
+  // The panel is a look at the diff beside the conversation, not a mode to be
+  // dismissed by hand: going back to the composer puts it away, the same as
+  // every menu above. Held in a ref because closing reads the current width —
+  // a listener captured at open time would animate to a width the user has
+  // since dragged away from, and leave a sliver of panel on screen.
+  const closeReviewPanelRef = useRef(closeReviewPanel);
+  closeReviewPanelRef.current = closeReviewPanel;
+  useEffect(() => {
+    if (!reviewOpen || reviewClosing) return undefined;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target || target.closest(`.reviewSidebar, ${reviewOpeningControls}`)) return;
+      closeReviewPanelRef.current();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [reviewOpen, reviewClosing]);
+
   async function openReviewFile(filePath: string) {
     if (!canOpenIde || !task) return;
     setError(null);
@@ -3319,7 +3399,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     if (event.key !== "Enter") {
       return;
     }
-    if (event.shiftKey) {
+    // ⌘/Ctrl+Enter always sends. Plain Enter sends only while "Send with
+    // Enter" is on; switched off, it starts a new line like Shift+Enter does.
+    const modifierSend = event.metaKey || event.ctrlKey;
+    if (!modifierSend && (event.shiftKey || !sendOnEnter)) {
       const target = event.currentTarget;
       const continuation = continueNumberedList(target.value, target.selectionStart, target.selectionEnd);
       if (!continuation) return;
@@ -3512,7 +3595,30 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       if (sentDraft) void persistDraft(chat.id, "", []);
     } catch (cause) {
       if (chatSelectionSequenceRef.current !== selectionSequence) return;
-      if (canOpenImmediately) setVisibleTask(null);
+      if (canOpenImmediately) {
+        setVisibleTask(null);
+      } else {
+        // The task could not be loaded, but the chat still opens: its title,
+        // draft, and attachments are usable without it, and a row that
+        // swallows its click reads as a dead app rather than a failed load.
+        flushSync(() => {
+          forceComposerBottomScrollRef.current = true;
+          prepareVisibleTaskLoad(null);
+          setActiveChatId(chat.id);
+          setVisibleTask(null);
+          setEvents([]);
+          setExpandedActivityIds(new Set());
+          setExpandedActivityToolIds(new Set());
+          setPendingPermission(null);
+          setExpandedReviewPaths(new Set());
+          setPrompt(chat.draftPrompt ?? "");
+          setAttachedFiles(chat.attachedFiles ?? []);
+          setMention(null);
+          setFileMatches([]);
+        });
+        const node = streamRef.current;
+        if (node) placeElementAtBottom(node);
+      }
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -3975,6 +4081,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         rating={responseFeedback.get(item.id)}
                         copyText={item.text}
                         onCopy={(text) => void copyText(text)}
+                        // Ratings exist to reach the company server as rated-chat
+                        // telemetry. A local chat has nowhere to send one, so the
+                        // thumbs are not offered.
+                        canRate={endpointSettings.mode === "server"}
                         onRate={openResponseFeedbackDialog}
                         documents={
                           // Every turn has an answer, but the documents a run
@@ -4070,87 +4180,110 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         ) : null}
 
         <section className="promptDock">
-          {/* Everything already committed but not yet answered, in one stack above
-              the controls: messages waiting their turn, and the review comments
-              riding along with the message being written. They were two trays in
-              two places, which read as two unrelated things when they are both
-              just "what is going out next". */}
-          <div className={`composerPendingTray ${
-            activeQueuedPrompts.length || reviewPromptFeedback.length || dictation.status.error
-              ? "hasPending"
-              : ""
-          }`}>
-            <QueuedPromptList
-              items={activeQueuedPrompts}
-              isGenerating={isGenerating}
-              steerPending={steerPending}
-              onEdit={editQueuedPrompt}
-              onSteer={(item) => void steerSubmission(item, item.id)}
-              onDelete={removeQueuedPrompt}
-              onPreviewFeedback={(feedback) => {
-                setReviewFeedbackPreview(feedback);
-                setReviewFeedbackDialogOpen(true);
-              }}
-            />
-            {dictation.status.error ? (
-              // Sized to its sentence rather than to the composer: a line about
-              // one microphone press that ruled a bar across the full width read
-              // as a state the whole composer was in.
-              <div className="dictationNotice" role="status" aria-live="polite">
-                <Mic size={13} aria-hidden="true" />
-                <span>{dictation.status.error}</span>
-                <button
-                  className="dictationNoticeDismiss"
-                  type="button"
-                  aria-label="Dismiss"
-                  onClick={dictation.dismissError}
-                >
-                  <X size={11} aria-hidden="true" />
-                </button>
-              </div>
-            ) : null}
-            {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
-          </div>
           <div className="promptControls">
-            <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
-              <button className="workspaceControl" type="button" onClick={pickRepository} disabled={busy}>
-                <span className="controlIcon"><FolderOpen size={14} /></span>
-                <span>
-                  <strong>{repository ? repository.name : "Select folder"}</strong>
-                </span>
-              </button>
-              {repository?.kind === "git" ? (
-                <BranchPicker
-                  branch={repository.originalBranch}
-                  branches={branches}
-                  open={branchMenuOpen}
-                  loading={branchesLoading}
-                  error={branchError}
-                  disabled={busy || checkoutPending}
-                  checkoutPending={checkoutPending}
-                  onToggleMenu={() => void toggleBranchMenu()}
-                  onRefresh={() => void refreshBranches()}
-                  onSelect={(branch) => void selectBranch(branch)}
-                />
+            {/* Everything already committed but not yet answered, in one stack above
+                the controls: messages waiting their turn, and the review comments
+                riding along with the message being written. They were two trays in
+                two places, which read as two unrelated things when they are both
+                just "what is going out next". Anchored to the controls row rather
+                than the dock, because the controls row is the one element that is
+                exactly as wide as the prompt box: a tray anchored to the dock
+                spans the whole pane on a wide window. */}
+            <div className={`composerPendingTray ${
+              activeQueuedPrompts.length || reviewPromptFeedback.length || dictation.status.error
+                ? "hasPending"
+                : ""
+            }`}>
+              <QueuedPromptList
+                items={activeQueuedPrompts}
+                isGenerating={isGenerating}
+                steerPending={steerPending}
+                onEdit={editQueuedPrompt}
+                onSteer={(item) => void steerSubmission(item, item.id)}
+                onDelete={removeQueuedPrompt}
+                onPreviewFeedback={(feedback) => {
+                  setReviewFeedbackPreview(feedback);
+                  setReviewFeedbackDialogOpen(true);
+                }}
+              />
+              {dictation.status.error ? (
+                // Sized to its sentence rather than to the composer: a line about
+                // one microphone press that ruled a bar across the full width read
+                // as a state the whole composer was in.
+                <div className="dictationNotice" role="status" aria-live="polite">
+                  <Mic size={13} aria-hidden="true" />
+                  <span>{dictation.status.error}</span>
+                  <button
+                    className="dictationNoticeDismiss"
+                    type="button"
+                    aria-label="Dismiss"
+                    onClick={dictation.dismissError}
+                  >
+                    <X size={11} aria-hidden="true" />
+                  </button>
+                </div>
               ) : null}
+              {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
             </div>
+            {/* A chat that started without a folder can never be given one, so
+                the control goes rather than sitting there greyed out: a dead
+                button is a question the user keeps re-asking. Starting a new
+                chat is the way back to a folder, and the sidebar is where that
+                lives. `busy` still only disables — it lifts in a moment, and a
+                control that vanished for the length of a run would move every
+                other control in the row twice. */}
+            {chatStartedWithoutFolder ? null : (
+              <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
+                <button
+                  className="workspaceControl"
+                  type="button"
+                  onClick={pickRepository}
+                  disabled={busy}
+                >
+                  <span className="controlIcon"><FolderOpen size={14} /></span>
+                  <span>
+                    <strong>{repository ? repository.name : "Select folder"}</strong>
+                  </span>
+                </button>
+                {repository?.kind === "git" ? (
+                  <BranchPicker
+                    branch={repository.originalBranch}
+                    branches={branches}
+                    open={branchMenuOpen}
+                    loading={branchesLoading}
+                    error={branchError}
+                    disabled={busy || checkoutPending}
+                    checkoutPending={checkoutPending}
+                    onToggleMenu={() => void toggleBranchMenu()}
+                    onRefresh={() => void refreshBranches()}
+                    onSelect={(branch) => void selectBranch(branch)}
+                  />
+                ) : null}
+              </div>
+            )}
 
-            <RemoteHostPicker
-              connections={remoteSettings.connections}
-              selectedId={remoteConnectionId}
-              directory={remoteDirectory}
-              disabled={busy}
-              locked={task !== null}
-              onSelect={(connectionId, directory) => {
-                setRemoteConnectionId(connectionId);
-                setRemoteDirectory(directory);
-              }}
-              onBrowse={(connectionId, path) => api.browseRemoteDirectory({ connectionId, path })}
-              onManage={() => {
-                setSettingsOpen(true);
-                setSettingsTab("remote");
-              }}
-            />
+            {/* Same reason, and the information is not lost with it: a chat
+                that has started keeps the host it started on, and the badge
+                above the messages names that host for as long as it matters.
+                A pill with a padlock on it said the same thing while still
+                inviting a press that could not do anything. */}
+            {task ? null : (
+              <RemoteHostPicker
+                connections={remoteSettings.connections}
+                selectedId={remoteConnectionId}
+                directory={remoteDirectory}
+                disabled={busy}
+                onSelect={(connectionId, directory) => {
+                  setRemoteConnectionId(connectionId);
+                  setRemoteDirectory(directory);
+                }}
+                onBrowse={(connectionId, path) => api.browseRemoteDirectory({ connectionId, path })}
+                onManage={() => {
+                  setSettingsOpen(true);
+                  setSettingsTab("remote");
+                }}
+              />
+            )}
 
             {canUseWorktreeMode && !remoteConnectionId ? (
               <WorktreeToggle
@@ -4428,13 +4561,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         void api.listServerModels().then(setServerModels).catch(() => undefined);
                       }}
                       efforts={modelReasoningEfforts}
-                      effort={reasoningEffort}
+                      effort={activeReasoningEffort}
                       effortDisabled={busy || isGenerating}
-                      showThinking={showThinking}
-                      showThinkingAvailable={backend?.veilFeatures.includes("chat.reasoning_visible") === true}
                       onSelect={(modelId) => void selectComposerModel(modelId)}
                       onSelectEffort={(next) => void updateReasoningEffort(next)}
-                      onToggleShowThinking={(next) => void updateShowThinking(next)}
                       onManage={endpointSettings.mode === "local" ? () => {
                         setSettingsOpen(true);
                         setSettingsTab("account");
@@ -4502,6 +4632,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       <aside className="reviewSidebar">
         <ReviewPanel
           files={reviewFiles}
+          // False the moment the panel is asked to close, not when its spring
+          // comes to rest: an interrupted animation would otherwise leave the
+          // feedback mode armed behind a panel nobody can see.
+          open={reviewOpen && !reviewClosing}
           initialSelectedPath={reviewTargetPath}
           taskId={task?.id ?? `workspace:${repository?.rootPath ?? "none"}`}
           patchHash={task?.reviewPatchHash}
@@ -4509,6 +4643,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           canUseWorktreeScope={repository?.kind === "git" || task?.workspaceKind === "git"}
           canOpenIde={canOpenIde}
           canUndoFile={canUndoFile}
+          undoUnavailableReason={undoUnavailableReason}
           selectedIdeLabel={selectedIde.label}
           onClose={closeReviewPanel}
           onUndoFile={(filePath) => void undoReviewFile(filePath)}
@@ -4736,6 +4871,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   />
                 ) : null}
 
+                {settingsTab === "general" ? (
+                  <GeneralSettingsPanel
+                    showThinking={showThinking}
+                    sendOnEnter={sendOnEnter}
+                    launchAtLogin={launchAtLogin}
+                    onToggleShowThinking={(next) => void updateShowThinking(next)}
+                    onToggleSendOnEnter={(next) => void updateSendOnEnter(next)}
+                    onToggleLaunchAtLogin={(next) => void updateLaunchAtLogin(next)}
+                  />
+                ) : null}
                 {settingsTab === "telemetry" ? (
                   <TelemetrySettingsPanel
                     syncEnabled={telemetrySyncEnabled}

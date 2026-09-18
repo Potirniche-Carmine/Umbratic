@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +108,56 @@ paths:
   - apps/desktop/**
   - '**/*.tsx'
 ---`)).paths, ["apps/desktop/**", "**/*.tsx"]);
+});
+
+test("system skill installation includes schemas, upgrades untouched resources, and preserves edits", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-resources-"));
+  try {
+    const skills = loadSkills(userData);
+    const directory = path.join(userData, "skills");
+    skills.installBundledSystemSkills(directory);
+    for (const id of ["documents", "presentations", "spreadsheets", "pdf"]) {
+      for (const name of ["spec.md", "ops.md"]) {
+        const resource = path.join(directory, "system", `umbratic-${id}`, "references", name);
+        assert.ok(fs.readFileSync(resource, "utf8").length > 100, resource);
+      }
+    }
+    const resource = path.join(directory, "system", "umbratic-documents", "references", "spec.md");
+    const bundled = fs.readFileSync(resource, "utf8");
+    fs.writeFileSync(resource, "old installed schema");
+    const manifestPath = path.join(directory, ".manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.systemSkills["umbratic-documents/references/spec.md"].installedChecksum =
+      `sha256:${crypto.createHash("sha256").update("old installed schema").digest("hex")}`;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    skills.installBundledSystemSkills(directory);
+    assert.equal(fs.readFileSync(resource, "utf8"), bundled);
+    fs.writeFileSync(resource, "my custom schema");
+    skills.installBundledSystemSkills(directory);
+    assert.equal(fs.readFileSync(resource, "utf8"), "my custom schema");
+    fs.unlinkSync(resource);
+    skills.installBundledSystemSkills(directory);
+    assert.equal(fs.readFileSync(resource, "utf8"), bundled);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test("system resource installation does not follow destination symlinks", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-resource-link-"));
+  try {
+    const skills = loadSkills(userData);
+    const directory = path.join(userData, "skills");
+    const root = path.join(directory, "system", "umbratic-documents");
+    const outside = path.join(userData, "outside");
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(root, "references"), process.platform === "win32" ? "junction" : "dir");
+    skills.installBundledSystemSkills(directory);
+    assert.deepEqual(fs.readdirSync(outside), []);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
 });
 
 function storedZip(entries, options = {}) {

@@ -25,9 +25,12 @@ export type LocalSpeechRequest = {
  *
  * The countdown only ever starts when a dictation ends, and `ensureLocalSpeech`
  * clears it on the next press, so a long recording can never be interrupted by
- * it however far past a minute the speaker goes.
+ * it and every use restarts the full window. Five minutes rather than one:
+ * dictation comes in bursts — a message, a reply, another thought — and a
+ * one-minute window meant nearly every press in a burst paid the model load
+ * (and showed the loading notice) again.
  */
-export const speechIdleTimeoutMs = 60 * 1000;
+export const speechIdleTimeoutMs = 5 * 60 * 1000;
 
 const supervisor = createLlamaSupervisor({ label: "speech" });
 let idleTimer: NodeJS.Timeout | null = null;
@@ -44,6 +47,11 @@ export function stopLocalSpeech(): void {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = null;
   supervisor.stop();
+  // A deliberate stop is not a failure. Killing a start in flight — the user
+  // switching the dictation model off mid-load does exactly that — rejects
+  // that start, and without this the next mic press was greeted with "failed
+  // to start 1 times. Retrying in Ns." about a failure the user chose.
+  supervisor.resetBackoff();
 }
 
 function speechKey(request: LocalSpeechRequest): string {

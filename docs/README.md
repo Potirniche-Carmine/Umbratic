@@ -1,6 +1,8 @@
 # Umbratic docs
 
-Find the thing you are doing.
+**For customers: [Server quickstart](guides/deploy-customer.md).** This is the only guide included in the server ZIP.
+
+The remaining pages are internal release and engineering references.
 
 ## Set up once, ever
 
@@ -15,7 +17,7 @@ Find the thing you are doing.
 | Guide | What it does |
 | --- | --- |
 | [guides/release-desktop.md](guides/release-desktop.md) | Cut and publish a new desktop version |
-| [guides/deploy-customer.md](guides/deploy-customer.md) | Build a customer's release and install it on their server |
+| [guides/release-server.md](guides/release-server.md) | Build a signed customer server ZIP |
 | [guides/operate-server.md](guides/operate-server.md) | Restart, change limits, upgrade, back up, recover |
 | [guides/test-locally.md](guides/test-locally.md) | Rehearse the whole thing on your own machine |
 
@@ -27,5 +29,11 @@ Find the thing you are doing.
 | [reference/limits.md](reference/limits.md) | How many users and requests one server serves |
 | [reference/supply-chain.md](reference/supply-chain.md) | Dependency rules and the checks that enforce them |
 
-`release.env.example` is the template for `~/.umbratic/release.env`. Copy it,
+## Implementation plans
+
+| Plan | What it covers |
+| --- | --- |
+| [plans/veil-console-deployment.md](plans/veil-console-deployment.md) | Customer ZIPs, one-script deployment, HTTP Console setup, HTTPS Veil, and signed seats |
+
+`release.env.example` is the template for the [release machine's identity file](setup/release-machine.md#2-the-env-file-both-machines). Copy it,
 do not edit it in place.

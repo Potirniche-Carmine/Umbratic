@@ -53,6 +53,9 @@ export async function checkEndpointHealth(provider: EndpointProvider): Promise<{
     const raw = payload.capabilities && typeof payload.capabilities === "object" && !Array.isArray(payload.capabilities)
       ? payload.capabilities as Record<string, unknown>
       : {};
+    if (payload.state === "model_not_configured") {
+      return { status: "unavailable", message: "No model is configured.", features: parseVeilFeatures(payload) };
+    }
     return {
       status: "ready",
       message: `Health check passed at ${new URL(healthRoute).pathname}.`,

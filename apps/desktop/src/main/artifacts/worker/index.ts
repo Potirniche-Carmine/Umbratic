@@ -15,7 +15,7 @@
 import { runArtifactJob, type ArtifactRequest, type ArtifactResponse } from "./engine.js";
 
 type ParentPort = {
-  on(event: "message", listener: (message: unknown) => void): void;
+  once(event: "message", listener: (event: { data: unknown }) => void): void;
   postMessage(message: unknown): void;
 };
 
@@ -51,8 +51,8 @@ async function handle(message: unknown): Promise<ArtifactResponse> {
 }
 
 if (parentPort) {
-  parentPort.on("message", (message) => {
-    void handle(message).then((result) => {
+  parentPort.once("message", (event) => {
+    void handle(event.data).then((result) => {
       parentPort.postMessage(result);
     });
   });

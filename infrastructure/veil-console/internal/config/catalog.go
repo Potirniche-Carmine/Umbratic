@@ -54,6 +54,7 @@ type ServingKind string
 const (
 	KindChat      ServingKind = "chat"
 	KindDictation ServingKind = "dictation"
+	KindEmbedding ServingKind = "embedding"
 )
 
 // ServingModel is one row of the catalog.
@@ -312,6 +313,9 @@ func CatalogFor(kind ServingKind) []ServingModel {
 
 // NormalizeKind maps a query value onto a tab, defaulting to chat.
 func NormalizeKind(value string) ServingKind {
+	if ServingKind(strings.TrimSpace(value)) == KindEmbedding {
+		return KindEmbedding
+	}
 	if ServingKind(strings.TrimSpace(value)) == KindDictation {
 		return KindDictation
 	}
@@ -320,6 +324,9 @@ func NormalizeKind(value string) ServingKind {
 
 // Role is the managed-model role this kind registers as.
 func (k ServingKind) Role() string {
+	if k == KindEmbedding {
+		return RoleEmbedding
+	}
 	if k == KindDictation {
 		return RoleSpeech
 	}
