@@ -1,4 +1,6 @@
-import { getPermissionMode } from "./mainRuntime";
+import { cancelledTaskRuns, getPermissionMode } from "./mainRuntime";
+import { assertTaskWorkspaceIdle, withIdleTaskWorkspace } from "./workspaceActivity";
+import { assertUndoFileUnchanged } from "./checkpoints/undo";
 import { assertReusableWorktreeForRepository, chatWorktreeTaskId, findReusableWorktreeTask, taskUsesIsolatedWorktree, worktreeRootTaskId } from "./worktreeOps";
 import { chatId, createChat, hiddenChatRepository, hiddenChatWorkspacePath, taskId } from "./chatStore";
 import { activeRunnerProcesses, activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, getTask, missingSnapshotValue, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
@@ -28,6 +30,7 @@ import { validatedRemoteDirectory } from "./remoteConnections";
 import { checkRemoteRunnerReady } from "./remoteRunner";
 import {
   umbraticPolicyVersion,
+  isBlockedPath,
   umbraticRunnerName,
   umbraticRunnerVersion,
   isGeneratedRuntimePath,
@@ -215,7 +218,7 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
     if (closedMessage) {
       throw new Error(closedMessage);
     }
-    if (activeRunnerProcesses.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
+    if (activeRunnerProcesses.has(existingTask.id) || existingTask.state === "running" || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
       throw new Error("This chat already has a task in progress.");
     }
     if (existingTask.repositoryId !== repositoryId) {
@@ -228,6 +231,7 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
       }
       throw new Error("This chat belongs to a different folder. Start a new chat for this folder.");
     }
+    assertTaskWorkspaceIdle(existingTask);
     existingTask.permissionMode = getPermissionMode();
     existingTask.prompt = prompt;
     existingTask.runnerName = umbraticRunnerName;
@@ -311,6 +315,7 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
       enabledTools: requestedEnabledTools,
       capabilityProbes: taskCapabilityProbes,
     };
+    assertTaskWorkspaceIdle(task);
     saveTask(task);
     appendUserMessage(task, prompt, attachments);
     void runRunnerTask(task.id, undefined, prompt, attachments);
@@ -351,6 +356,7 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
     enabledTools: requestedEnabledTools,
     capabilityProbes: taskCapabilityProbes,
   };
+  assertTaskWorkspaceIdle(task);
   saveTask(task);
   appendUserMessage(task, prompt, attachments);
   if (shouldCreateWorktree) {
@@ -375,6 +381,7 @@ export async function approveWorktreeCreation(input: unknown): Promise<void> {
   if (task.state !== "awaiting_worktree_approval") {
     throw new Error("Task is not waiting for worktree approval.");
   }
+  if (approved) assertTaskWorkspaceIdle(task, true);
   if (!approved) {
     recordProductTelemetry("worktree.denied", {
       taskId: task.id,
@@ -424,43 +431,42 @@ export function restoreFolderTaskFile(task: TaskRecord, filePath: string) {
   fs.writeFileSync(absolute, baseline[filePath]);
 }
 
-/**
- * Undo one reviewed file, and only that file.
- *
- * There is deliberately no whole-turn counterpart: a single mis-click should
- * never be able to take back more than the file somebody was looking at, and
- * anything broader is a thing to ask the model for, where it is visible and
- * reversible.
- */
+/** Undo only the selected reviewed file. Full restore is a separate checkpoint action. */
 export async function revertReviewFile(input: unknown): Promise<TaskInfo | null> {
   if (!isRecord(input)) {
     throw new Error("Invalid revert input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
   const filePath = requiredString(input.path, "path").replace(/\\/g, "/");
-  if (isGeneratedRuntimePath(filePath)) {
+  if (task.remote || ["approved", "merged", "rejected"].includes(task.state)) {
+    throw new Error("This task is not available for file undo.");
+  }
+  if (isGeneratedRuntimePath(filePath) || isBlockedPath(filePath)) {
     throw new Error(`${filePath} is generated at runtime and is not restored by undo.`);
   }
   if (!task.reviewFiles.some((file) => file.path === filePath)) {
     throw new Error(`${filePath} is not part of this review.`);
   }
-  if (taskUsesIsolatedWorktree(task)) {
-    if (!fs.existsSync(task.worktreePath)) {
-      throw new Error(UNDO_UNSAFE_NO_CHECKPOINT);
+  return withIdleTaskWorkspace(task, async () => {
+    await assertUndoFileUnchanged(task, filePath);
+    if (task.workspaceKind === "git") {
+      if (!fs.existsSync(task.worktreePath)) {
+        throw new Error(UNDO_UNSAFE_NO_CHECKPOINT);
+      }
+      await restoreTurnCheckpointFile(task, filePath);
+    } else {
+      assertFolderUndoBaseline(task);
+      restoreFolderTaskFile(task, filePath);
     }
-    await restoreTurnCheckpointFile(task, filePath);
-  } else {
-    assertFolderUndoBaseline(task);
-    restoreFolderTaskFile(task, filePath);
-  }
-  recordProductTelemetry("task.undone", {
-    taskId: task.id,
-    chatId: task.chatId,
-    repositoryId: task.repositoryId,
+    recordProductTelemetry("task.undone", {
+      taskId: task.id,
+      chatId: task.chatId,
+      repositoryId: task.repositoryId,
+    });
+    await refreshReview(task, task.reviewScope === "worktree" ? "worktree" : "task");
+    saveTask(task);
+    return publicTask(task);
   });
-  await refreshReview(task, task.reviewScope === "worktree" ? "worktree" : "task");
-  saveTask(task);
-  return publicTask(task);
 }
 
 export async function keepWorktree(input: unknown): Promise<void> {
@@ -486,6 +492,18 @@ export async function cancelTask(input: unknown): Promise<void> {
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
   const run = activeRunnerProcesses.get(task.id);
+  if (!["running", "awaiting_worktree_approval"].includes(task.state) && !run) return;
+  cancelledTaskRuns.add(task.id);
+  pendingRunnerPrompts.delete(task.id);
+  pendingTaskSteers.delete(task.id);
+  pendingTaskFollowUps.delete(task.id);
+  clearPendingPermissionsForTask(task.id);
+  // Publish the stop before awaiting the runner. A delayed cancellation must
+  // never write an old workspace or turn record over a subsequent restore.
+  task.state = "completed";
+  task.error = undefined;
+  saveTask(task);
+  emit({ type: "assistant.done", taskId: task.id });
   if (run) {
     activeRunnerProcesses.delete(task.id);
     if (run.sessionId) {
@@ -508,16 +526,6 @@ export async function cancelTask(input: unknown): Promise<void> {
     }
     stopRunnerProcess(run);
   }
-  pendingRunnerPrompts.delete(task.id);
-  pendingTaskSteers.delete(task.id);
-  pendingTaskFollowUps.delete(task.id);
-  clearPendingPermissionsForTask(task.id);
-  // Stopping a turn is a user decision, not a failure: the transcript keeps
-  // whatever streamed and ends quietly with no error message.
-  task.state = "completed";
-  task.error = undefined;
-  saveTask(task);
-  emit({ type: "assistant.done", taskId: task.id });
 }
 
 export async function steerTask(input: unknown): Promise<void> {

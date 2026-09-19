@@ -1,14 +1,6 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
-
 import { readTaskCheckpoints, readTasks, readTaskWorkspaces, writeTaskCheckpoint, writeTaskWorkspace } from "../storage";
-import type { TaskRecord } from "../types";
-import { deleteGitCheckpointRef, removeManagedWorktree } from "./gitAdapter";
-
-function inside(root: string, target: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(target));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
+import { deleteGitCheckpointRef } from "./gitAdapter";
 
 export type CheckpointReconcileReport = {
   inspectedTasks: number;
@@ -17,18 +9,19 @@ export type CheckpointReconcileReport = {
   missingActiveWorkspaces: number;
 };
 
-export async function reconcileCheckpointLifecycle(
-  managedRootForTask: (task: TaskRecord) => string,
-): Promise<CheckpointReconcileReport> {
+export async function reconcileCheckpointLifecycle(): Promise<CheckpointReconcileReport> {
   const report: CheckpointReconcileReport = {
     inspectedTasks: 0,
     failedCheckpoints: 0,
     failedWorkspaces: 0,
     missingActiveWorkspaces: 0,
   };
-  for (const task of readTasks()) {
-    const checkpoints = readTaskCheckpoints(task.id);
-    const workspaces = readTaskWorkspaces(task.id);
+  // Capture the interrupted rows before yielding. A new operation in another
+  // chat must not become part of this startup repair while Git is awaited.
+  const interrupted = readTasks().map((task) => ({ task,
+    checkpoints: readTaskCheckpoints(task.id), workspaces: readTaskWorkspaces(task.id) }));
+  const refsToDelete: Array<{ repository: string; ref: string }> = [];
+  for (const { task, checkpoints, workspaces } of interrupted) {
     if (!checkpoints.some((checkpoint) => checkpoint.state === "preparing")
       && !workspaces.some((workspace) => workspace.state === "preparing")
       && (!task.activeWorkspaceId || workspaces.some((workspace) => workspace.id === task.activeWorkspaceId && fs.existsSync(workspace.path)))) {
@@ -37,16 +30,13 @@ export async function reconcileCheckpointLifecycle(
     report.inspectedTasks += 1;
     for (const checkpoint of checkpoints.filter((candidate) => candidate.state === "preparing")) {
       const ref = `refs/umbratic/checkpoints/${task.id}/${checkpoint.id}`;
-      await deleteGitCheckpointRef(task.originalRepoPath, ref).catch(() => undefined);
+      refsToDelete.push({ repository: task.originalRepoPath, ref });
       writeTaskCheckpoint({ ...checkpoint, state: "failed" });
       report.failedCheckpoints += 1;
     }
-    const managedRoot = path.resolve(managedRootForTask(task));
     for (const workspace of workspaces.filter((candidate) => candidate.state === "preparing")) {
-      const target = path.resolve(workspace.path);
-      if (target !== managedRoot && inside(managedRoot, target) && fs.existsSync(target)) {
-        await removeManagedWorktree(task.originalRepoPath, target, managedRoot).catch(() => undefined);
-      }
+      // A recorded path alone proves neither ownership nor that its ignored
+      // files are disposable. Keep it available for explicit recovery.
       writeTaskWorkspace({ ...workspace, state: "failed" });
       report.failedWorkspaces += 1;
     }
@@ -54,6 +44,9 @@ export async function reconcileCheckpointLifecycle(
       const active = workspaces.find((workspace) => workspace.id === task.activeWorkspaceId);
       if (!active || !fs.existsSync(active.path)) report.missingActiveWorkspaces += 1;
     }
+  }
+  for (const { repository, ref } of refsToDelete) {
+    await deleteGitCheckpointRef(repository, ref).catch(() => undefined);
   }
   return report;
 }

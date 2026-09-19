@@ -46,8 +46,6 @@ function splitReviewPath(filePath: string): { dir: string; name: string } {
     : { dir: filePath.slice(0, separatorIndex + 1), name: filePath.slice(separatorIndex + 1) };
 }
 
-const isMacPlatform = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
-
 export function ReviewPanel({
   files,
   open,
@@ -309,7 +307,6 @@ export function ReviewPanel({
     setSelection(null);
     setDocumentSelection([]);
   };
-  const selectionCount = selectedFileIsDocument ? documentSelection.length : selection?.lines.length ?? 0;
   // Docked under the diff rather than floating over the line it belongs to.
   // The card used to open at the click point, which put it on top of the very
   // lines being commented on and moved it somewhere new on every click. One
@@ -334,7 +331,6 @@ export function ReviewPanel({
           aria-label="Review comment"
         />
         <div className="inlineReviewCommentActions">
-          <span className="inlineReviewCommentHint" aria-hidden="true">{`${selectionCount} ${selectedFileIsDocument ? (selectionCount === 1 ? "sentence" : "sentences") : (selectionCount === 1 ? "line" : "lines")} · ${isMacPlatform ? "⌘↩ saves · esc cancels" : "Ctrl+Enter saves · Esc cancels"}`}</span>
           <button type="button" onClick={stopCommenting}>Cancel</button>
           <button className="primaryAction" type="button" onClick={saveComment} disabled={!commentBody.trim()}>Save feedback</button>
         </div>
@@ -369,18 +365,12 @@ export function ReviewPanel({
       <header className="reviewTopbar">
         <strong className="reviewChangeSummary">Review</strong>
         <div className="reviewTopActions">
-          {/* Whole diff is git's answer to "what is uncommitted", so a chat
-              working outside a git folder has one scope and no choice to
-              offer. A menu with a single row read as a broken picker; the
-              scope is stated instead, and says why it is the only one. */}
           {canUseWorktreeScope ? (
             <div className="reviewScopePicker">
               <button type="button" className="reviewControlButton" onClick={() => setScopeOpen((open) => !open)} aria-expanded={scopeOpen}><span>{selectedScope === "worktree" ? "Whole diff" : "Turn changes"}</span><ChevronDown size={13} /></button>
               {scopeOpen ? <div className="reviewScopeMenu" role="menu"><button type="button" role="menuitemradio" aria-checked={selectedScope === "task"} className={selectedScope === "task" ? "isSelected" : ""} onClick={() => chooseScope("task")}><span><strong>Turn changes</strong><small>Changes made in this model turn</small></span>{selectedScope === "task" ? <Check size={14} /> : null}</button><button type="button" role="menuitemradio" aria-checked={selectedScope === "worktree"} className={selectedScope === "worktree" ? "isSelected" : ""} onClick={() => chooseScope("worktree")}><span><strong>Whole diff</strong><small>All uncommitted changes against HEAD</small></span>{selectedScope === "worktree" ? <Check size={14} /> : null}</button></div> : null}
             </div>
-          ) : (
-            <span className="reviewScopeLabel" title="Whole diff compares against HEAD, so it needs a git folder. Pick one for this chat to review uncommitted changes.">Turn changes</span>
-          )}
+          ) : null}
           <button className="reviewIconButton" type="button" onClick={onClose} title="Hide review" aria-label="Hide review"><PanelRight size={16} /></button>
         </div>
       </header>

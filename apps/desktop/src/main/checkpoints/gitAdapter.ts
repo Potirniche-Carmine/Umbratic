@@ -183,7 +183,7 @@ export async function createGitCheckpoint(input: CheckpointGitInput): Promise<Ch
         presentPaths.push(relative);
         logicalBytes += stat.size;
       } catch (error) {
-        if (error instanceof Error && /symbolic links|regular file/.test(error.message)) throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         // Deletions have no current logical bytes.
         deletedPaths.push(relative);
       }
@@ -197,7 +197,12 @@ export async function createGitCheckpoint(input: CheckpointGitInput): Promise<Ch
       await gitWithInput(root, ["update-index", "--force-remove", "-z", "--stdin"], `${deletedPaths.join("\0")}\0`, checkpointEnv);
     }
     const treeOid = await git(root, ["write-tree"], checkpointEnv);
-    const commitOid = await git(root, ["commit-tree", treeOid, "-p", seedCommit, "-m", `Umbratic checkpoint ${checkpointId}`], checkpointEnv);
+    // Stash-shaped commits keep HEAD, the staged tree, and the working tree
+    // reachable together. Previous checkpoints are not parents: retention must
+    // be able to release their objects independently.
+    const head = await git(root, ["rev-parse", "HEAD"]);
+    const indexCommit = await git(root, ["commit-tree", indexTreeOid, "-p", head, "-m", "Checkpoint index"], checkpointEnv);
+    const commitOid = await git(root, ["commit-tree", treeOid, "-p", head, "-p", indexCommit, "-m", `Umbratic checkpoint ${checkpointId}`], checkpointEnv);
     await git(root, ["update-ref", ref, commitOid, "0".repeat(commitOid.length)], checkpointEnv);
     // `commit-tree <treeOid>` validates and embeds this exact tree; `update-ref` atomically
     // publishes only the private checkpoint ref. Git can refresh harmless index stat data, so
@@ -252,15 +257,25 @@ export async function restoreGitCheckpointPath(input: {
   if (fs.lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) {
     throw new Error("Refusing to restore through a symbolic link.");
   }
-  const inCheckpoint = await git(root, ["cat-file", "-e", `${input.checkpointCommit}:${relative}`])
-    .then(() => true)
-    .catch(() => false);
-  if (inCheckpoint) {
-    await git(root, ["checkout", input.checkpointCommit, "--", relative]);
-    return;
+  const indexTree = await git(root, ["rev-parse", `${input.checkpointCommit}^2^{tree}`]);
+  const entry = await git(root, ["--literal-pathspecs", "ls-tree", input.checkpointCommit, "--", relative]);
+  const indexEntry = await git(root, ["--literal-pathspecs", "ls-tree", indexTree, "--", relative]);
+  for (const value of [entry, indexEntry]) {
+    if (value && !/^100(644|755) blob [a-f0-9]+\t/.test(value)) throw new Error("Checkpoint path is not a regular file.");
   }
-  await git(root, ["rm", "-f", "--ignore-unmatch", "--", relative]).catch(() => undefined);
-  if (fs.existsSync(target)) fs.rmSync(target, { force: true });
+  if (await pathsUseContentFilters(root, [relative])) throw new Error("Checkpoint restore refuses Git content filters.");
+  if (entry) {
+    await git(root, ["--literal-pathspecs", "restore", `--source=${input.checkpointCommit}`, "--worktree", "--", relative]);
+  } else if (fs.existsSync(target)) {
+    fs.unlinkSync(target);
+  }
+  // Restore only this path's original staging state. In particular, a file
+  // that was untracked before the turn must remain untracked after Undo.
+  if (indexEntry) {
+    await git(root, ["--literal-pathspecs", "restore", `--source=${indexTree}`, "--staged", "--", relative]);
+  } else {
+    await gitWithInput(root, ["update-index", "--force-remove", "-z", "--stdin"], `${relative}\0`);
+  }
 }
 
 export async function materializeCheckpointWorktree(input: {
@@ -276,14 +291,21 @@ export async function materializeCheckpointWorktree(input: {
   if (!inside(managedRoot, target) || target === managedRoot) throw new Error("Checkpoint worktree target is outside the managed root.");
   if (fs.existsSync(target)) throw new Error("Checkpoint worktree target already exists.");
   const commit = await git(repository, ["rev-parse", `${input.checkpointCommit}^{commit}`]);
+  const head = await git(repository, ["rev-parse", `${commit}^1^{commit}`]);
+  const indexTree = await git(repository, ["rev-parse", `${commit}^2^{tree}`]);
+  let created = false;
   try {
-    await git(repository, ["worktree", "add", "-b", input.branch, target, commit]);
+    await git(repository, ["worktree", "add", "-b", input.branch, target, head]);
+    created = true;
+    await git(target, ["read-tree", "--reset", "-u", commit]);
+    await git(target, ["read-tree", indexTree]);
     if (fs.realpathSync(path.resolve(await git(target, ["rev-parse", "--show-toplevel"]))) !== fs.realpathSync(target)
-      || await git(target, ["rev-parse", "HEAD"]) !== commit) {
+      || await git(target, ["rev-parse", "HEAD"]) !== head
+      || await git(target, ["write-tree"]) !== indexTree) {
       throw new Error("Materialized checkpoint worktree failed validation.");
     }
   } catch (error) {
-    if (inside(managedRoot, target) && fs.existsSync(target)) {
+    if (created && inside(managedRoot, target) && fs.existsSync(target)) {
       await git(repository, ["worktree", "remove", "--force", target]).catch(() => undefined);
     }
     throw error;

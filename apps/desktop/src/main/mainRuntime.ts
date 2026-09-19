@@ -63,6 +63,7 @@ export type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
   | { ok: false; error: string };
 export const activeRunnerProcesses = new Map<string, RunnerProcess>();
+export const cancelledTaskRuns = new Set<string>();
 export const activeStartTaskRequests = new Map<string, Promise<TaskInfo>>();
 export const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: number }>();
 export const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
@@ -183,7 +184,7 @@ export function recordProductTelemetry(
 export function pruneClosedTaskInternalSnapshots(task: TaskRecord): TaskRecord {
   if (
     task.baselineFiles &&
-    (task.state === "completed" || task.state === "approved" || task.state === "merged" || task.state === "rejected")
+    (task.state === "approved" || task.state === "merged" || task.state === "rejected")
   ) {
     const { baselineFiles: _baselineFiles, ...nextTask } = task;
     void _baselineFiles;
@@ -490,5 +491,6 @@ export function failTask(
 }
 
 export function taskStillRunning(task: TaskRecord): boolean {
-  return task.state === "running";
+  const current = readTask(task.id);
+  return !cancelledTaskRuns.has(task.id) && task.state === "running" && current?.state === "running" && current.worktreePath === task.worktreePath;
 }

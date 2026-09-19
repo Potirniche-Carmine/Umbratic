@@ -198,6 +198,7 @@ export type TaskRecord = TaskInfo & {
   modelEndpointMode?: ModelEndpointMode;
   hiddenWorkspace?: boolean;
   baselineFiles?: Record<string, string>;
+  undoFileHashes?: Record<string, string>;
   model?: LocalModelInfo;
   providerId?: LocalProviderId;
   modelId?: string;

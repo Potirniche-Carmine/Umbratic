@@ -159,6 +159,7 @@ import {
   rankSkillMatches,
 } from "./composerText";
 import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
+import { CheckpointMenu } from "./CheckpointMenu";
 import { AssistantMessage } from "./assistantMessage";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isArtifactPath } from "../shared/artifactReview";
@@ -653,21 +654,18 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   );
   const canStart = (prompt.trim().length > 0 || reviewPromptFeedback.length > 0) && !busy && !isGenerating && !closedChatNotice;
   const canQueue = hasComposerMessage && isGenerating && !busy && !steerPending && !closedChatNotice;
-  // Per file, never per turn: undo puts one reviewed file back, and taking
-  // back more than that is a thing to ask the model for.
-  //
   // A finished turn still has the checkpoint it was taken from, and a turn
   // that was stopped part-way — which also lands on "completed" — is the one
   // people most want back, so both undo as readily as a review that is
   // waiting. What is genuinely out of reach is work that has already left the
   // task: approved, merged, or rejected.
   const canUndoFile =
-    !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && !busy;
+    !!task && !["running", "approving", "awaiting_worktree_approval", "approved", "merged", "rejected"].includes(task.state) && !busy;
   // A grey button with no reason reads as broken. Every state that turns undo
   // off says which one it is in, in the button's own tooltip.
   const undoUnavailableReason = !task
     ? "Undo restores a file to how a turn found it, and this review is of the folder rather than of a turn."
-    : busy
+    : busy || isGenerating
       ? "Another action is still finishing."
       : `This turn's work has already been ${task.state === "merged" ? "merged" : task.state === "rejected" ? "rejected" : "approved"}.`;
   const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
@@ -4015,6 +4013,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 ) : null}
               </div>
               <div className="composerHeaderActions">
+                {task ? <CheckpointMenu key={task.id} api={api} task={task} onRestored={(restored) => setTask((current) => current?.id === restored.id ? restored : current)} /> : null}
                 {renderIdePicker("composer")}
                 <ShortcutTooltip
                   id="review.toggle"

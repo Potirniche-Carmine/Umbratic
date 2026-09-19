@@ -8,11 +8,12 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
 const reconcilePath = new URL("../src/main/checkpoints/reconcile.ts", import.meta.url);
 
-test("startup reconciliation fails interrupted rows and cleans only recorded contained worktrees", async () => {
+test("startup reconciliation fails interrupted rows and preserves all workspace files", async () => {
   const managedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-reconcile-root-"));
   const contained = path.join(managedRoot, "task-1-preparing");
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-reconcile-outside-"));
   fs.mkdirSync(contained);
+  fs.writeFileSync(path.join(contained, "keep.txt"), "recoverable content");
   const checkpoints = [{
     id: "checkpoint-1", taskId: "task-1", workspaceId: "workspace-1", source: "manual",
     commitOid: "", treeOid: "", createdAt: "2026-01-01T00:00:00.000Z", state: "preparing", pinned: false,
@@ -41,7 +42,7 @@ test("startup reconciliation fails interrupted rows and cleans only recorded con
     },
   });
 
-  const report = await reconcile.reconcileCheckpointLifecycle(() => managedRoot);
+  const report = await reconcile.reconcileCheckpointLifecycle();
   assert.deepEqual(JSON.parse(JSON.stringify(report)), {
     inspectedTasks: 1,
     failedCheckpoints: 1,
@@ -50,10 +51,32 @@ test("startup reconciliation fails interrupted rows and cleans only recorded con
   });
   assert.equal(checkpoints[0].state, "failed");
   assert.equal(workspaces[1].state, "failed");
-  assert.deepEqual(removed, [contained]);
+  assert.deepEqual(removed, []);
+  assert.equal(fs.readFileSync(path.join(contained, "keep.txt"), "utf8"), "recoverable content");
   assert.deepEqual(deletedRefs, ["refs/umbratic/checkpoints/task-1/checkpoint-1"]);
   assert.equal(fs.existsSync(outside), true);
 
   fs.rmSync(managedRoot, { recursive: true, force: true });
   fs.rmSync(outside, { recursive: true, force: true });
+});
+
+test("startup repair does not consume checkpoints created by another chat while Git is awaited", async () => {
+  const first = [{ id: "old", taskId: "first", state: "preparing" }];
+  const second = [];
+  const reconcile = loadTypeScriptModule(reconcilePath, { mocks: {
+    "../storage": {
+      readTasks: () => [{ id: "first", originalRepoPath: "/repo" }, { id: "second", originalRepoPath: "/repo" }],
+      readTaskCheckpoints: (id) => id === "first" ? first : second,
+      readTaskWorkspaces: () => [],
+      writeTaskCheckpoint: (row) => Object.assign((row.taskId === "first" ? first : second)[0], row),
+      writeTaskWorkspace: () => {},
+    },
+    "./gitAdapter": { deleteGitCheckpointRef: async () => {
+      second.push({ id: "new", taskId: "second", state: "preparing" });
+    } },
+  } });
+  const report = await reconcile.reconcileCheckpointLifecycle();
+  assert.equal(report.failedCheckpoints, 1);
+  assert.equal(first[0].state, "failed");
+  assert.equal(second[0].state, "preparing");
 });

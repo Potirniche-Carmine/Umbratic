@@ -358,6 +358,7 @@ export async function runnerPromptForTask(
           `- workspace kind: ${task.workspaceKind}`,
         ];
   if (!remote) pushAgentInstructionContext(lines, rootPath);
+  if (task.sourceCheckpointId) lines.push(`- This workspace was restored or forked from checkpoint ${task.sourceCheckpointId}. Chat history is retained and may describe changes absent from these files.`);
   pushConversationHistory(lines, history);
   const capabilityGuidance = capabilityPromptGuidance(capabilityReport, capabilityNeeds);
   if (capabilityGuidance) lines.push("", capabilityGuidance);

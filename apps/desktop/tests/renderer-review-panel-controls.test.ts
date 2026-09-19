@@ -111,18 +111,10 @@ test("the review layout and wrap preferences are one live value", () => {
   }
 });
 
-test("one possible scope is stated, not offered as a menu of one", () => {
-  // Whole diff compares against HEAD, so a chat working outside a git folder
-  // has no second scope. The picker still opened, on a single row.
+test("a single review scope has no redundant label", () => {
   assert.match(panel, /\{canUseWorktreeScope \? \(/);
-  assert.match(panel, /className="reviewScopeLabel"/);
-  // Inside the menu the option is unconditional now — the branch that used to
-  // hide it there is what produced the one-row menu.
-  const menu = panel.slice(panel.indexOf('className="reviewScopeMenu"'), panel.indexOf("reviewScopeLabel"));
-  assert.doesNotMatch(menu, /canUseWorktreeScope/);
-  // Nothing about the label invites a press.
-  const label = declarations(workspaceStyles, ".reviewScopeLabel");
-  assert.doesNotMatch(label, /border:/);
+  assert.doesNotMatch(panel, /reviewScopeLabel/);
+  assert.doesNotMatch(workspaceStyles, /reviewScopeLabel/);
 });
 
 test("every real line answers a click, in both layouts", () => {

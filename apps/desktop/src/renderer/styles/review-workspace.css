@@ -72,20 +72,6 @@
   position: relative;
 }
 
-/* The same scope, stated rather than offered, when there is only one of it.
-   No border and no chevron: a pill that looks pressable but is not is the
-   thing this replaced. */
-.reviewScopeLabel {
-  display: inline-flex;
-  min-height: 30px;
-  align-items: center;
-  padding: 0 4px;
-  color: var(--faint);
-  font-size: 11.5px;
-  font-weight: 620;
-  letter-spacing: -0.005em;
-}
-
 .reviewScopeMenu {
   position: absolute;
   top: calc(100% + 7px);
@@ -537,21 +523,44 @@
   cursor: pointer;
 }
 
-.documentReviewPreview.isCommenting .documentReviewSentence:hover,
-.documentReviewSentence:focus-visible {
-  background: color-mix(in srgb, var(--blue) 6%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 10%, transparent);
+.documentReviewPreview.isCommenting .documentReviewSentence:hover {
+  background: color-mix(in srgb, var(--text) 15%, var(--surface));
+  box-shadow: inset 0 0 0 2px var(--text);
 }
 
-.documentReviewSentence.isSelected {
-  background: color-mix(in srgb, var(--blue) 15%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 22%, transparent);
+.documentReviewPreview .documentReviewSentence.isSelected {
+  color: #fff;
+  background: #174ea6;
+  box-shadow: inset 0 0 0 2px #174ea6;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
 }
 
-.documentReviewSentence.isSelected:hover,
-.documentReviewSentence.isSelected:focus-visible {
-  background: color-mix(in srgb, var(--blue) 18%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 28%, transparent);
+.documentReviewPreview .documentReviewSentence.isSelected:hover {
+  background: #123c80;
+  box-shadow: inset 0 0 0 2px #fff;
+}
+
+.documentReviewPreview .documentReviewSentence:focus-visible {
+  outline: 3px solid var(--text);
+  outline-offset: 3px;
+}
+
+@media (forced-colors: active) {
+  .documentReviewPreview .documentReviewSentence.isSelected {
+    color: HighlightText;
+    background: Highlight;
+    forced-color-adjust: none;
+  }
+
+  .documentReviewPreview.isCommenting .documentReviewSentence:hover {
+    outline: 2px solid CanvasText;
+  }
+
+  .documentReviewPreview .documentReviewSentence:focus-visible {
+    outline: 3px dashed CanvasText;
+  }
 }
 
 .reviewFeedbackModeButton:disabled {

@@ -22,7 +22,6 @@ import {
 } from "./remoteService";
 import { approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, revertReviewFile, setResponseFeedback, startTask, steerTask } from "./taskActions";
 import { respondToToolPermission } from "./taskCommands";
-import { worktreeRootForRepo } from "./worktreeOps";
 import {
   app,
   BrowserWindow,
@@ -621,7 +620,7 @@ app.whenReady().then(async () => {
         message: String(error instanceof Error ? error.message : error),
       });
     }
-    void reconcileCheckpointLifecycle((task) => worktreeRootForRepo(task.originalRepoPath))
+    void reconcileCheckpointLifecycle()
       .then((checkpointRecovery) => {
         if (checkpointRecovery.inspectedTasks > 0) {
           recordLocalDiagnostic({

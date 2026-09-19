@@ -1,0 +1,23 @@
+.checkpointControl { position: relative; }
+.checkpointPopover {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 80;
+  width: min(360px, calc(100vw - 40px)); padding: 14px;
+  color: var(--text); background: var(--surface);
+  border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 12px 40px #0003;
+}
+.checkpointPopover header, .checkpointRow, .checkpointButtons { display: flex; align-items: center; gap: 10px; }
+.checkpointPopover header { justify-content: space-between; margin-bottom: 12px; }
+.checkpointPopover p, .checkpointRow time { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.checkpointPopover button:not(.chromeButton) { border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 10px; color: inherit; background: transparent; cursor: pointer; }
+.checkpointPopover button:disabled { opacity: .45; cursor: default; }
+.checkpointPopover button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.checkpointSave { width: 100%; margin-bottom: 8px; }
+.checkpointList { max-height: 330px; overflow-y: auto; }
+.checkpointRow { padding: 10px 0; border-top: 1px solid var(--line-strong); }
+.checkpointRow > div { flex: 1; min-width: 0; }
+.checkpointRow strong, .checkpointRow time { display: block; overflow-wrap: anywhere; }
+.checkpointRow strong, .checkpointConfirm > strong { font-size: 12px; }
+.checkpointButtons { justify-content: flex-end; }
+
+.checkpointPopover button:not(:disabled):hover { background: var(--control-hover); }
+.checkpointPopover button:not(:disabled):active { background: var(--control-active); }

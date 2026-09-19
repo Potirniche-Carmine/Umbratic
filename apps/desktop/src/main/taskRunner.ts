@@ -9,6 +9,9 @@ import { refreshWorkspaceGraph } from "./indexerService";
 import { refreshReview, reviewPatchHash } from "./reviewFiles";
 import { prioritizedReviewFiles } from "./reviewInsights";
 import { prepareTaskTurnCheckpoint } from "./taskCommands";
+import { reserveTaskWorkspace } from "./workspaceActivity";
+import { cancelledTaskRuns } from "./mainRuntime";
+import { captureUndoFiles } from "./checkpoints/undo";
 import { worktreeRootForRepo } from "./worktreeOps";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -111,9 +114,7 @@ export async function handleRunnerPermission(
     task.state = getPermissionMode() === "auto_safe" ? "running" : "awaiting_worktree_approval";
     saveTask(task);
     await replyRunnerPermission(run, id, false).catch(() => undefined);
-    if (getPermissionMode() === "auto_safe") {
-      void createWorktreeAndRunRunner(task, promptForRun);
-    } else {
+    if (getPermissionMode() !== "auto_safe") {
       emit({
         type: "worktree.requested",
         taskId: task.id,
@@ -173,7 +174,10 @@ export async function runRunnerTask(
   let runnerFailureDetails: { category?: string; code?: string; detail?: string } = {};
   let delegatedToWorktree = false;
   let intent = intentPrompt ?? task.prompt;
+  let releaseWorkspace: (() => void) | undefined;
   try {
+    releaseWorkspace = reserveTaskWorkspace(task, true);
+    cancelledTaskRuns.delete(task.id);
     // Sending a prompt is the explicit ask to use the model: load it if it is
     // not already up.
     const { providers, selected } = await resolveSelectedModel("always");
@@ -187,10 +191,12 @@ export async function runRunnerTask(
     // Every run re-probes: the context length is Veil's to report, and a stale
     // one silently changes how much history a turn can carry.
     const selectedForRun = await refreshModelContextLength(selected, endpointProvider());
+    if (!taskStillRunning(task)) return;
     task.model = selectedForRun;
     applyTaskPolicyMetadata(task);
     saveTask(task);
     await prepareTaskTurnCheckpoint(task);
+    if (!taskStillRunning(task)) return;
     let prompt = promptForRun
       ?? (await runnerPromptForTask(
         task,
@@ -198,6 +204,7 @@ export async function runRunnerTask(
         attachments,
         selectedForRun.contextLength ?? readContextLengthSetting(),
       ));
+    if (!taskStillRunning(task)) return;
     let promptParts = runnerPromptParts(prompt);
     run = task.remote
       ? await startRemoteRunnerServer(task, selectedForRun)
@@ -268,8 +275,12 @@ export async function runRunnerTask(
       // A steer already joined the transcript when it was accepted; appending
       // it again here would show the same message twice.
       if (!pending.alreadyInTranscript) appendUserMessage(task, pending.prompt, pending.attachments);
-      void runnerPromptForTask(task, pending.prompt, pending.attachments,
-        selectedForRun.contextLength ?? readContextLengthSetting(), { useDurableContext: true })
+      void prepareTaskTurnCheckpoint(task)
+        .then(() => {
+          if (run?.abortController.signal.aborted || !taskStillRunning(task)) throw new Error("Turn stopped before its checkpoint was ready.");
+          return runnerPromptForTask(task, pending.prompt, pending.attachments,
+            selectedForRun.contextLength ?? readContextLengthSetting(), { useDurableContext: true });
+        })
         .then((parts) => {
           intent = pending.prompt;
           prompt = parts;
@@ -389,6 +400,7 @@ export async function runRunnerTask(
       }
     });
     await stream.ready;
+    if (!taskStillRunning(task)) return;
     // Runner sessions live only inside the runner process started above.
     // Because Umbratic starts a fresh process for each task run, a persisted
     // runnerSessionId from an earlier process is stale and cannot be reused.
@@ -432,6 +444,7 @@ export async function runRunnerTask(
         body: { conversationState: null },
       });
     }
+    if (!taskStillRunning(task)) return;
     run.sessionId = session.id;
     task.runnerSessionId = session.id;
     saveTask(task);
@@ -444,13 +457,16 @@ export async function runRunnerTask(
       },
     });
 
-    const waitForCompletion = () =>
-      Promise.race([
+    const waitForCompletion = async () => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try { await Promise.race([
         completion,
-        new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Umbratic runner task timed out.")), 45 * 60 * 1000)),
-      ]);
+        new Promise<void>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error("Umbratic runner task timed out.")), 45 * 60 * 1000); }),
+      ]); } finally { clearTimeout(timeout); }
+    };
 
     await waitForCompletion();
+    if (delegatedToWorktree || task.state === "awaiting_worktree_approval") return;
     // A turn that answered can be followed straight away by a queued message
     // the runner releases as the next turn. The wait has to drain that queue:
     // tearing down after the first completion killed the queued turn mid-launch
@@ -492,10 +508,6 @@ export async function runRunnerTask(
       await drainQueuedTurns();
     }
 
-    if (delegatedToWorktree || task.state === "awaiting_worktree_approval") {
-      return;
-    }
-
     if (run.abortController.signal.aborted || !taskStillRunning(task)) {
       return;
     }
@@ -508,6 +520,7 @@ export async function runRunnerTask(
       completedAt: new Date().toISOString(),
     };
     const reviewFiles = await refreshReview(task);
+    if (!task.remote) await captureUndoFiles(task);
     if (reviewFiles.length === 0) {
       task.state = "completed";
       saveTask(task);
@@ -556,7 +569,7 @@ export async function runRunnerTask(
     run.abortController.abort();
     await stream.done.catch(() => undefined);
   } catch (error) {
-    failTask(task, String(error instanceof Error ? error.message : error), runnerFailureDetails);
+    if (taskStillRunning(task)) failTask(task, String(error instanceof Error ? error.message : error), runnerFailureDetails);
   } finally {
     clearPendingPermissionsForTask(task.id);
     activeRunnerProcesses.delete(task.id);
@@ -564,7 +577,12 @@ export async function runRunnerTask(
     pendingTaskFollowUps.delete(task.id);
     if (run) {
       stopRunnerProcess(run);
+      if (run.child.pid && run.child.exitCode === null && run.child.signalCode === null) {
+        await new Promise<void>((resolve) => run!.child.once("exit", () => resolve()));
+      }
     }
+    const cancelWait = pendingTaskCancelWaits.get(task.id);
+    if (cancelWait) { pendingTaskCancelWaits.delete(task.id); cancelWait(); }
     // No exit leaves the record on "running": the early returns above (an
     // external stop with no state change, a run that settled while another
     // flow flipped nothing) used to do exactly that, and a task stuck on
@@ -573,6 +591,35 @@ export async function runRunnerTask(
       task.state = "completed";
       saveTask(task);
       emit({ type: "assistant.done", taskId: task.id });
+    }
+    // Cancellation may have published a newer task record while the runner
+    // was stopping. Refresh that record after process exit, never the stale
+    // object held by this run.
+    try {
+      const settledTask = getTask(task.id);
+      if (releaseWorkspace && cancelledTaskRuns.has(task.id) && settledTask.state === "running") {
+        settledTask.state = "completed";
+        saveTask(settledTask);
+      }
+      if (releaseWorkspace && !delegatedToWorktree && !settledTask.remote && !settledTask.undoFileHashes && settledTask.baselineFiles) {
+        await refreshReview(settledTask);
+        await captureUndoFiles(settledTask);
+        saveTask(settledTask);
+      }
+    } catch {
+      recordLocalDiagnostic({ level: "warn", source: "desktop", event: "checkpoint.undo_unavailable", taskId: task.id,
+        message: "The stopped turn's file state could not be verified for undo." });
+    } finally {
+      if (releaseWorkspace) cancelledTaskRuns.delete(task.id);
+      releaseWorkspace?.();
+    }
+    // The old runner and its lease must finish before creating the replacement
+    // worktree. Otherwise the two runs of this chat would overlap.
+    if (delegatedToWorktree) {
+      const next = getTask(task.id);
+      if (next.state === "running") {
+        void createWorktreeAndRunRunner(next, pendingRunnerPrompts.get(next.id) ?? next.pendingPrompt, attachments, intent);
+      }
     }
   }
 }
@@ -583,13 +630,18 @@ export async function createWorktreeAndRunRunner(
   attachments: ChatAttachment[] = [],
   intentPrompt?: string,
 ) {
+  const releaseWorkspace = reserveTaskWorkspace(task, true);
+  cancelledTaskRuns.delete(task.id);
+  let created = false;
   try {
+    task.state = "running";
+    saveTask(task);
     fs.mkdirSync(path.dirname(task.worktreePath), { recursive: true });
     await execFileOutput("git", ["worktree", "add", "-b", task.agentBranch, task.worktreePath, task.baseCommit], {
       cwd: task.originalRepoPath,
       timeout: 120000,
     });
-    task.state = "running";
+    if (!taskStillRunning(task)) return;
     if (promptForRun && task.pendingPrompt === runnerPromptText(promptForRun)) {
       task.pendingPrompt = undefined;
     }
@@ -601,8 +653,12 @@ export async function createWorktreeAndRunRunner(
       chatId: task.chatId,
       repositoryId: task.repositoryId,
     });
-    void runRunnerTask(task.id, promptForRun, intentPrompt, attachments);
+    created = true;
   } catch (error) {
-    failTask(task, String(error instanceof Error ? error.message : error));
+    if (taskStillRunning(task)) failTask(task, String(error instanceof Error ? error.message : error));
+  } finally {
+    cancelledTaskRuns.delete(task.id);
+    releaseWorkspace();
   }
+  if (created) void runRunnerTask(task.id, promptForRun, intentPrompt, attachments);
 }

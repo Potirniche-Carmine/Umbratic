@@ -295,14 +295,6 @@
   outline: none;
 }
 
-.inlineReviewCommentHint {
-  margin-right: auto;
-  align-self: center;
-  color: var(--faint);
-  font-size: 9.5px;
-  font-weight: 550;
-  white-space: nowrap;
-}
 
 /* The confirmation is legible for a full two seconds before it starts leaving.
    The fades are carved out of the total on top of that, so shortening them is
