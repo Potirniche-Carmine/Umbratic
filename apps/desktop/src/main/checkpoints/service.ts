@@ -13,7 +13,7 @@ import {
   writeTaskWorkspace,
 } from "../storage";
 import type { TaskCheckpoint, TaskRecord, TaskWorkspace } from "../types";
-import { createGitCheckpoint, deleteGitCheckpointRef, materializeCheckpointWorktree, removeManagedWorktree, restoreGitCheckpointPath } from "./gitAdapter";
+import { createGitCheckpoint, deleteGitCheckpointRef, materializeCheckpointWorktree, removeManagedWorktree, restoreGitCheckpointPaths } from "./gitAdapter";
 import * as path from "node:path";
 
 const taskLocks = new Map<string, Promise<void>>();
@@ -144,13 +144,8 @@ export const UNDO_UNSAFE_NO_CHECKPOINT =
 export const UNDO_UNSAFE_NO_BASELINE =
   "Undo is unsafe: no verified undo baseline.";
 
-/**
- * Fail-closed restore of one file to its pre-turn state, for isolated git
- * worktrees. Never resets to task.baseCommit, and never touches a file other
- * than the one named: undo is per file, so a turn is only ever given back the
- * work somebody asked for by name.
- */
-export async function restoreTurnCheckpointFile(task: TaskRecord, relativePath: string): Promise<void> {
+/** Restore only the requested files from the automatic pre-turn snapshot. */
+export async function restoreTurnCheckpointFiles(task: TaskRecord, relativePaths: string[]): Promise<void> {
   if (!task.turnCheckpointId) {
     throw new Error(UNDO_UNSAFE_NO_CHECKPOINT);
   }
@@ -159,10 +154,10 @@ export async function restoreTurnCheckpointFile(task: TaskRecord, relativePath: 
     if (checkpoint.source !== "pre_turn" || checkpoint.workspaceId !== task.activeWorkspaceId) {
       throw new Error("The automatic turn checkpoint does not belong to this workspace.");
     }
-    await restoreGitCheckpointPath({
+    await restoreGitCheckpointPaths({
       workspacePath: task.worktreePath,
       checkpointCommit: checkpoint.commitOid,
-      relativePath,
+      relativePaths,
     });
   });
 }

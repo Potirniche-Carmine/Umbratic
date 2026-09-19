@@ -55,7 +55,6 @@ import {
   shortHash,
   stateLabel,
   titleFromPrompt,
-  worktreeSubline,
   worktreeTitle,
   type ChatProjectGroup,
   type DeleteCandidate,
@@ -159,7 +158,6 @@ import {
   rankSkillMatches,
 } from "./composerText";
 import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
-import { CheckpointMenu } from "./CheckpointMenu";
 import { AssistantMessage } from "./assistantMessage";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isArtifactPath } from "../shared/artifactReview";
@@ -660,7 +658,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // waiting. What is genuinely out of reach is work that has already left the
   // task: approved, merged, or rejected.
   const canUndoFile =
-    !!task && !["running", "approving", "awaiting_worktree_approval", "approved", "merged", "rejected"].includes(task.state) && !busy;
+    !!task && !task.remote && !["running", "approving", "awaiting_worktree_approval", "approved", "merged", "rejected"].includes(task.state) && !busy;
   // A grey button with no reason reads as broken. Every state that turns undo
   // off says which one it is in, in the button's own tooltip.
   const undoUnavailableReason = !task
@@ -3084,17 +3082,15 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     });
   }
 
-  async function undoReviewFile(filePath: string) {
+  async function undoReviewChanges(filePath?: string) {
     if (!task || !canUndoFile) return;
     setBusy(true);
     setIdeMenuOpen(null);
     try {
-      const next = await api.revertReviewFile({ taskId: task.id, path: filePath });
+      const next = await api.undoTaskChanges({ taskId: task.id, ...(filePath ? { path: filePath } : {}) });
       if (!next) return;
       setExpandedReviewPaths((current) => {
-        const remaining = new Set(current);
-        remaining.delete(filePath);
-        return remaining;
+        return new Set([...current].filter((path) => filePath !== undefined && path !== filePath));
       });
       setTask(next);
       upsertChatFromTask(next);
@@ -3717,7 +3713,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   function beginReviewResize(event: React.PointerEvent<HTMLDivElement>) {
     if (!event.isPrimary || event.button !== 0) return;
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
     cancelReviewClose();
     setReviewHasSessionWidth(true);
     const startX = event.clientX;
@@ -3734,13 +3731,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const stop = () => {
       setReviewWidth((current) => clamp(current, reviewMinWidthForViewport(), reviewMaxWidth()));
       document.body.classList.remove("isResizing");
-      event.currentTarget.removeEventListener("pointermove", move);
-      event.currentTarget.removeEventListener("pointerup", stop);
-      event.currentTarget.removeEventListener("pointercancel", stop);
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", stop);
+      handle.removeEventListener("pointercancel", stop);
     };
-    event.currentTarget.addEventListener("pointermove", move);
-    event.currentTarget.addEventListener("pointerup", stop, { once: true });
-    event.currentTarget.addEventListener("pointercancel", stop, { once: true });
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", stop, { once: true });
+    handle.addEventListener("pointercancel", stop, { once: true });
   }
 
   function handleReviewResizeKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
@@ -3932,7 +3929,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                     <GitBranch size={13} />
                                     <span>
                                       <strong>{worktreeTitle(worktree)}</strong>
-                                      <em>{worktreeSubline(worktree)}</em>
                                     </span>
                                   </button>
                                   <button
@@ -4013,7 +4009,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 ) : null}
               </div>
               <div className="composerHeaderActions">
-                {task ? <CheckpointMenu key={task.id} api={api} task={task} onRestored={(restored) => setTask((current) => current?.id === restored.id ? restored : current)} /> : null}
                 {renderIdePicker("composer")}
                 <ShortcutTooltip
                   id="review.toggle"
@@ -4645,7 +4640,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           undoUnavailableReason={undoUnavailableReason}
           selectedIdeLabel={selectedIde.label}
           onClose={closeReviewPanel}
-          onUndoFile={(filePath) => void undoReviewFile(filePath)}
+          onUndoFile={(filePath) => void undoReviewChanges(filePath)}
+          onUndoAll={() => void undoReviewChanges()}
           onOpenFile={openReviewFile}
           onScopeChange={changeReviewScope}
           onResizePointerDown={beginReviewResize}

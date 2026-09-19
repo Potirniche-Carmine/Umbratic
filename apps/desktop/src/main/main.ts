@@ -4,7 +4,7 @@ import { onWorkspaceIndexProgress } from "./indexerService";
 import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, launchAtLoginStatus, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveLaunchAtLoginSetting, saveLocalMtpSetting, saveReasoningEffortSetting, saveSendOnEnterSetting, saveShowThinkingSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
 import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
 import { clearUnsavedDraft, readUnsavedDraft, writeUnsavedDraft } from "./unsavedDrafts";
-import { createCheckpoint, deleteCheckpoint, forkCheckpoint, listTaskCheckpoints, restoreCheckpoint, setCheckpointPinned } from "./checkpointActions";
+import { undoTaskChanges } from "./reviewUndo";
 import { cancelDictation, sendDictationAudio, startDictation, stopDictation } from "./dictation";
 import { listAvailableIdes, openRepositoryInIde, openTaskInIde } from "./ideLauncher";
 import { activeRunnerProcesses, appIcon, compactClosedTaskStorage, flushPendingTaskEvents, flushRendererEvents, getTask, pendingPermissions, publicTask, recordProductTelemetry, windowChromeDark, windowChromeHeight, windowChromeLight, windowChromeSymbolDark, windowChromeSymbolLight } from "./mainRuntime";
@@ -20,7 +20,7 @@ import {
   saveRemoteConnection,
   setRemoteDefaultDirectory,
 } from "./remoteService";
-import { approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, revertReviewFile, setResponseFeedback, startTask, steerTask } from "./taskActions";
+import { approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, setResponseFeedback, startTask, steerTask } from "./taskActions";
 import { respondToToolPermission } from "./taskCommands";
 import {
   app,
@@ -370,12 +370,6 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     getNotes: () => getNotes(),
     updateNotes: (input) => updateNotes(input),
     getTask: (input) => publicTaskById(input),
-    listTaskCheckpoints: (input) => listTaskCheckpoints(input),
-    createTaskCheckpoint: (input) => createCheckpoint(input),
-    setTaskCheckpointPinned: (input) => setCheckpointPinned(input),
-    deleteTaskCheckpoint: (input) => deleteCheckpoint(input),
-    forkTaskCheckpoint: (input) => forkCheckpoint(input),
-    restoreTaskCheckpoint: (input) => restoreCheckpoint(input),
     refreshTaskReview: (input) => refreshTaskReview(input),
     refreshWorkspaceReview: (input) => refreshWorkspaceReview(input),
     readArtifactPreview: (input) => readReviewArtifactPreview(input),
@@ -515,7 +509,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     approveWorktreeCreation: (input) => approveWorktreeCreation(input),
     respondToToolPermission: (input) => respondToToolPermission(input),
     openTaskInIde: (input) => openTaskInIde(input),
-    revertReviewFile: (input) => revertReviewFile(input),
+    undoTaskChanges: (input) => undoTaskChanges(input),
     keepWorktree: (input) => keepWorktree(input),
     cancelTask: (input) => cancelTask(input),
     setResponseFeedback: (input) => setResponseFeedback(input),

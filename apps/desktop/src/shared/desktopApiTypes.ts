@@ -468,16 +468,6 @@ export type ChatRecord = {
   conversationState?: ConversationState;
 };
 
-export type TaskCheckpointView = {
-  id: string;
-  source: "manual" | "pre_turn" | "pre_restore" | "pre_cleanup";
-  label?: string;
-  createdAt: string;
-  state: "preparing" | "ready" | "failed";
-  pinned: boolean;
-  logicalBytes?: number;
-};
-
 export type IdeInfo = {
   id: string;
   label: string;
@@ -650,34 +640,6 @@ export type DesktopApi = {
   getNotes(): Promise<UserNotes>;
   updateNotes(input: { content: string }): Promise<UserNotes>;
   getTask(input: { taskId: string }): Promise<TaskInfo | null>;
-  listTaskCheckpoints(input: { taskId: string }): Promise<{
-    supported: boolean;
-    reason?: string;
-    changedFileCount: number;
-    checkpoints: TaskCheckpointView[];
-  }>;
-  createTaskCheckpoint(input: {
-    taskId: string;
-    label?: string;
-  }): Promise<TaskCheckpointView>;
-  setTaskCheckpointPinned(input: {
-    taskId: string;
-    checkpointId: string;
-    pinned: boolean;
-  }): Promise<TaskCheckpointView>;
-  deleteTaskCheckpoint(input: {
-    taskId: string;
-    checkpointId: string;
-  }): Promise<void>;
-  forkTaskCheckpoint(input: {
-    taskId: string;
-    checkpointId: string;
-  }): Promise<TaskInfo>;
-  restoreTaskCheckpoint(input: {
-    taskId: string;
-    checkpointId: string;
-    confirmed: boolean;
-  }): Promise<TaskInfo>;
   refreshTaskReview(input: {
     taskId: string;
     scope?: "task" | "worktree";
@@ -938,7 +900,7 @@ export type DesktopApi = {
    * whole-turn counterpart on purpose: undo is per file so that a stray click
    * can never take back more than the file being looked at.
    */
-  revertReviewFile(input: { taskId: string; path: string }): Promise<TaskInfo | null>;
+  undoTaskChanges(input: { taskId: string; path?: string }): Promise<TaskInfo | null>;
   keepWorktree(input: { taskId: string }): Promise<void>;
   cancelTask(input: { taskId: string }): Promise<void>;
   setResponseFeedback(input: {

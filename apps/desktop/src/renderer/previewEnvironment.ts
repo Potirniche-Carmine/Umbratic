@@ -20,7 +20,6 @@ import type {
   RepositoryInfo,
   SkillInfo,
   TaskInfo,
-  TaskCheckpointView,
   UnsavedChatDraft,
   UserNotes,
 } from "../shared/desktopApi";
@@ -101,10 +100,6 @@ function createPreviewApi(): DesktopApi {
   let previewCompanyConnection: CompanyConnectionStatus = { state: "not_enrolled" };
   let previewCompanySessionConnected = false;
   const previewUnsavedDrafts = new Map<string, UnsavedChatDraft>();
-  const previewCheckpoints = new Map<string, TaskCheckpointView[]>([[composerTestTask.id, [{
-    id: "preview-before-turn", source: "pre_turn", label: "Before turn",
-    createdAt: new Date().toISOString(), state: "ready", pinned: false,
-  }]]]);
 let previewLocalMtp = true;
 
   const previewApi: DesktopApi = {
@@ -194,35 +189,6 @@ let previewLocalMtp = true;
   getNotes: async () => readPreviewNotes(),
   updateNotes: async (input) => writePreviewNotes(input.content),
   getTask: async () => null,
-  listTaskCheckpoints: async (input) => ({
-    supported: true,
-    changedFileCount: composerTestReviewFiles.length,
-    checkpoints: [...(previewCheckpoints.get(input.taskId) ?? [])],
-  }),
-  createTaskCheckpoint: async (input) => {
-    const checkpoints = previewCheckpoints.get(input.taskId) ?? [];
-    const checkpoint: TaskCheckpointView = {
-      id: `preview-checkpoint-${input.taskId}-${checkpoints.length}`,
-      source: "manual",
-      label: input.label,
-      createdAt: new Date().toISOString(),
-      state: "ready",
-      pinned: false,
-    };
-    checkpoints.unshift(checkpoint);
-    previewCheckpoints.set(input.taskId, checkpoints);
-    return checkpoint;
-  },
-  setTaskCheckpointPinned: async (input) => ({
-    id: input.checkpointId,
-    source: "manual",
-    createdAt: new Date().toISOString(),
-    state: "ready",
-    pinned: input.pinned,
-  }),
-  deleteTaskCheckpoint: async () => undefined,
-  forkTaskCheckpoint: async () => composerTestTask,
-  restoreTaskCheckpoint: async (input) => ({ ...composerTestTask, id: input.taskId, state: "completed", changedFiles: [], reviewFiles: [] }),
   refreshTaskReview: async (input) => {
     const scope = input.scope === "worktree" ? "worktree" : "task";
     const reviewFiles = scope === "worktree" ? composerTestWholeDiffFiles : composerTestReviewFiles;
@@ -533,7 +499,7 @@ let previewLocalMtp = true;
   respondToToolPermission: async () => undefined,
   openRepositoryInIde: async () => ({ ok: false, message: "Electron preload is not available." }),
   openTaskInIde: async () => ({ ok: false, message: "Electron preload is not available." }),
-  revertReviewFile: async () => null,
+  undoTaskChanges: async () => null,
   keepWorktree: async () => undefined,
   cancelTask: async () => undefined,
   setResponseFeedback: async () => undefined,

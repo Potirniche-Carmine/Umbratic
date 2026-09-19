@@ -1,17 +1,14 @@
 import { cancelledTaskRuns, getPermissionMode } from "./mainRuntime";
-import { assertTaskWorkspaceIdle, withIdleTaskWorkspace } from "./workspaceActivity";
-import { assertUndoFileUnchanged } from "./checkpoints/undo";
+import { assertTaskWorkspaceIdle } from "./workspaceActivity";
 import { assertReusableWorktreeForRepository, chatWorktreeTaskId, findReusableWorktreeTask, taskUsesIsolatedWorktree, worktreeRootTaskId } from "./worktreeOps";
 import { chatId, createChat, hiddenChatRepository, hiddenChatWorkspacePath, taskId } from "./chatStore";
-import { activeRunnerProcesses, activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, getTask, missingSnapshotValue, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
+import { activeRunnerProcesses, activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, getTask, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
 import { capabilityNeedsForPrompt, runnerPromptForTask } from "./taskPromptContext";
 import { inspectRepository } from "./repositoryOps";
-import { refreshReview } from "./reviewFiles";
 import { createWorktreeAndRunRunner, runRunnerTask } from "./taskRunner";
-import { isBinarySnapshotValue, sanitizeAttachments } from "./workspaceSnapshot";
+import { sanitizeAttachments } from "./workspaceSnapshot";
 import { worktreeRootForRepo } from "./worktreeOps";
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { chatTitleFromFirstMessage } from "../shared/chatTitle";
@@ -30,10 +27,8 @@ import { validatedRemoteDirectory } from "./remoteConnections";
 import { checkRemoteRunnerReady } from "./remoteRunner";
 import {
   umbraticPolicyVersion,
-  isBlockedPath,
   umbraticRunnerName,
   umbraticRunnerVersion,
-  isGeneratedRuntimePath,
 } from "./policy";
 import {
   readChats,
@@ -52,13 +47,8 @@ import type {
   TaskRemote,
   WorkspaceMode,
 } from "./types";
-import { hasSymlinkComponent, isRecord, pathInside, requiredString, slugify } from "./utils";
+import { isRecord, requiredString, slugify } from "./utils";
 import { isResponseFeedbackReason, removeResponseFeedback } from "../shared/taskEvents";
-import {
-  assertFolderUndoBaseline,
-  restoreTurnCheckpointFile,
-  UNDO_UNSAFE_NO_CHECKPOINT,
-} from "./checkpoints/service";
 
 export function closedTaskMessage(task: TaskRecord): string | undefined {
   if (task.state === "merged") {
@@ -406,67 +396,6 @@ export async function approveWorktreeCreation(input: unknown): Promise<void> {
   pendingRunnerPrompts.delete(task.id);
   saveTask(task);
   await createWorktreeAndRunRunner(task, promptForRun);
-}
-
-/** One file back to its pre-turn content, from the folder snapshot. */
-export function restoreFolderTaskFile(task: TaskRecord, filePath: string) {
-  const baseline = task.baselineFiles ?? {};
-  if (isBinarySnapshotValue(baseline[filePath])) {
-    throw new Error(`Undo cannot safely restore the earlier binary content of ${filePath}.`);
-  }
-  const absolute = path.resolve(task.worktreePath, filePath);
-  if (!pathInside(task.worktreePath, absolute) || hasSymlinkComponent(task.worktreePath, absolute)) {
-    throw new Error(`Refusing to restore a path outside the task folder: ${filePath}`);
-  }
-  if (fs.existsSync(absolute) && fs.lstatSync(absolute).isSymbolicLink()) {
-    throw new Error(`Refusing to restore through a symbolic link: ${filePath}`);
-  }
-  // Absent from the baseline means the turn created it, and putting it back
-  // means it goes away again.
-  if (!Object.prototype.hasOwnProperty.call(baseline, filePath) || baseline[filePath] === missingSnapshotValue) {
-    if (fs.existsSync(absolute)) fs.rmSync(absolute, { force: true });
-    return;
-  }
-  fs.mkdirSync(path.dirname(absolute), { recursive: true });
-  fs.writeFileSync(absolute, baseline[filePath]);
-}
-
-/** Undo only the selected reviewed file. Full restore is a separate checkpoint action. */
-export async function revertReviewFile(input: unknown): Promise<TaskInfo | null> {
-  if (!isRecord(input)) {
-    throw new Error("Invalid revert input.");
-  }
-  const task = getTask(requiredString(input.taskId, "taskId"));
-  const filePath = requiredString(input.path, "path").replace(/\\/g, "/");
-  if (task.remote || ["approved", "merged", "rejected"].includes(task.state)) {
-    throw new Error("This task is not available for file undo.");
-  }
-  if (isGeneratedRuntimePath(filePath) || isBlockedPath(filePath)) {
-    throw new Error(`${filePath} is generated at runtime and is not restored by undo.`);
-  }
-  if (!task.reviewFiles.some((file) => file.path === filePath)) {
-    throw new Error(`${filePath} is not part of this review.`);
-  }
-  return withIdleTaskWorkspace(task, async () => {
-    await assertUndoFileUnchanged(task, filePath);
-    if (task.workspaceKind === "git") {
-      if (!fs.existsSync(task.worktreePath)) {
-        throw new Error(UNDO_UNSAFE_NO_CHECKPOINT);
-      }
-      await restoreTurnCheckpointFile(task, filePath);
-    } else {
-      assertFolderUndoBaseline(task);
-      restoreFolderTaskFile(task, filePath);
-    }
-    recordProductTelemetry("task.undone", {
-      taskId: task.id,
-      chatId: task.chatId,
-      repositoryId: task.repositoryId,
-    });
-    await refreshReview(task, task.reviewScope === "worktree" ? "worktree" : "task");
-    saveTask(task);
-    return publicTask(task);
-  });
 }
 
 export async function keepWorktree(input: unknown): Promise<void> {

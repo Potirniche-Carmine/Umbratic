@@ -536,7 +536,7 @@
 @container review (max-width: 760px) {
   .reviewWorkspace { grid-template-columns: 154px minmax(0, 1fr); }
   .reviewSegmentedControl span,
-  .reviewControlButton > span { display: none; }
+  .reviewControlButton:not(.reviewUndoAll) > span { display: none; }
   .reviewFeedbackTray { grid-template-columns: minmax(0, 1fr) auto; }
   .reviewFeedbackTray > div:first-child { display: none; }
 }
@@ -544,7 +544,7 @@
 @container review (max-width: 560px) {
   .reviewWorkspace { grid-template-columns: 1fr; }
   .reviewFileNavigator { display: none; }
+  .reviewSelectedUndo { display: inline-flex; }
   .documentReviewPreview { padding: 12px; }
   .documentReviewPaper { min-height: 100%; padding: 34px 28px 48px; }
 }
-

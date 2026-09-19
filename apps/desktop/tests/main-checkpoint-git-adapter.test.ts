@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 
-import { createGitCheckpoint, materializeCheckpointWorktree, restoreGitCheckpointPath } from "../src/main/checkpoints/gitAdapter.ts";
+import { createGitCheckpoint, materializeCheckpointWorktree, restoreGitCheckpointPaths } from "../src/main/checkpoints/gitAdapter.ts";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -146,10 +146,10 @@ test("per-file restore returns one file and leaves the rest of the turn alone", 
     fs.writeFileSync(path.join(root, "turn-start.txt"), "also changed by turn\n");
     fs.writeFileSync(path.join(root, "turn-only.txt"), "created by turn\n");
 
-    await restoreGitCheckpointPath({
+    await restoreGitCheckpointPaths({
       workspacePath: root,
       checkpointCommit: checkpoint.commitOid,
-      relativePath: "tracked.txt",
+      relativePaths: ["tracked.txt"],
     });
 
     assert.equal(fs.readFileSync(path.join(root, "tracked.txt"), "utf8"), "turn start\n");
@@ -158,10 +158,10 @@ test("per-file restore returns one file and leaves the rest of the turn alone", 
     assert.equal(fs.readFileSync(path.join(root, "turn-only.txt"), "utf8"), "created by turn\n");
 
     // A file the checkpoint never had is undone by going away again.
-    await restoreGitCheckpointPath({
+    await restoreGitCheckpointPaths({
       workspacePath: root,
       checkpointCommit: checkpoint.commitOid,
-      relativePath: "turn-only.txt",
+      relativePaths: ["turn-only.txt"],
     });
     assert.equal(fs.existsSync(path.join(root, "turn-only.txt")), false);
   } finally {
@@ -180,10 +180,10 @@ test("per-file restore refuses paths outside the worktree and blocked paths", as
     });
     for (const relativePath of ["../escape.txt", ".git/config", ".env"]) {
       await assert.rejects(
-        () => restoreGitCheckpointPath({
+        () => restoreGitCheckpointPaths({
           workspacePath: root,
           checkpointCommit: checkpoint.commitOid,
-          relativePath,
+          relativePaths: [relativePath],
         }),
         /Invalid path to restore|Refusing to restore/,
       );
@@ -262,8 +262,8 @@ test("restore preserves HEAD, staged and unstaged versions, deletions, binary an
     assert.deepEqual(fs.readFileSync(path.join(target, "new.bin")), Buffer.from([0, 255, 7]));
     fs.writeFileSync(path.join(root, "tracked.txt"), "agent changed\n");
     git(root, ["add", "tracked.txt", "new.bin"]);
-    await restoreGitCheckpointPath({ workspacePath: root, checkpointCommit: checkpoint.commitOid, relativePath: "tracked.txt" });
-    await restoreGitCheckpointPath({ workspacePath: root, checkpointCommit: checkpoint.commitOid, relativePath: "new.bin" });
+    await restoreGitCheckpointPaths({ workspacePath: root, checkpointCommit: checkpoint.commitOid, relativePaths: ["tracked.txt"] });
+    await restoreGitCheckpointPaths({ workspacePath: root, checkpointCommit: checkpoint.commitOid, relativePaths: ["new.bin"] });
     assert.equal(git(root, ["status", "--porcelain=v1"]), expectedStatus);
     assert.equal(git(root, ["show", ":tracked.txt"]), "staged");
   } finally {
@@ -289,7 +289,7 @@ test("concurrent agents in separate worktrees retain independent snapshots and l
     fs.writeFileSync(path.join(a, "file[1].txt"), "changed\n");
     fs.writeFileSync(path.join(a, "file1.txt"), "must stay\n");
     fs.writeFileSync(path.join(b, "tracked.txt"), "b still running\n");
-    await restoreGitCheckpointPath({ workspacePath: a, checkpointCommit: first.commitOid, relativePath: "file[1].txt" });
+    await restoreGitCheckpointPaths({ workspacePath: a, checkpointCommit: first.commitOid, relativePaths: ["file[1].txt"] });
     assert.equal(fs.readFileSync(path.join(a, "file[1].txt"), "utf8"), "a literal\n");
     assert.equal(fs.readFileSync(path.join(a, "file1.txt"), "utf8"), "must stay\n");
     assert.equal(fs.readFileSync(path.join(b, "tracked.txt"), "utf8"), "b still running\n");

@@ -198,7 +198,17 @@
   overscroll-behavior: contain;
 }
 
+.reviewNavigatorItem {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.reviewNavigatorItem > .reviewIconButton { flex: 0 0 auto; }
+.reviewSelectedUndo { display: none; }
+
 .reviewNavigatorFile {
+  flex: 1 1 auto;
   display: flex;
   width: 100%;
   min-width: 0;

@@ -70,16 +70,6 @@ const umbraticApi = {
   getNotes: () => invoke("umbratic:get-notes"),
   updateNotes: (input: { content: string }) => invoke("umbratic:update-notes", input),
   getTask: (input: { taskId: string }) => invoke("umbratic:get-task", input),
-  listTaskCheckpoints: (input: { taskId: string }) => invoke("umbratic:list-task-checkpoints", input),
-  createTaskCheckpoint: (input: { taskId: string; label?: string }) => invoke("umbratic:create-task-checkpoint", input),
-  setTaskCheckpointPinned: (input: { taskId: string; checkpointId: string; pinned: boolean }) =>
-    invoke("umbratic:set-task-checkpoint-pinned", input),
-  deleteTaskCheckpoint: (input: { taskId: string; checkpointId: string }) =>
-    invoke("umbratic:delete-task-checkpoint", input),
-  forkTaskCheckpoint: (input: { taskId: string; checkpointId: string }) =>
-    invoke("umbratic:fork-task-checkpoint", input),
-  restoreTaskCheckpoint: (input: { taskId: string; checkpointId: string; confirmed: boolean }) =>
-    invoke("umbratic:restore-task-checkpoint", input),
   refreshTaskReview: (input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }) => invoke("umbratic:refresh-task-review", input),
   refreshWorkspaceReview: (input: { repositoryPath: string }) => invoke("umbratic:refresh-workspace-review", input),
   readArtifactPreview: (input: { taskId: string; documentPath: string }) => invoke("umbratic:read-artifact-preview", input),
@@ -215,7 +205,7 @@ const umbraticApi = {
     invoke("umbratic:open-repository-in-ide", input),
   openTaskInIde: (input: { taskId: string; ideId: string; filePath?: string }) =>
     invoke("umbratic:open-task-in-ide", input),
-  revertReviewFile: (input: { taskId: string; path: string }) => invoke("umbratic:revert-review-file", input),
+  undoTaskChanges: (input: { taskId: string; path?: string }) => invoke("umbratic:undo-task-changes", input),
   keepWorktree: (input: { taskId: string }) => invoke("umbratic:keep-worktree", input),
   cancelTask: (input: { taskId: string }) => invoke("umbratic:cancel-task", input),
   setResponseFeedback: (input: { taskId: string; messageId: string; rating: ResponseRating | null; reason?: ResponseFeedbackReason; comment?: string }) =>

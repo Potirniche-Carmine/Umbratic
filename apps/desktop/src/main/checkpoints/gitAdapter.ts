@@ -220,61 +220,53 @@ export async function createGitCheckpoint(input: CheckpointGitInput): Promise<Ch
   }
 }
 
-/**
- * Put one file back the way the checkpoint has it, and leave every other file
- * in the worktree alone.
- *
- * The whole-worktree restore above is deliberately not reused here: it resets
- * the tree and the index wholesale, which is exactly the "one click erases the
- * turn" outcome this is meant to avoid. A path that the checkpoint does not
- * carry was created after it, so putting it back means removing it.
- */
-export async function restoreGitCheckpointPath(input: {
+/** Validate the entire undo before restoring any file or its staging state. */
+export async function restoreGitCheckpointPaths(input: {
   workspacePath: string;
   checkpointCommit: string;
-  relativePath: string;
+  relativePaths: string[];
 }): Promise<void> {
   if (!/^[a-f0-9]{40,64}$/i.test(input.checkpointCommit)) {
     throw new Error("Checkpoint object identity is invalid.");
   }
-  const relative = input.relativePath.replaceAll("\\", "/");
-  if (!relative || path.posix.isAbsolute(relative) || relative.split("/").some((part) => part === ".." || part === "")) {
-    throw new Error("Invalid path to restore.");
-  }
-  if (blockedCheckpointPath(relative)) {
-    throw new Error(`Refusing to restore ${relative}.`);
-  }
   const { root } = await assertEligible(input.workspacePath, input.checkpointCommit);
-  const target = path.resolve(root, relative);
-  if (!inside(root, target) || target === root) {
-    throw new Error("Refusing to restore a path outside the worktree.");
-  }
-  for (let directory = path.dirname(target); inside(root, directory) && directory !== root; directory = path.dirname(directory)) {
-    if (fs.lstatSync(directory, { throwIfNoEntry: false })?.isSymbolicLink()) {
-      throw new Error("Refusing to restore through a symbolic link.");
-    }
-  }
-  if (fs.lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) {
-    throw new Error("Refusing to restore through a symbolic link.");
-  }
   const indexTree = await git(root, ["rev-parse", `${input.checkpointCommit}^2^{tree}`]);
-  const entry = await git(root, ["--literal-pathspecs", "ls-tree", input.checkpointCommit, "--", relative]);
-  const indexEntry = await git(root, ["--literal-pathspecs", "ls-tree", indexTree, "--", relative]);
-  for (const value of [entry, indexEntry]) {
-    if (value && !/^100(644|755) blob [a-f0-9]+\t/.test(value)) throw new Error("Checkpoint path is not a regular file.");
+  const entries: { relative: string; target: string; entry: string; indexEntry: string }[] = [];
+  for (const file of input.relativePaths) {
+    const relative = file.replaceAll("\\", "/");
+    if (!relative || path.posix.isAbsolute(relative) || relative.split("/").some((part) => part === ".." || part === "")) {
+      throw new Error("Invalid path to restore.");
+    }
+    if (blockedCheckpointPath(relative)) throw new Error(`Refusing to restore ${relative}.`);
+    const target = path.resolve(root, relative);
+    if (!inside(root, target) || target === root) throw new Error("Refusing to restore a path outside the worktree.");
+    for (let directory = target; inside(root, directory) && directory !== root; directory = path.dirname(directory)) {
+      if (fs.lstatSync(directory, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        throw new Error("Refusing to restore through a symbolic link.");
+      }
+    }
+    const entry = await git(root, ["--literal-pathspecs", "ls-tree", input.checkpointCommit, "--", relative]);
+    const indexEntry = await git(root, ["--literal-pathspecs", "ls-tree", indexTree, "--", relative]);
+    for (const value of [entry, indexEntry]) {
+      if (value && !/^100(644|755) blob [a-f0-9]+\t/.test(value)) throw new Error("Checkpoint path is not a regular file.");
+    }
+    entries.push({ relative, target, entry, indexEntry });
   }
-  if (await pathsUseContentFilters(root, [relative])) throw new Error("Checkpoint restore refuses Git content filters.");
-  if (entry) {
-    await git(root, ["--literal-pathspecs", "restore", `--source=${input.checkpointCommit}`, "--worktree", "--", relative]);
-  } else if (fs.existsSync(target)) {
-    fs.unlinkSync(target);
+  if (await pathsUseContentFilters(root, entries.map(({ relative }) => relative))) {
+    throw new Error("Checkpoint restore refuses Git content filters.");
   }
-  // Restore only this path's original staging state. In particular, a file
-  // that was untracked before the turn must remain untracked after Undo.
-  if (indexEntry) {
-    await git(root, ["--literal-pathspecs", "restore", `--source=${indexTree}`, "--staged", "--", relative]);
-  } else {
-    await gitWithInput(root, ["update-index", "--force-remove", "-z", "--stdin"], `${relative}\0`);
+  for (const { relative, target, entry, indexEntry } of entries) {
+    if (entry) {
+      await git(root, ["--literal-pathspecs", "restore", `--source=${input.checkpointCommit}`, "--worktree", "--", relative]);
+    } else if (fs.existsSync(target)) {
+      fs.unlinkSync(target);
+    }
+    // A file that was untracked before the prompt must remain untracked.
+    if (indexEntry) {
+      await git(root, ["--literal-pathspecs", "restore", `--source=${indexTree}`, "--staged", "--", relative]);
+    } else {
+      await gitWithInput(root, ["update-index", "--force-remove", "-z", "--stdin"], `${relative}\0`);
+    }
   }
 }
 

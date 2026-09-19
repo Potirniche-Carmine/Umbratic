@@ -88,8 +88,8 @@ function fixture(taskId: string) {
       logicalBytes: 64,
       ref: `refs/umbratic/checkpoints/${taskId}/${checkpointId}`,
     }),
-    restoreGitCheckpointPath: async (input) => {
-      restoredPaths.push(input.relativePath);
+    restoreGitCheckpointPaths: async (input) => {
+      restoredPaths.push(...input.relativePaths);
     },
     deleteGitCheckpointRef: async () => undefined,
     materializeCheckpointWorktree: async () => undefined,
@@ -108,7 +108,7 @@ function fixture(taskId: string) {
 
 test("per-file undo restores exactly the file it was given", async () => {
   const state = fixture("task-undo-ok");
-  await state.service.restoreTurnCheckpointFile(state.task, "tracked.txt");
+  await state.service.restoreTurnCheckpointFiles(state.task, ["tracked.txt"]);
   assert.deepEqual(state.restoredPaths, ["tracked.txt"]);
   // The checkpoint stays: the next file somebody undoes needs it too.
   assert.equal(state.task.turnCheckpointId, "checkpoint-pre-turn");
@@ -118,7 +118,7 @@ test("undo without turnCheckpointId fails closed and never restores", async () =
   const state = fixture("task-undo-missing");
   state.task.turnCheckpointId = undefined;
   await assert.rejects(
-    () => state.service.restoreTurnCheckpointFile(state.task, "tracked.txt"),
+    () => state.service.restoreTurnCheckpointFiles(state.task, ["tracked.txt"]),
     /Undo is unsafe: no verified pre-turn checkpoint/,
   );
   assert.deepEqual(state.restoredPaths, []);
