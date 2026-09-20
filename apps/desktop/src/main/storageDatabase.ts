@@ -9,10 +9,6 @@ export function appDatabasePath(): string {
   return appDatabaseFile(app.getPath("userData"));
 }
 
-export function localDatabasePath(): string {
-  return appDatabasePath();
-}
-
 export function chatsDatabasePath(): string {
   return chatsDatabaseFile(app.getPath("userData"));
 }

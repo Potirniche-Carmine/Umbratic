@@ -24,7 +24,7 @@ use http_body_util::{BodyExt, Limited};
 use serde_json::{Map, Value, json};
 use tokio::{
     net::TcpListener,
-    sync::{broadcast::error::RecvError, oneshot},
+    sync::{broadcast::error::RecvError, watch},
     task::JoinHandle,
 };
 
@@ -79,11 +79,12 @@ fn attachment_filename(path: &Path) -> String {
 struct AppState {
     store: Arc<SessionStore>,
     password: Arc<str>,
+    shutdown: watch::Receiver<bool>,
 }
 
 pub struct RunnerServer {
     url: String,
-    shutdown: Option<oneshot::Sender<()>>,
+    shutdown: watch::Sender<bool>,
     task: JoinHandle<()>,
     store: Arc<SessionStore>,
 }
@@ -93,11 +94,23 @@ impl RunnerServer {
         &self.url
     }
     pub async fn close(mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
+        let _ = self.shutdown.send(true);
+        // Event streams and incomplete request bodies observe the same stop
+        // signal, so draining HTTP cannot wait forever for their clients.
+        if tokio::time::timeout(Duration::from_secs(1), &mut self.task)
+            .await
+            .is_err()
+        {
+            self.task.abort();
+            let _ = self.task.await;
         }
-        let _ = self.task.await;
         self.store.shutdown().await;
+    }
+}
+
+async fn shutdown_requested(mut receiver: watch::Receiver<bool>) {
+    if !*receiver.borrow() {
+        let _ = receiver.changed().await;
     }
 }
 
@@ -146,7 +159,13 @@ async fn boundary(State(state): State<AppState>, request: Request, next: Next) -
             .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Basic"));
         return response;
     }
-    let mut response = next.run(request).await;
+    let mut response = tokio::select! {
+        biased;
+        _ = shutdown_requested(state.shutdown) => error_response(
+            StatusCode::SERVICE_UNAVAILABLE, "shutting_down", "Runner is shutting down."
+        ),
+        response = next.run(request) => response,
+    };
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -302,7 +321,12 @@ async fn events(State(state): State<AppState>) -> impl IntoResponse {
             }
         }
     });
-    Sse::new(connected.chain(updates)).keep_alive(
+    Sse::new(
+        connected
+            .chain(updates)
+            .take_until(shutdown_requested(state.shutdown)),
+    )
+    .keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(15))
             .text("heartbeat"),
@@ -747,9 +771,11 @@ async fn not_found() -> Response {
 pub async fn listen(hostname: &str, port: u16) -> Result<RunnerServer, String> {
     require_loopback(hostname)?;
     let store = SessionStore::new()?;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let state = AppState {
         password: Arc::from(store.config.password.as_str()),
         store: store.clone(),
+        shutdown: shutdown_rx.clone(),
     };
     let app = Router::new()
         .route("/event", get(events))
@@ -770,17 +796,14 @@ pub async fn listen(hostname: &str, port: u16) -> Result<RunnerServer, String> {
         .map_err(|error| error.to_string())?;
     let address: SocketAddr = listener.local_addr().map_err(|error| error.to_string())?;
     let url = format!("http://{hostname}:{}", address.port());
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
+            .with_graceful_shutdown(shutdown_requested(shutdown_rx))
             .await;
     });
     Ok(RunnerServer {
         url,
-        shutdown: Some(shutdown_tx),
+        shutdown: shutdown_tx,
         task,
         store,
     })
@@ -829,6 +852,7 @@ mod tests {
         let state = AppState {
             store: store.clone(),
             password: Arc::from("password"),
+            shutdown: watch::channel(false).1,
         };
         let request = Request::builder()
             .method("POST")

@@ -29,6 +29,7 @@ function runnerFixture(failQueuedCheckpoint = false) {
   ].map((name) => [name, {}]));
   Object.assign(mocks, {
     "./mainRuntime": runtime,
+    "./runnerLifecycle": { activeRunnerProcesses: runtime.activeRunnerProcesses, stopRunnerProcess: () => { run.abortController.abort(); calls.push("stopped"); } },
     "./workspaceActivity": { reserveTaskWorkspace: () => { calls.push("reserved"); return () => calls.push("released"); } },
     "./checkpoints/undo": { captureUndoFiles: () => { task.undoFileHashes = {}; } },
     "./backendSettings": {
@@ -70,7 +71,6 @@ function runnerFixture(failQueuedCheckpoint = false) {
           queueMicrotask(() => { event({ type: "finish" }); event({ disposition: "dequeued", actionId: "next" }); });
         }
       },
-      stopRunnerProcess: () => { run.abortController.abort(); calls.push("stopped"); },
     },
   });
   const runner = loadTypeScriptModule(new URL("../src/main/taskRunner.ts", import.meta.url), { mocks });
@@ -114,7 +114,7 @@ test("workspace stays reserved until runner exit, including shutdown bookkeeping
   state.run.child.exitCode = null;
   let stopped;
   const stopping = new Promise((resolve) => { stopped = resolve; });
-  state.mocks["./runnerAdapter"].stopRunnerProcess = () => {
+  state.mocks["./runnerLifecycle"].stopRunnerProcess = () => {
     state.run.abortController.abort();
     stopped();
   };

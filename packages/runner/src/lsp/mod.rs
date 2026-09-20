@@ -144,13 +144,17 @@ impl LspService {
     }
 
     pub async fn shutdown(&self) {
-        for slot in self.slots.iter() {
+        futures_util::future::join_all(self.slots.iter().map(|slot| async {
             let mut state = slot.state.lock().await;
-            if let ServerState::Ready(process) = &mut *state {
-                process.shutdown().await;
+            let previous = std::mem::replace(&mut *state, ServerState::Degraded);
+            drop(state);
+            if let ServerState::Ready(mut process) = previous {
+                // The owned process is kill-on-drop if even its exit write
+                // stalls. Every slot drains concurrently within this bound.
+                let _ = timeout(Duration::from_secs(6), process.shutdown()).await;
             }
-            *state = ServerState::Degraded;
-        }
+        }))
+        .await;
     }
 }
 

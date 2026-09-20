@@ -1,6 +1,5 @@
 import { chatWorktreeTaskId, findReusableWorktreeTask, taskUsesIsolatedWorktree, worktreeRootTaskId } from "./worktreeOps";
-import { saveChat } from "./mainRuntime";
-import { imagePreviewDataUrl } from "./workspaceSnapshot";
+import { imagePreviewDataUrl } from "./imageAttachments";
 import {
   app,
 } from "electron";
@@ -189,7 +188,7 @@ export function createChat(input: unknown): ChatRecord {
     draftPrompt: "",
     attachedFiles: [],
   };
-  saveChat(chat);
+  writeChat(chat);
   return chat;
 }
 export function updateChatDraft(input: unknown): ChatRecord {

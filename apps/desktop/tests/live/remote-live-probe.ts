@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 
 import { loadTypeScriptModule } from "../helpers/load-ts-module.ts";
 
@@ -25,6 +25,7 @@ const port = Number(process.env.UMBRATIC_LIVE_SSH_PORT ?? "2222");
 const enabled = user !== "" && keyPath !== "";
 
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-live-remote-"));
+after(() => fs.rmSync(dataRoot, { recursive: true, force: true }));
 const electron = { app: { getPath: () => dataRoot } };
 const sshTransport = loadTypeScriptModule(new URL("../../src/main/sshTransport.ts", import.meta.url), {
   mocks: { electron },
@@ -59,19 +60,20 @@ test("live: the first connection pins the host's key into Umbratic's known_hosts
 
 test("live: host facts, runner install, capabilities, and folder listing", { skip: !enabled }, async () => {
   const facts = await remoteHost.probeRemoteHostFacts(target);
-  assert.equal(facts.os, "Linux");
+  assert.ok(["Linux", "Darwin"].includes(facts.os), facts.os);
   assert.ok(facts.home.startsWith("/"), facts.home);
-  assert.equal(remoteHost.remotePlatformKey(facts.os, facts.arch), "linux-x64");
+  const platform = remoteHost.remotePlatformKey(facts.os, facts.arch);
+  assert.ok(platform, `unsupported host: ${facts.os} ${facts.arch}`);
 
-  const artifact = remoteHost.remoteRunnerArtifact("linux-x64");
-  assert.ok(artifact, "build the linux-x64 runner into target/remote first");
+  const artifact = remoteHost.remoteRunnerArtifact(platform);
+  assert.ok(artifact, `build the ${platform} runner into target/remote first`);
   const installed = await remoteHost.installRemoteRunner(target, facts);
   assert.equal(installed.sha256, artifact.sha256, "the checksum verified on the far side matches the artifact");
   assert.match(installed.runnerVersion, /UmbraticRunner/);
 
   const report = await remoteHost.probeRemoteCapabilities(target, installed.runnerVersion);
   const git = report.probes.find((probe: { id: string }) => probe.id === "git");
-  assert.equal(git?.status, "available", "the WSL host has git");
+  assert.equal(git?.status, "available", "the test host has git");
   assert.ok(git?.executablePath?.startsWith("/"), "remote paths are the remote host's");
 
   const listing = await remoteHost.listRemoteDirectory(target, `${facts.home}/remote-workspace`);

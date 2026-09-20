@@ -149,6 +149,9 @@ func (c *admissionController) trackedUsers() int {
 }
 
 func acquireSlot(ctx context.Context, slots chan struct{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case slots <- struct{}{}:
 		return nil

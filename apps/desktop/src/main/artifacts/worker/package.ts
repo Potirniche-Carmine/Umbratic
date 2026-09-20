@@ -25,6 +25,34 @@ export class PackageError extends Error {
   }
 }
 
+function readPart(entry: JSZip.JSZipObject, limit: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let failed = false;
+    const stream = entry.nodeStream("nodebuffer");
+    const fail = (error: PackageError) => {
+      failed = true;
+      stream.pause();
+      chunks.length = 0;
+      reject(error);
+    };
+    stream.on("data", (chunk: Buffer) => {
+      if (failed) return;
+      size += chunk.length;
+      if (size > limit) {
+        // Pause before retaining the chunk. Backpressure stops the inflater;
+        // checking after entry.async() already allocated the entire zip bomb.
+        fail(new PackageError(`Part ${entry.name} exceeds the remaining ${limit}-byte limit.`, "too-large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.once("error", (error) => fail(new PackageError(`Part ${entry.name} could not be read: ${error.message}`)));
+    stream.once("end", () => { if (!failed) resolve(Buffer.concat(chunks, size)); });
+  });
+}
+
 export class OoxmlPackage {
   private constructor(private readonly parts: Map<string, Buffer>) {}
 
@@ -60,20 +88,12 @@ export class OoxmlPackage {
       // the extraction root. Nothing here writes entries to disk, but the names
       // become part identifiers and relationship targets, so a traversal is
       // refused rather than normalised into something that looks legitimate.
-      if (name.includes("..") || name.startsWith("/") || name.includes("\\")) {
+      const originalName = entry.unsafeOriginalName ?? name;
+      if ([name, originalName].some((value) => value.includes("..") || value.startsWith("/") || value.includes("\\"))) {
         throw new PackageError(`The package contains an unsafe entry name: ${name}`);
       }
-      const content = Buffer.from(await entry.async("uint8array"));
-      if (content.byteLength > maxPartBytes) {
-        throw new PackageError(`Part ${name} is larger than the ${maxPartBytes}-byte part limit.`, "too-large");
-      }
+      const content = await readPart(entry, Math.min(maxPartBytes, maxInflatedBytes - inflated));
       inflated += content.byteLength;
-      if (inflated > maxInflatedBytes) {
-        throw new PackageError(
-          `The package inflates past the ${maxInflatedBytes}-byte limit.`,
-          "too-large",
-        );
-      }
       parts.set(name, content);
     }
     if (parts.size === 0) throw new PackageError("The package contains no parts.");

@@ -1,7 +1,7 @@
 import { getMainWindow } from "./mainRuntime";
 import { chatAttachmentDirectory, chatAttachmentRoot, extensionForMimeType, parseAttachmentDataUrl, safeAttachmentFileName, stableRepositoryId } from "./chatStore";
 import { chatAttachmentByteLimit } from "./mainRuntime";
-import { imagePreviewDataUrl } from "./workspaceSnapshot";
+import { imagePreviewDataUrl } from "./imageAttachments";
 import {
   app,
   dialog,

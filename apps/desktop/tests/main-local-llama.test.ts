@@ -11,7 +11,7 @@ const llamaServerSource = fs.readFileSync(new URL("../src/main/llamaServer.ts", 
 const childShutdownSource = fs.readFileSync(new URL("../src/main/childShutdown.ts", import.meta.url), "utf8");
 
 test("the chat sidecar is launched with the weights, the whole context, and one slot", () => {
-  const args = localLlama.localLlamaArgs({ modelFile: "/models/gemma4-e2b.gguf", modelId: "gemma4-e2b", contextLength: 64000, mtp: null });
+  const args = localLlama.localLlamaArgs({ modelFile: "/models/gemma4-e2b.gguf", modelId: "gemma4-e2b", projectorFile: null, contextLength: 64000, mtp: null });
 
   assert.deepEqual([...args], [
     "-m", "/models/gemma4-e2b.gguf",
@@ -32,7 +32,7 @@ test("the chat sidecar is launched with the weights, the whole context, and one 
 });
 
 test("a model with an MTP head drafts from it when asked, naming a separate head as the draft model", () => {
-  const base = { modelFile: "/models/qwen38-27b.gguf", modelId: "qwen38-27b", contextLength: 64000 };
+  const base = { modelFile: "/models/qwen38-27b.gguf", modelId: "qwen38-27b", projectorFile: null, contextLength: 64000 };
   // The head is inside the weights: llama-server is told to draft and finds it there.
   const embedded = localLlama.localLlamaArgs({ ...base, mtp: { draftFile: null } });
   assert.deepEqual([...embedded.slice(-4)], ["--spec-type", "draft-mtp", "--spec-draft-n-max", "2"]);
@@ -46,22 +46,22 @@ test("a model with an MTP head drafts from it when asked, naming a separate head
 
 test("a missing or unconfigured model sends the user to the connection panel, not to a stack trace", async () => {
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: "", modelId: "gemma4-e2b", contextLength: 64000, mtp: null }),
+    () => localLlama.ensureLocalLlama({ modelFile: "", modelId: "gemma4-e2b", projectorFile: null, contextLength: 64000, mtp: null }),
     /Download a model in Settings/,
   );
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: path.join(os.tmpdir(), "umbratic-absent.gguf"), modelId: "gemma4-e2b", contextLength: 64000, mtp: null }),
+    () => localLlama.ensureLocalLlama({ modelFile: path.join(os.tmpdir(), "umbratic-absent.gguf"), modelId: "gemma4-e2b", projectorFile: null, contextLength: 64000, mtp: null }),
     /Download a model in Settings/,
   );
 
   const present = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-llama-")), "weights.gguf");
   fs.writeFileSync(present, "");
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: present, modelId: "", contextLength: 64000, mtp: null }),
+    () => localLlama.ensureLocalLlama({ modelFile: present, modelId: "", projectorFile: null, contextLength: 64000, mtp: null }),
     /Download a model in Settings/,
   );
   await assert.rejects(
-    () => localLlama.ensureLocalLlama({ modelFile: present, modelId: "gemma4-e2b", contextLength: 0, mtp: null }),
+    () => localLlama.ensureLocalLlama({ modelFile: present, modelId: "gemma4-e2b", projectorFile: null, contextLength: 0, mtp: null }),
     /context length is not configured/,
   );
 });
@@ -109,4 +109,18 @@ test("the sidecar's own output stays in diagnostics, never in a renderer-visible
   assert.ok(thrown.some((message) => message.includes("did not become ready within")));
   assert.ok(thrown.some((message) => message.includes("exited before it was ready")));
   for (const message of thrown) assert.equal(message.includes("${output"), false);
+});
+
+test("vision loads a paired projector and rejects a missing encoder before starting", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-vision-"));
+  try {
+    const modelFile = path.join(directory, "weights.gguf");
+    fs.writeFileSync(modelFile, "weights");
+    const request = { modelFile, projectorFile: path.join(directory, "mmproj.gguf"), modelId: "vision", contextLength: 4096, mtp: null };
+    const args = localLlama.localLlamaArgs(request);
+    assert.equal(args[args.indexOf("--mmproj") + 1], request.projectorFile);
+    await assert.rejects(() => localLlama.ensureLocalLlama(request), /Download a model/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

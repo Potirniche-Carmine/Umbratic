@@ -101,7 +101,7 @@ pub struct AliasResolver<'a> {
     cache: HashMap<String, Option<AliasConfig>>,
 }
 
-fn join_relative(base: &str, relative: &str) -> String {
+pub(crate) fn join_relative(base: &str, relative: &str) -> String {
     let mut parts: Vec<&str> = base.split('/').filter(|part| !part.is_empty()).collect();
     for part in relative.split('/') {
         match part {

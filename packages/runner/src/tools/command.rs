@@ -547,7 +547,25 @@ async fn terminate_command_tree(child: &mut tokio::process::Child, pid: Option<u
         }
         return;
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    if let Some(pid) = pid {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let _ = tokio::time::timeout(
+            Duration::from_secs(1),
+            Command::new(
+                std::path::Path::new(&root)
+                    .join("System32")
+                    .join("taskkill.exe"),
+            )
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status(),
+        )
+        .await;
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = pid;
     let _ = child.kill().await;
 }

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::{ToolSurface, catalog::ContractViolation};
+use super::{ToolSurface, catalog::ContractViolation, string_arg, string_list_arg};
 use crate::{
     policy::redact_text,
     safety::{SafetyDecision, evaluate_command},
@@ -285,30 +285,6 @@ pub(super) fn parse_arguments(value: &Value) -> Result<Map<String, Value>, Strin
         }
         _ => Err("Tool arguments must be a JSON object.".into()),
     }
-}
-
-fn string_arg(input: &Map<String, Value>, names: &[&str]) -> String {
-    names
-        .iter()
-        .find_map(|name| input.get(*name).and_then(Value::as_str))
-        .unwrap_or("")
-        .to_owned()
-}
-
-fn string_list_arg(input: &Map<String, Value>, names: &[&str]) -> Vec<String> {
-    names
-        .iter()
-        .find_map(|name| input.get(*name))
-        .map(|value| match value {
-            Value::String(value) => vec![value.clone()],
-            Value::Array(values) => values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect(),
-            _ => Vec::new(),
-        })
-        .unwrap_or_default()
 }
 
 pub(super) fn command_display(input: &Map<String, Value>) -> String {

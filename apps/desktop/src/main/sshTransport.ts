@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { stopChild } from "./childShutdown";
 
 import type { RemoteAuthMethod, RemoteTarget } from "./types";
 
@@ -205,52 +206,59 @@ export function spawnSsh(
 
 function collect(child: ChildProcess, options: SshExecOptions): Promise<SshExecResult> {
   return new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill();
-      reject(new SshError("The remote host did not answer in time.", null, stderr));
-    }, options.timeoutMs ?? defaultCommandTimeoutMs);
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.kill();
-      reject(new SshError("The remote request was cancelled.", null, stderr));
-    };
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    const append = (target: "out" | "err") => (chunk: Buffer) => {
-      const text = chunk.toString("utf8");
-      if (target === "out") {
-        if (stdout.length < maxCapturedOutputBytes) stdout += text;
-      } else if (stderr.length < maxCapturedOutputBytes) {
-        stderr += text;
-      }
-    };
-    child.stdout?.on("data", append("out"));
-    child.stderr?.on("data", append("err"));
-    child.once("error", (error) => {
-      if (settled) return;
-      settled = true;
+    const capturedError = () => Buffer.concat(stderr).toString("utf8");
+    const cleanup = () => {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
+      child.stdout?.off("data", onStdout);
+      child.stderr?.off("data", onStderr);
+      child.off("error", onError);
+      child.off("close", onClose);
+      child.stdin?.off("error", onError);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      stopChild(child);
       reject(error);
-    });
-    child.once("close", (code) => {
+    };
+    const timer = setTimeout(() => {
+      fail(new SshError("The remote host did not answer in time.", null, capturedError()));
+    }, options.timeoutMs ?? defaultCommandTimeoutMs);
+    const onAbort = () => fail(new SshError("The remote request was cancelled.", null, capturedError()));
+    const onError = (error: Error) => fail(error);
+    const onStdout = (chunk: Buffer) => {
+      const kept = chunk.subarray(0, Math.max(0, maxCapturedOutputBytes - stdoutBytes));
+      if (kept.length) { stdout.push(Buffer.from(kept)); stdoutBytes += kept.length; }
+    };
+    const onStderr = (chunk: Buffer) => {
+      const kept = chunk.subarray(0, Math.max(0, maxCapturedOutputBytes - stderrBytes));
+      if (kept.length) { stderr.push(Buffer.from(kept)); stderrBytes += kept.length; }
+    };
+    const onClose = (code: number | null) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-      resolve({ code, stdout, stderr });
-    });
-    if (options.input !== undefined) {
-      child.stdin?.end(options.input);
-    } else {
-      child.stdin?.end();
+      cleanup();
+      // Decode once so UTF-8 split across pipe chunks survives unchanged.
+      resolve({ code, stdout: Buffer.concat(stdout).toString("utf8"), stderr: capturedError() });
+    };
+    child.stdout?.on("data", onStdout);
+    child.stderr?.on("data", onStderr);
+    child.once("error", onError);
+    child.once("close", onClose);
+    child.stdin?.once("error", onError);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) {
+      onAbort();
+      return;
     }
+    child.stdin?.end(options.input);
   });
 }
 
@@ -269,6 +277,7 @@ export async function runRemoteCommand(
   options: SshExecOptions = {},
   secret?: string,
 ): Promise<SshExecResult> {
+  if (options.signal?.aborted) throw new SshError("The remote request was cancelled.", null, "");
   const child = spawnSsh(target, userDataPath, [], shellCommand(command), secret);
   return collect(child, options);
 }

@@ -16,6 +16,7 @@ import {
   effectiveEffort,
   modelQuant,
   quantMtpFile,
+  quantProjectorFile,
   quantWeightsFile,
   samplingFor,
   type CatalogModel,
@@ -193,9 +194,11 @@ export async function ensureLocalChatRuntime(input: {
 }): Promise<LocalVeilConnection> {
   const model = selectedLocalChatModel(input.dataRoot, input.settings.modelId);
   if (!model) throw new Error(chooseLocalModelMessage);
+  const projector = quantProjectorFile(activeQuant(input.dataRoot, model)!);
   const runtime = await ensureLocalLlama(
     {
       modelFile: localModelWeightsPath(input.dataRoot, model),
+      projectorFile: projector ? modelFilePath(input.dataRoot, model, projector) : null,
       modelId: model.id,
       contextLength: input.contextLength,
       mtp: localModelMtp(input.dataRoot, model, input.mtp),
@@ -218,6 +221,7 @@ export async function ensureLocalChatRuntime(input: {
     {
       ...runtime,
       reasoning: model.reasoning,
+      vision: projector !== null,
       reasoningEffort: effort,
       sampling: samplingFor(model, effort ?? "off"),
       speech,

@@ -1,7 +1,7 @@
+import { activeRunnerProcesses } from "./runnerLifecycle";
 import { getMainWindow, getPermissionMode } from "./mainRuntime";
-let telemetrySyncTimer: NodeJS.Timeout | null = null;
 
-import { RunnerPromptPart, activeRunnerProcesses, recordProductTelemetry } from "./mainRuntime";
+import { RunnerPromptPart, recordProductTelemetry } from "./mainRuntime";
 import {
   app,
   dialog,
@@ -84,12 +84,7 @@ import { modelsDirectory } from "./appPaths";
 import { systemProfile } from "./hardware";
 import { recordLocalDiagnostic } from "./diagnostics";
 import { buildRedactedTelemetryBundle } from "./telemetry";
-import {
-  syncTelemetryBundle,
-  telemetrySpoolDirectory,
-  uploadTelemetrySpool,
-} from "./telemetrySync";
-import { checkEndpointHealth, telemetryUploadEndpoint } from "./modelEndpointRuntime";
+import { checkEndpointHealth } from "./modelEndpointRuntime";
 import { connectedVeilFeatures, connectedVeilSupports, recordVeilFeatures, veilFeature } from "./veilFeatures";
 import {
   getSkillDocument as getSkillDocumentService,
@@ -106,7 +101,6 @@ import type {
   LocalModelProvider,
   LocalDiagnosticInfo,
   RunnerProcess,
-  TelemetrySyncResult,
 } from "./types";
 import { isRecord, pathInside, requiredString } from "./utils";
 
@@ -762,42 +756,4 @@ export function recordRendererProductEvent(input: unknown): void {
     repositoryId,
     data: { ideId, surface },
   });
-}
-
-export async function retryTelemetrySpoolQueue(): Promise<void> {
-  if (!telemetryPolicyForMode(readModelEndpointSettings().mode).syncEnabled) return;
-  const provider = endpointProvider();
-  await uploadTelemetrySpool({
-    directory: telemetrySpoolDirectory(app.getPath("userData")),
-    endpoint: telemetryUploadEndpoint(provider),
-  });
-}
-
-export async function syncTelemetryNow(): Promise<TelemetrySyncResult> {
-  if (!telemetryPolicyForMode(readModelEndpointSettings().mode).syncEnabled) {
-    throw new Error("Telemetry sync is disabled by policy.");
-  }
-  const provider = endpointProvider();
-  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects(), readProductTelemetryEvents(), readLocalDiagnostics());
-  return syncTelemetryBundle({
-    directory: telemetrySpoolDirectory(app.getPath("userData")),
-    bundle,
-    endpoint: telemetryUploadEndpoint(provider),
-  });
-}
-
-export function scheduleManagedTelemetrySync() {
-  if (!telemetryPolicyForMode(readModelEndpointSettings().mode).syncEnabled || telemetrySyncTimer) return;
-  telemetrySyncTimer = setTimeout(() => {
-    telemetrySyncTimer = null;
-    void syncTelemetryNow().catch((cause) => {
-      recordLocalDiagnostic({
-        level: "warn",
-        source: "telemetry",
-        event: "sync.failed",
-        message: String(cause instanceof Error ? cause.message : cause),
-      });
-    });
-  }, 5000);
-  telemetrySyncTimer.unref?.();
 }

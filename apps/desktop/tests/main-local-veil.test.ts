@@ -12,6 +12,7 @@ const runtime = {
   baseUrl: "http://127.0.0.1:43999",
   apiKey: "per-run-llama-secret",
   reasoning: true,
+  vision: true,
 };
 
 test("managed local Veil is pointed at the app's own llama-server with its per-run bearer", () => {
@@ -43,6 +44,7 @@ test("managed local Veil is pointed at the app's own llama-server with its per-r
     assert.equal(env.VEIL_PROVIDER_API_KEY, "per-run-llama-secret");
     // The catalog decides whether a thinking directive means anything.
     assert.equal(env.VEIL_MODEL_REASONING, "true");
+    assert.equal(env.VEIL_MODEL_VISION, "true");
     assert.equal(env.VEIL_CONTEXT_LENGTH, "64000");
     assert.equal(env.VEIL_MODEL_TIMEOUT, "10m");
     assert.equal(env.VEIL_REQUEST_TIMEOUT, "12m");

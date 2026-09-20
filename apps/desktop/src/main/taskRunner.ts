@@ -1,9 +1,10 @@
+import { activeRunnerProcesses, stopRunnerProcess } from "./runnerLifecycle";
 import { runArtifactJob as runDocumentJob } from "./artifacts/service";
 import { localArtifactTransport, remoteArtifactTransport } from "./artifacts/transport";
 import { getPermissionMode } from "./mainRuntime";
 import { resolveSelectedModel, submitSteeredRunnerTurn } from "./backendSettings";
 import { chatAttachmentDirectory } from "./chatStore";
-import { PendingTaskPrompt, RunnerPrompt, activeRunnerProcesses, appendUserMessage, applyTaskPolicyMetadata, clearPendingPermissionsForTask, emit, failTask, getTask, pendingPermissions, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, recordProductTelemetry, saveTask, taskStillRunning } from "./mainRuntime";
+import { PendingTaskPrompt, RunnerPrompt, appendUserMessage, applyTaskPolicyMetadata, clearPendingPermissionsForTask, emit, failTask, getTask, pendingPermissions, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, recordProductTelemetry, saveTask, taskStillRunning } from "./mainRuntime";
 import { runnerPromptForTask, runnerPromptParts, runnerPromptText } from "./taskPromptContext";
 import { refreshWorkspaceGraph } from "./indexerService";
 import { refreshReview, reviewPatchHash } from "./reviewFiles";
@@ -24,7 +25,6 @@ import {
   replyRunnerPermission,
   setRunnerProviderSession,
   startUmbraticRunnerServer,
-  stopRunnerProcess,
 } from "./runnerAdapter";
 import { startRemoteRunnerServer } from "./remoteRunner";
 import {

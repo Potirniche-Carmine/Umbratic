@@ -46,14 +46,14 @@ test("dictation models ship their projector alongside the weights", () => {
   }
 });
 
-test("every catalog id is unique and every chat quantization is one weights file, plus at most an MTP head", () => {
+test("every catalog id is unique and every chat quantization is one weights file, a vision projector, and at most an MTP head", () => {
   const ids = catalog.modelCatalog.map((model) => model.id);
   assert.equal(new Set(ids).size, ids.length, "duplicate catalog id");
   for (const model of catalog.catalogModels("chat")) {
     const labels = model.quants.map((quant) => quant.quant);
     assert.equal(new Set(labels).size, labels.length, `${model.id} repeats a quant label`);
     for (const quant of model.quants) {
-      const weights = quant.files.filter((file) => !/^mtp-/i.test(file.name));
+      const weights = quant.files.filter((file) => !/^(mtp|mmproj)-/i.test(file.name));
       assert.equal(weights.length, 1, `${model.id}@${quant.quant} should be a single weights GGUF`);
       assert.equal(catalog.quantWeightsFile(quant), weights[0]);
       assert.ok(
@@ -61,6 +61,8 @@ test("every catalog id is unique and every chat quantization is one weights file
         `${model.id}@${quant.quant} label should match its file name`,
       );
       // A separate head only travels with a dense model that we draft from.
+      assert.equal(quant.files.filter((file) => /^mmproj-/i.test(file.name)).length, 1, `${model.id} needs one vision projector`);
+      assert.ok(catalog.quantProjectorFile(quant));
       const head = catalog.quantMtpFile(quant);
       if (head) assert.equal(model.mtp, true, `${model.id} ships an MTP head it does not claim`);
     }
@@ -128,7 +130,7 @@ test("memory fit is quant-aware and never hides a row", () => {
   assert.equal(hardware.neededRamGB(qwen, q4), 32);
   // The others scale with their bytes: a Q8_0 that is 1.7x the size wants
   // 1.7x the room, and a rung below the default wants less.
-  assert.equal(hardware.neededRamGB(qwen, q8), Math.ceil(32 * (q8.files[0].bytes / q4.files[0].bytes)));
+  assert.equal(hardware.neededRamGB(qwen, q8), Math.ceil(32 * (catalog.catalogQuantBytes(q8) / catalog.catalogQuantBytes(q4))));
   assert.ok(hardware.neededRamGB(obliterated, smaller) < obliterated.minRamGB);
 
   assert.equal(hardware.memoryFit(qwen, q4, { ramGB: 32, vramGB: null }), "comfortable");

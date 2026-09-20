@@ -287,11 +287,28 @@ impl SessionStore {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        for session in sessions {
+        for session in &sessions {
+            session.abort();
+            self.permissions.abort_all(&self.sink, &session.task_id);
+            self.artifacts.abort_all(&self.sink, &session.task_id);
+        }
+        // Let command cancellation reap process groups before the runtime
+        // drops their futures. Network-only failures still have a fixed bound.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while sessions
+                .iter()
+                .any(|session| session.active_run_id().is_some())
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        futures_util::future::join_all(sessions.iter().map(|session| async {
             if let Some(lsp) = session.lsp.as_ref() {
                 lsp.shutdown().await;
             }
-        }
+        }))
+        .await;
     }
 
     pub fn diagnostic_metadata(&self) -> Value {

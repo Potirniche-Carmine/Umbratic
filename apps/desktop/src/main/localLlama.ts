@@ -13,6 +13,8 @@ import { createLlamaSupervisor, type LlamaConnection, type LlamaDiagnosticSink }
 export type LocalLlamaRequest = {
   /** Absolute path to the downloaded GGUF weights. */
   modelFile: string;
+  /** Vision encoder paired with these weights, when available. */
+  projectorFile: string | null;
   /**
    * The catalog id the server advertises as its model name. Without an alias
    * llama-server reports the weights file path, Veil never finds the model it
@@ -55,6 +57,7 @@ export function resetLocalLlamaBackoff(): void {
 export function localLlamaArgs(request: LocalLlamaRequest): string[] {
   return [
     "-m", request.modelFile,
+    ...(request.projectorFile ? ["--mmproj", request.projectorFile] : []),
     // Serve under the catalog id, which is the name Veil is configured with.
     "--alias", request.modelId,
     "--ctx-size", String(request.contextLength),
@@ -88,6 +91,9 @@ export async function ensureLocalLlama(
 ): Promise<LlamaConnection> {
   if (!request.modelFile) throw new Error("Download a model in Settings → Connection");
   if (!fs.existsSync(request.modelFile)) throw new Error("Download a model in Settings → Connection");
+  if (request.projectorFile && !fs.existsSync(request.projectorFile)) {
+    throw new Error("Download a model in Settings → Connection");
+  }
   if (!request.modelId.trim()) throw new Error("Download a model in Settings → Connection");
   if (request.mtp?.draftFile && !fs.existsSync(request.mtp.draftFile)) {
     throw new Error("Download a model in Settings → Connection");
@@ -98,6 +104,7 @@ export async function ensureLocalLlama(
   return supervisor.ensure({
     key: JSON.stringify({
       modelFile: request.modelFile,
+      projectorFile: request.projectorFile,
       modelId: request.modelId,
       contextLength: request.contextLength,
       mtp: request.mtp,

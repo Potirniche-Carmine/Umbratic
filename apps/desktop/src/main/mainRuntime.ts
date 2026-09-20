@@ -1,4 +1,4 @@
-import { scheduleManagedTelemetrySync } from "./backendSettings";
+import { scheduleManagedTelemetrySync } from "./managedTelemetry";
 import { updateChatFromTask } from "./chatStore";
 import {
   BrowserWindow,
@@ -19,7 +19,6 @@ import {
   readPermissionModeSetting,
   readTask,
   readTasks,
-  writeChat,
   writeProductTelemetryEvent,
   writeTask,
   writeTasks,
@@ -29,9 +28,7 @@ import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendE
 import type {
   BackendUiEvent,
   ChatAttachment,
-  ChatRecord,
   ProductTelemetryEventType,
-  RunnerProcess,
   PendingPermission,
   PermissionMode,
   TaskInfo,
@@ -62,7 +59,6 @@ export type PendingTaskPrompt = {
 export type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
   | { ok: false; error: string };
-export const activeRunnerProcesses = new Map<string, RunnerProcess>();
 export const cancelledTaskRuns = new Set<string>();
 export const activeStartTaskRequests = new Map<string, Promise<TaskInfo>>();
 export const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: number }>();
@@ -204,10 +200,6 @@ export function compactClosedTaskStorage() {
   if (changed) {
     writeTasks(compacted);
   }
-}
-
-export function saveChat(chat: ChatRecord) {
-  writeChat(chat);
 }
 
 export function applyTaskPolicyMetadata(task: TaskRecord) {

@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
 
-import { isLocalhostUrl } from "./policy";
+import { isLocalhostUrl } from "./utils";
 import type { SamplingProfile } from "./modelCatalog";
 import type { ReasoningEffort } from "../shared/desktopApi";
 import type { ActiveModelEndpointSettings } from "./types";
@@ -34,6 +34,8 @@ export type LocalRuntimeConnection = {
    * fact, and Veil drops a thinking directive for a model that lacks it.
    */
   reasoning: boolean;
+  /** True only when the chat runtime has loaded a vision projector. */
+  vision: boolean;
   /**
    * How hard to ask this model to think, or null to say nothing about it.
    * Null is the honest value for a model whose chat template does not read an
@@ -106,6 +108,7 @@ function localVeilKey(
     runtimeBaseUrl: runtime.baseUrl,
     runtimeApiKey: runtime.apiKey,
     reasoning: runtime.reasoning,
+    vision: runtime.vision,
     // Both join the key: Veil reads them from its environment once at startup,
     // so a changed effort or a changed sampling set has to bring it back up.
     reasoningEffort: runtime.reasoningEffort ?? null,
@@ -291,6 +294,7 @@ export function localVeilEnvironment(input: {
     VEIL_PROVIDER_BASE_URL: runtime.baseUrl,
     VEIL_PROVIDER_API_KEY: runtime.apiKey,
     VEIL_MODEL_REASONING: runtime.reasoning ? "true" : "false",
+    VEIL_MODEL_VISION: runtime.vision ? "true" : "false",
     VEIL_CONTEXT_LENGTH: String(normalizeContextLength(contextLength)),
     VEIL_TEMPLATE_REGISTRY_PATH: "",
     VEIL_TELEMETRY_ENABLED: "false",

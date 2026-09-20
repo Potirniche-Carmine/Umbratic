@@ -13,6 +13,7 @@
  * who opens it in Word can restyle the whole thing from the styles gallery.
  */
 
+import { inlineRuns } from "../inlineText.js";
 import * as path from "node:path";
 
 import { loadImage } from "../images.js";
@@ -174,23 +175,6 @@ export type RunStyle = {
   color?: string;
   code?: boolean;
 };
-
-/** Splits `**bold**`, `*italic*`, and `` `code` `` the same way PPTX does. */
-export function inlineRuns(value: string): Array<{ text: string; bold?: boolean; italic?: boolean; code?: boolean }> {
-  const runs: Array<{ text: string; bold?: boolean; italic?: boolean; code?: boolean }> = [];
-  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
-  let cursor = 0;
-  for (let match = pattern.exec(value); match; match = pattern.exec(value)) {
-    if (match.index > cursor) runs.push({ text: value.slice(cursor, match.index) });
-    const token = match[0];
-    if (token.startsWith("**")) runs.push({ text: token.slice(2, -2), bold: true });
-    else if (token.startsWith("`")) runs.push({ text: token.slice(1, -1), code: true });
-    else runs.push({ text: token.slice(1, -1), italic: true });
-    cursor = match.index + token.length;
-  }
-  if (cursor < value.length) runs.push({ text: value.slice(cursor) });
-  return runs.length > 0 ? runs : [{ text: value }];
-}
 
 export function runNode(text: string, style: RunStyle = {}): XmlNode {
   const properties: XmlNode[] = [];

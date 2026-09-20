@@ -1,3 +1,4 @@
+import { awaitRunnerListener, stopRunnerProcess } from "./runnerLifecycle";
 import { companyTLS } from "./companyTrust";
 import { resolveReasoningEffort } from "../shared/desktopApi";
 import { spawn } from "node:child_process";
@@ -321,29 +322,6 @@ export async function freeLocalPort(): Promise<number> {
   });
 }
 
-export function stopRunnerProcess(run: RunnerProcess) {
-  if (run.providerSessionRefresh) {
-    clearInterval(run.providerSessionRefresh);
-    run.providerSessionRefresh = undefined;
-  }
-  run.abortController.abort();
-  if (run.child.killed || run.child.exitCode !== null) return;
-  // Closing stdin is the shutdown signal the runner listens for, and for a
-  // remote run it is the only one that reaches it: killing the local ssh
-  // process ends the channel, but nothing on the remote host would otherwise
-  // tell the runner that the desktop is gone.
-  run.child.stdin?.end();
-  if (process.platform === "win32" && run.child.pid) {
-    const terminator = spawn("taskkill", ["/pid", String(run.child.pid), "/t", "/f"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    terminator.unref();
-    return;
-  }
-  run.child.kill();
-}
-
 function runnerAuthHeader(run: RunnerProcess): string {
   return `Basic ${Buffer.from(`umbratic-runner:${run.password}`).toString("base64")}`;
 }
@@ -417,71 +395,21 @@ export async function startUmbraticRunnerServer(
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  // The password travels on stdin with the rest of the configuration. Process
-  // arguments are readable by any local process via `ps` or WMI.
-  //
-  // Stdin stays open afterwards. The runner reads the configuration as one line
-  // and then treats end of file as "the parent is gone", which is what stops a
-  // runner from outliving the app that configured it.
-  child.stdin?.write(`${JSON.stringify({ ...config, password })}\n`);
-
-  let output = "";
-  const url = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      stopRunnerProcess({
-        taskId: task.id,
-        url: `http://127.0.0.1:${port}`,
-        password,
-        directory: task.worktreePath,
-        ...diagnostics,
-        child,
-        abortController: new AbortController(),
-      });
-      reject(new Error(`Timed out waiting for Umbratic runner to start.${output.trim() ? `\n${output.trim()}` : ""}`));
-    }, 15000);
-    let settled = false;
-    const cleanup = () => {
-      clearTimeout(timer);
-      child.stdout?.off("data", onData);
-      child.stderr?.off("data", onData);
-      child.off("error", onError);
-      child.off("exit", onExit);
-    };
-    const onData = (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-      const match = output.match(/(?:umbratic|umbratic) runner listening on\s+(https?:\/\/[^\s]+)/i);
-      if (!match || settled) return;
-      settled = true;
-      cleanup();
-      resolve(match[1]);
-    };
-    const onError = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new Error(`Umbratic runner exited before startup with code ${code ?? "unknown"}.${output.trim() ? `\n${output.trim()}` : ""}`));
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.once("error", onError);
-    child.once("exit", onExit);
-  });
-
-  return {
+  const run: RunnerProcess = {
     taskId: task.id,
-    url,
+    url: `http://127.0.0.1:${port}`,
     password,
     directory: task.worktreePath,
     ...diagnostics,
     child,
     abortController: new AbortController(),
   };
+  const started = await awaitRunnerListener(child, run.url, { ...config, password }, 15_000);
+  if (!started.ok) {
+    stopRunnerProcess(run);
+    throw new Error("The Umbratic runner did not start.");
+  }
+  return run;
 }
 
 function parseSseBlock(block: string): unknown | null {
@@ -522,23 +450,29 @@ export function beginRunnerEventStream(run: RunnerProcess, onEvent: (event: Reco
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        buffer += decoder.decode(chunk.value, { stream: true });
-        let boundary = buffer.search(/\r?\n\r?\n/);
-        while (boundary >= 0) {
-          const block = buffer.slice(0, boundary);
-          const delimiterLength = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0].length ?? 2;
-          buffer = buffer.slice(boundary + delimiterLength);
-          const event = parseSseBlock(block);
-          if (isRecord(event)) onEvent(event);
-          boundary = buffer.search(/\r?\n\r?\n/);
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          let boundary = buffer.search(/\r?\n\r?\n/);
+          while (boundary >= 0) {
+            const block = buffer.slice(0, boundary);
+            const delimiterLength = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0].length ?? 2;
+            buffer = buffer.slice(boundary + delimiterLength);
+            const event = parseSseBlock(block);
+            if (isRecord(event)) onEvent(event);
+            boundary = buffer.search(/\r?\n\r?\n/);
+          }
         }
+      } finally {
+        await reader.cancel().catch(() => undefined);
+        reader.releaseLock();
       }
     } catch (error) {
-      if (run.abortController.signal.aborted) return;
+      // A cancelled handshake still has a caller awaiting readiness.
       failReady(error);
+      if (run.abortController.signal.aborted) return;
       throw error;
     }
   })();

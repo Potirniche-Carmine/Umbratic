@@ -80,7 +80,7 @@ function loadRuntime() {
         readPermissionModeSetting: () => "normal",
       },
       "./chatStore": { updateChatFromTask: () => {} },
-      "./backendSettings": { scheduleManagedTelemetrySync: () => {} },
+      "./managedTelemetry": { scheduleManagedTelemetrySync: () => {} },
       "./diagnostics": { recordBackendEventDiagnostic: () => {}, recordLocalDiagnostic: () => {} },
     },
   });

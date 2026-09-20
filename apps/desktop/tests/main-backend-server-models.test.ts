@@ -14,7 +14,8 @@ function backend(mode, state, sessionError = null, health = { features: ["models
   ].map((name) => [name, {}]));
   Object.assign(mocks, {
     electron: { app: { getPath: () => "/tmp" } },
-    "./mainRuntime": { activeRunnerProcesses: new Set(), getPermissionMode: () => "ask" },
+    "./mainRuntime": { getPermissionMode: () => "ask" },
+    "./runnerLifecycle": { activeRunnerProcesses: new Set() },
     "./storage": {
       readModelEndpointSettings: () => settings,
       writeModelEndpointSettings: (value) => { calls.push("settings"); settings = value; return settings; },

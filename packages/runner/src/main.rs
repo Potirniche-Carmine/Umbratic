@@ -45,9 +45,12 @@ async fn main() -> ExitCode {
     {
         Ok(server) => {
             eprintln!("umbratic runner listening on {}", server.url());
-            let parent_gone = tokio::task::spawn_blocking(|| {
-                let mut rest = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut rest);
+            let (parent_closed, parent_gone) = tokio::sync::oneshot::channel();
+            // A blocking Tokio task would keep runtime shutdown waiting for
+            // stdin even after SIGTERM. This liveness thread can detach at exit.
+            std::thread::spawn(move || {
+                let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+                let _ = parent_closed.send(());
             });
             #[cfg(unix)]
             {

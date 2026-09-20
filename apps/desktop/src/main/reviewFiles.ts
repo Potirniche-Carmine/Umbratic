@@ -145,6 +145,17 @@ export async function refreshReview(
   scope: "task" | "worktree" = "task",
   wholeDiffWorkspacePath?: string,
 ): Promise<ReviewFile[]> {
+  // A remote path must never be interpreted on this computer, even if a local
+  // directory happens to have the same name. Remote runs have no local review.
+  if (task.remote) {
+    task.reviewFiles = [];
+    task.changedFiles = [];
+    task.reviewPatchHash = undefined;
+    task.reviewScope = undefined;
+    task.reviewBaselineLabel = undefined;
+    task.reviewBaselineOid = undefined;
+    return [];
+  }
   const workspacePath = scope === "worktree" && wholeDiffWorkspacePath
     ? wholeDiffWorkspacePath
     : fs.existsSync(task.worktreePath)
@@ -198,6 +209,11 @@ export async function refreshTaskReview(input: unknown): Promise<TaskInfo | null
     throw new Error("Invalid review refresh input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
+  if (task.remote) {
+    await refreshReview(task);
+    saveTask(task);
+    return publicTask(task);
+  }
   const scope = input.scope === "worktree"
     ? "worktree"
     : input.scope === "task"

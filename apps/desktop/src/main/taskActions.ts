@@ -1,8 +1,9 @@
+import { activeRunnerProcesses, stopRunnerProcess } from "./runnerLifecycle";
 import { cancelledTaskRuns, getPermissionMode } from "./mainRuntime";
 import { assertTaskWorkspaceIdle } from "./workspaceActivity";
 import { assertReusableWorktreeForRepository, chatWorktreeTaskId, findReusableWorktreeTask, taskUsesIsolatedWorktree, worktreeRootTaskId } from "./worktreeOps";
 import { chatId, createChat, hiddenChatRepository, hiddenChatWorkspacePath, taskId } from "./chatStore";
-import { activeRunnerProcesses, activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, getTask, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
+import { activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, getTask, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
 import { capabilityNeedsForPrompt, runnerPromptForTask } from "./taskPromptContext";
 import { inspectRepository } from "./repositoryOps";
 import { createWorktreeAndRunRunner, runRunnerTask } from "./taskRunner";
@@ -20,7 +21,6 @@ import {
 import {
   runnerRequest,
   runnerBinaryPath,
-  stopRunnerProcess,
 } from "./runnerAdapter";
 import { remoteCapabilityReport } from "./remoteHost";
 import { validatedRemoteDirectory } from "./remoteConnections";

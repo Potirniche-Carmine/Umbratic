@@ -131,7 +131,7 @@ test("shortcuts are spelled for the machine that reads them", () => {
 });
 
 test("the shortcuts that fire and the shortcuts that are documented are one table", () => {
-  const main = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
+  const main = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8") + fs.readFileSync(new URL("../src/renderer/ChatArchive.tsx", import.meta.url), "utf8");
   // One listener dispatching by id, not a pile of key literals that drift.
   assert.match(main, /const shortcut = shortcutForEvent\(event\)/);
   assert.doesNotMatch(main, /event\.key === "k"/);

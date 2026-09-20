@@ -11,5 +11,6 @@ rust-version = "1.96"
 codegen-units = 1
 lto = "thin"
 opt-level = 3
-panic = "abort"
+# PDF parsing runs inside catch_unwind, including when linked into the runner.
+panic = "unwind"
 strip = "symbols"

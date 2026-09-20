@@ -1,12 +1,10 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { trackPanelResize } from "./panelResize";
+import { ChatArchive } from "./ChatArchive";
+import { useSkillSettings } from "./useSkillSettings";
 import type {
   BackendStatus,
   BackendUiEvent,
-  CapabilityProbeCategory,
-  CapabilityProbeImportance,
-  CapabilityProbeReport,
-  CapabilityProbeResult,
-  CapabilityProbeStatus,
   ChatAttachment,
   ChatRecord,
   DesktopStartupSettings,
@@ -14,33 +12,26 @@ import type {
   FileSearchKind,
   FileSearchResult,
   HarnessProfileId,
-  IdeInfo,
   LocalCatalogModel,
-  LocalModelInfo,
   PastedAttachmentInput,
   PermissionMode,
   ReasoningEffort,
   RepositoryInfo,
   ServerModelInfo,
-  SkillDocument,
   SkillInfo,
   TaskInfo,
-  UserNotes,
   WorkspaceMode,
 } from "../shared/desktopApi";
 import { DEFAULT_REASONING_EFFORT, isReasoningEffort, resolveReasoningEffort } from "../shared/desktopApi";
-import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
+import { stableChatTitle } from "../shared/chatTitle";
 import {
-  attachmentDetail,
   chatAfterDeletion,
   chatAttachmentsMatch,
   chatAttachmentsSignature,
-  chatCountLabel,
   chatDisplayTitle,
   chatJumpNumbers,
   visibleChatOrder,
   chatProjectKey,
-  chatSubline,
   chatWorktreeKey,
   closedChatMessage,
   deleteCandidateActionLabel,
@@ -52,7 +43,6 @@ import {
   isImageAttachment,
   chatActivityUtcIso,
   samePathKey,
-  shortHash,
   stateLabel,
   titleFromPrompt,
   worktreeTitle,
@@ -62,9 +52,8 @@ import {
   type WorktreeChatGroup,
 } from "./chatListPresentation";
 import type {
-  AppearanceSettings, ComposerActivitySegment, ComposerSubmission,
-  ComposerTimelineItem, IdeChoice, PermissionRequest, PromptMention, QueuedComposerPrompt,
-  ResponseFeedbackDialogState, ReviewFile, SkillSourceFilter,
+  AppearanceSettings, ComposerSubmission, IdeChoice, PermissionRequest, PromptMention, QueuedComposerPrompt,
+  ResponseFeedbackDialogState, ReviewFile,
 } from "./rendererTypes";
 import { readQueuedPrompts } from "./queuedPrompts";
 import { QueuedPromptList } from "./queuedPromptList";
@@ -101,51 +90,34 @@ import { KeyboardSettingsPanel } from "./KeyboardSettings";
 import { AboutSettingsPanel } from "./AboutSettings";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { eventDetail, eventTitle } from "./eventDisplay";
 import {
   AtSign,
-  BarChart3,
-  Brain,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
-  CircleDashed,
-  Cloud,
   Copy,
-  Ellipsis,
   File,
   Folder,
-  FolderPlus,
   FolderX,
   FolderOpen,
-  GitBranch,
-  Hand,
   Loader2,
   MessageSquareX,
   MessageSquareText,
   Mic,
   MicOff,
-  Monitor,
-  Moon,
   PanelRight,
   Paperclip,
   Play,
-  RefreshCw,
   RotateCw,
   Send,
-  Server,
   Settings,
   ShieldCheck,
   Sparkles,
   Square,
-  SquarePen,
-  Sun,
   ThumbsDown,
   ThumbsUp,
   Trash2,
-  Type,
-  User,
   X,
 } from "lucide-react";
 import {
@@ -159,9 +131,8 @@ import {
 } from "./composerText";
 import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
 import { AssistantMessage } from "./assistantMessage";
-import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
+import { normalizeReviewFile } from "../shared/reviewDiff";
 import { isArtifactPath } from "../shared/artifactReview";
-import type { DocumentReviewSnapshot } from "../shared/documentReview";
 import { appendTaskEvent, appendTaskEvents, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
 import {
   responseFeedbackReasons,
@@ -178,12 +149,11 @@ import { GeneralSettingsPanel } from "./GeneralSettings";
 import { TelemetrySettingsPanel } from "./TelemetrySettings";
 import { RemoteChatBadge, RemoteHostPicker } from "./RemoteControls";
 import { RemoteSettingsPanel, useRemoteSettings } from "./RemoteSettings";
-import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
+import { appendReviewFeedback, reviewCommentLineLabel, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 import {
   reducePendingPermission,
   reduceVisibleTask,
   taskEventEffects,
-  type TaskPermissionRequest,
 } from "./taskEventReducer";
 import { composerTimelineFromEvents } from "./composerTimeline";
 import {
@@ -196,7 +166,6 @@ import {
   MarkdownContent,
 } from "./markdownContent";
 import { WorkingBlock } from "./workingBlock";
-import { filterSkillsBySource, skillPreviewMarkdown } from "./skillDisplay";
 import { reviewCloseSpring, reviewOpenSpring, reviewSpringStep, type ReviewSpring } from "./reviewSpring";
 import {
   cssFontValue,
@@ -236,7 +205,7 @@ import {
   type MentionCategoryId,
 } from "./promptMentions";
 import { SkillsSettingsPanel } from "./SkillsSettings";
-import { formatFileSize, taskStatusDetail, taskStatusTitle } from "./taskStatusDisplay";
+import { formatFileSize } from "./taskStatusDisplay";
 import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
 import { ConnectionNotice } from "./connectionNotice";
@@ -403,19 +372,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   );
   const [fontScanMessage, setFontScanMessage] = useState<string | null>(null);
   const [fontScanPending, setFontScanPending] = useState(false);
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [skillsLoading, setSkillsLoading] = useState(false);
-  const [skillsLoaded, setSkillsLoaded] = useState(false);
-  const [skillsEnabled, setSkillsEnabled] = useState<Record<string, boolean>>({});
-  const [skillsMessage, setSkillsMessage] = useState<string | null>(null);
+  const skillSettings = useSkillSettings(api);
+  const { skills, skillsEnabled, loadSkills } = skillSettings;
   const [localLogsBusy, setLocalLogsBusy] = useState(false);
-  const [newSkillFormOpen, setNewSkillFormOpen] = useState(false);
-  const [newSkillName, setNewSkillName] = useState("");
-  const [creatingSkill, setCreatingSkill] = useState(false);
-  const [skillSourceFilter, setSkillSourceFilter] = useState<SkillSourceFilter>("local");
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
-  const [skillDocument, setSkillDocument] = useState<SkillDocument | null>(null);
-  const [skillPreviewLoading, setSkillPreviewLoading] = useState(false);
   const [ideMenuOpen, setIdeMenuOpen] = useState<"composer" | "review" | null>(null);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
@@ -487,8 +446,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const modalTriggerRef = useRef<HTMLElement | null>(null);
   const modalRef = useRef<HTMLElement | null>(null);
   const responseFeedbackInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const skillsSaveSequenceRef = useRef(0);
-  const skillsLoadedRef = useRef(false);
   const suppressDraftSaveRef = useRef(false);
   // Read by the async unsaved-draft restore, which must see the live value
   // rather than the one captured when it started.
@@ -694,14 +651,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const skillMenuOpen = mentionMode === "skill";
   const skillSearchQuery = skillMenuOpen ? mentionQuery : "";
   const skillMatches = useMemo(() => rankSkillMatches(skills, skillSearchQuery, 10), [skillSearchQuery, skills]);
-  const selectedSkillPreview = useMemo(
-    () => (skillDocument ? skillPreviewMarkdown(skillDocument.content, skillDocument.name) : ""),
-    [skillDocument],
-  );
-  const visibleSkills = useMemo(
-    () => filterSkillsBySource(skills, skillSourceFilter),
-    [skillSourceFilter, skills],
-  );
   const canAttachFiles = !busy && !closedChatNotice;
   const canUseWorktreeMode = repository?.kind === "git";
   const activeTaskWorkspaceMode = task?.chatId === activeChatId ? task.workspaceMode : undefined;
@@ -1538,11 +1487,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setSelectedSkillIndex(0);
   }, [skillSearchQuery]);
 
-  useEffect(() => {
-    if (!selectedSkillId || skills.some((skill) => skill.id === selectedSkillId)) return;
-    setSelectedSkillId(null);
-    setSkillDocument(null);
-  }, [selectedSkillId, skills]);
+
 
   async function persistDraft(
     chatId: string,
@@ -1873,175 +1818,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       }
       setHarnessSaving(false);
       setHarnessSaveFeedback("idle");
-    }
-  }
-
-  async function loadSkills() {
-    setSkillsLoading(true);
-    try {
-      const result = await api.listSkills();
-      setSkills(result.skills);
-      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
-      setSelectedSkillId((current) => (current && result.skills.some((skill) => skill.id === current) ? current : null));
-      skillsLoadedRef.current = true;
-      setSkillsLoaded(true);
-    } catch (cause) {
-      if (!skillsLoadedRef.current) setSkills([]);
-      console.warn("Failed to list skills", cause);
-    } finally {
-      setSkillsLoading(false);
-    }
-  }
-
-  async function toggleSkillSetting(skillId: string) {
-    let previous = skillsEnabled;
-    let next = skillsEnabled;
-    setSkillsEnabled((current) => {
-      previous = current;
-      next = { ...current, [skillId]: !current[skillId] };
-      return next;
-    });
-    setSkillsMessage(null);
-    const requestId = skillsSaveSequenceRef.current + 1;
-    skillsSaveSequenceRef.current = requestId;
-    try {
-      const result = await api.saveSkillSettings(next);
-      if (requestId !== skillsSaveSequenceRef.current) return;
-      setSkills(result.skills);
-      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
-      setSkillDocument((current) =>
-        current && current.id === skillId ? { ...current, enabled: result.skills.find((skill) => skill.id === skillId)?.enabled ?? current.enabled } : current,
-      );
-    } catch (cause) {
-      if (requestId !== skillsSaveSequenceRef.current) return;
-      setSkillsEnabled(previous);
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
-  async function openSkillsFolder() {
-    setSkillsMessage(null);
-    try {
-      const result = await api.openSkillsFolder();
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-      }
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
-  function selectSkillSourceFilter(filter: SkillSourceFilter) {
-    setSkillSourceFilter(filter);
-    setSelectedSkillId(null);
-    setSkillDocument(null);
-    setSkillsMessage(null);
-  }
-
-  async function toggleSkillPreview(skillId: string) {
-    if (skillPreviewLoading) return;
-    if (selectedSkillId === skillId) {
-      setSelectedSkillId(null);
-      setSkillDocument(null);
-      setSkillsMessage(null);
-      return;
-    }
-    setSelectedSkillId(skillId);
-    setSkillsMessage(null);
-    setSkillPreviewLoading(true);
-    try {
-      const result = await api.getSkillDocument({ id: skillId });
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-        setSkillDocument(null);
-        return;
-      }
-      setSkillDocument(result.skill);
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-      setSkillDocument(null);
-    } finally {
-      setSkillPreviewLoading(false);
-    }
-  }
-
-  async function openSelectedSkillInEditor() {
-    if (!skillDocument) return;
-    setSkillsMessage(null);
-    try {
-      const result = await api.openSkillInEditor({ id: skillDocument.id });
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-        return;
-      }
-      setSkillsMessage("Opened skill file.");
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
-  async function resetSelectedSystemSkill() {
-    if (!skillDocument || skillDocument.source !== "system") return;
-    setSkillsMessage(null);
-    setSkillPreviewLoading(true);
-    try {
-      const result = await api.resetSystemSkill({ id: skillDocument.id });
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-        return;
-      }
-      setSkills(result.skills);
-      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
-      setSkillDocument(result.skill);
-      setSkillsMessage(`Reset ${result.skill.name}.`);
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setSkillPreviewLoading(false);
-    }
-  }
-
-  async function submitCreateSkill() {
-    if (creatingSkill) return;
-    setSkillsMessage(null);
-    setCreatingSkill(true);
-    try {
-      const result = await api.createSkill({ name: newSkillName });
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-        return;
-      }
-      setNewSkillName("");
-      setNewSkillFormOpen(false);
-      await loadSkills();
-      await toggleSkillPreview(result.skill.id);
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setCreatingSkill(false);
-    }
-  }
-
-  async function importSkill() {
-    if (skillsLoading) return;
-    setSkillsMessage(null);
-    setSkillsLoading(true);
-    try {
-      const result = await api.importSkill();
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-        return;
-      }
-      setSkills(result.skills);
-      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
-      skillsLoadedRef.current = true;
-      setSkillsLoaded(true);
-      await toggleSkillPreview(result.skill.id);
-      setSkillsMessage(`Imported ${result.skill.name}.`);
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setSkillsLoading(false);
     }
   }
 
@@ -3691,53 +3467,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }
 
   function beginSidebarResize(event: React.PointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
     const startX = event.clientX;
     const startWidth = sidebarWidth;
-    document.body.classList.add("isResizing");
-    const move = (moveEvent: PointerEvent) => {
-      const nextWidth = startWidth + moveEvent.clientX - startX;
-      setSidebarWidth(clamp(nextWidth, sidebarMinWidth, sidebarMaxAvailableWidth()));
-    };
-    const stop = () => {
-      setSidebarWidth((current) => clamp(current, sidebarMinWidth, sidebarMaxAvailableWidth()));
-      document.body.classList.remove("isResizing");
-      event.currentTarget.removeEventListener("pointermove", move);
-      event.currentTarget.removeEventListener("pointerup", stop);
-    };
-    event.currentTarget.addEventListener("pointermove", move);
-    event.currentTarget.addEventListener("pointerup", stop, { once: true });
+    trackPanelResize(event,
+      (clientX) => setSidebarWidth(clamp(startWidth + clientX - startX, sidebarMinWidth, sidebarMaxAvailableWidth())),
+      () => setSidebarWidth((current) => clamp(current, sidebarMinWidth, sidebarMaxAvailableWidth())),
+    );
   }
 
   function beginReviewResize(event: React.PointerEvent<HTMLDivElement>) {
     if (!event.isPrimary || event.button !== 0) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
     cancelReviewClose();
     setReviewHasSessionWidth(true);
     const startX = event.clientX;
     const startWidth = reviewWidth;
-    document.body.classList.add("isResizing");
-    const move = (moveEvent: PointerEvent) => {
-      if (!moveEvent.isPrimary || (moveEvent.buttons & 1) !== 1) {
-        stop();
-        return;
-      }
-      const nextWidth = startWidth - (moveEvent.clientX - startX);
-      setReviewWidth(clamp(nextWidth, reviewMinWidthForViewport(), reviewMaxWidth()));
-    };
-    const stop = () => {
-      setReviewWidth((current) => clamp(current, reviewMinWidthForViewport(), reviewMaxWidth()));
-      document.body.classList.remove("isResizing");
-      handle.removeEventListener("pointermove", move);
-      handle.removeEventListener("pointerup", stop);
-      handle.removeEventListener("pointercancel", stop);
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", stop, { once: true });
-    handle.addEventListener("pointercancel", stop, { once: true });
+    trackPanelResize(event,
+      (clientX) => setReviewWidth(clamp(startWidth - (clientX - startX), reviewMinWidthForViewport(), reviewMaxWidth())),
+      () => setReviewWidth((current) => clamp(current, reviewMinWidthForViewport(), reviewMaxWidth())),
+    );
   }
 
   function handleReviewResizeKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
@@ -3748,50 +3495,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setReviewWidth((width) => clamp(width + (event.key === "ArrowLeft" ? step : -step), reviewMinWidthForViewport(), reviewMaxWidth()));
   }
 
-  function renderChatRow(chat: ChatRecord) {
-    const connectionLabel = chat.modelEndpointMode === "server"
-      ? "Company server"
-      : chat.modelEndpointMode === "local"
-        ? "Local model"
-        : "";
-    // The number takes the connection icon's place rather than sitting beside
-    // it: the slot is already the right size, so holding the modifier changes
-    // what the row starts with without moving a single word of it.
-    const jumpNumber = chatJumpKeysVisible ? chatJumpNumbersById.get(chat.id) : undefined;
-    return (
-      <div
-        className={`chatRow ${activeChatId === chat.id ? "active" : ""} ${
-          closedChatMessage(chat.taskState) ? "closed" : ""
-        }`}
-        key={chat.id}
-      >
-        <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
-          <span className={`chatRowContent ${connectionLabel || jumpNumber ? "hasConnection" : ""}`}>
-            {jumpNumber ? (
-              <span className="chatJumpKey" aria-hidden="true">{jumpNumber}</span>
-            ) : connectionLabel ? (
-              <span className="chatConnectionIcon" role="img" aria-label={connectionLabel} title={connectionLabel}>
-                {chat.modelEndpointMode === "server" ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
-              </span>
-            ) : null}
-            <strong>{chatDisplayTitle(chat)}</strong>
-            <em title={chat.updatedAt}>{chatSubline(chat)}</em>
-          </span>
-        </button>
-        <button
-          className="chatDeleteButton"
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            setDeleteCandidate({ kind: "chat", chat });
-          }}
-          title="Delete chat"
-        >
-          <Trash2 size={14} />
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -3812,157 +3515,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       <aside className="sidebar">
         <div className="sidebarResizeHandle" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={sidebarMinWidth} aria-valuemax={sidebarMaxAvailableWidth()} aria-valuenow={Math.round(sidebarWidth)} aria-label="Sidebar width" onPointerDown={beginSidebarResize} onKeyDown={(event) => { const step = event.shiftKey ? 24 : 8; if (event.key === "ArrowLeft") { event.preventDefault(); setSidebarWidth((width) => clamp(width - step, sidebarMinWidth, sidebarMaxAvailableWidth())); } if (event.key === "ArrowRight") { event.preventDefault(); setSidebarWidth((width) => clamp(width + step, sidebarMinWidth, sidebarMaxAvailableWidth())); } }} />
         <div className="sidebarStack">
-          <section className="chatArchive">
-            <div className="sideHeader">
-              <h2>Chats</h2>
-              <div className="newActionSplit" role="toolbar" aria-label="Create">
-                <ShortcutTooltip id="chat.new" placement="bottom">
-                  <button className="newActionButton" type="button" onClick={newChat} aria-label="New chat">
-                    <SquarePen size={13} />
-                  </button>
-                </ShortcutTooltip>
-                <button
-                  className="newActionButton"
-                  type="button"
-                  onClick={() => void newProject()}
-                  disabled={busy}
-                  aria-label="New project"
-                  title="New project"
-                >
-                  <FolderPlus size={13} />
-                </button>
-              </div>
-            </div>
-            <div className="chatList">
-              {chatProjectGroups.length ? (
-                chatProjectGroups.map((group) => {
-                  const collapsed = collapsedProjectKeys.has(group.key);
-                  const projectTarget = chatProjectTarget(group);
-                  return (
-                    <section className="chatProject" key={group.key}>
-                      <div className="chatProjectHeader">
-                        <button
-                          className="chatProjectToggle"
-                          type="button"
-                          onClick={() => toggleProjectGroup(group.key)}
-                          aria-expanded={!collapsed}
-                          title={group.path ?? group.name}
-                        >
-                          <ChevronDown className={collapsed ? "collapsed" : ""} size={14} />
-                          <span>
-                            <strong>{group.name}</strong>
-                          </span>
-                        </button>
-                        {group.path ? (
-                          <button
-                            className="chatProjectNewButton"
-                            type="button"
-                            onClick={() => void newChatForProject({ name: group.name, path: group.path })}
-                            title={`Start a new chat in "${group.name}"`}
-                          >
-                            <SquarePen size={14} />
-                          </button>
-                        ) : null}
-                        {projectTarget ? (
-                          <div className="chatProjectActions">
-                            <button
-                              className="chatProjectActionButton"
-                              type="button"
-                              onClick={() => {
-                                setProjectActionMenuKey((current) => (current === group.key ? null : group.key));
-                              }}
-                              aria-expanded={projectActionMenuKey === group.key}
-                              aria-haspopup="menu"
-                              title={`Project actions for "${group.name}"`}
-                            >
-                              <Ellipsis size={14} />
-                            </button>
-                            {projectActionMenuKey === group.key ? (
-                              <div className="chatProjectMenu" role="menu">
-                                {projectTarget.chatCount > 0 ? (
-                                  <button
-                                    type="button"
-                                    role="menuitem"
-                                    onClick={() => {
-                                      setProjectActionMenuKey(null);
-                                      setDeleteCandidate({ kind: "projectChats", project: projectTarget });
-                                    }}
-                                  >
-                                    <MessageSquareX size={14} />
-                                    <span>Delete all chats</span>
-                                  </button>
-                                ) : null}
-                                <button
-                                  className="danger"
-                                  type="button"
-                                  role="menuitem"
-                                  onClick={() => {
-                                    setProjectActionMenuKey(null);
-                                    setDeleteCandidate({ kind: "project", project: projectTarget });
-                                  }}
-                                >
-                                  <FolderX size={14} />
-                                  <span>Delete project</span>
-                                </button>
-                              </div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </div>
-                      {!collapsed ? (
-                        <div className={`chatProjectChats ${group.worktrees.length ? "hasWorktrees" : ""}`}>
-                          {group.chats.map((chat) => renderChatRow(chat))}
-                          {group.worktrees.map((worktree) => {
-                            const worktreeCollapsed = collapsedWorktreeKeys.has(worktree.key);
-                            const canCreateWorktreeChat = /^task-[A-Za-z0-9_-]+$/.test(worktree.rootTaskId);
-                            return (
-                              <section className="chatWorktree" key={worktree.key}>
-                                <div className="chatWorktreeHeader">
-                                  <button
-                                    className="chatWorktreeToggle"
-                                    type="button"
-                                    onClick={() => toggleWorktreeGroup(worktree.key)}
-                                    aria-expanded={!worktreeCollapsed}
-                                    title={worktree.path}
-                                  >
-                                    <ChevronDown className={worktreeCollapsed ? "collapsed" : ""} size={13} />
-                                    <GitBranch size={13} />
-                                    <span>
-                                      <strong>{worktreeTitle(worktree)}</strong>
-                                    </span>
-                                  </button>
-                                  <button
-                                    className="chatWorktreeNewButton"
-                                    type="button"
-                                    onClick={() => void newChatForWorktree(group, worktree)}
-                                    disabled={!canCreateWorktreeChat}
-                                    title={`Start a new chat in "${worktreeTitle(worktree)}"`}
-                                  >
-                                    <SquarePen size={13} />
-                                  </button>
-                                </div>
-                                {!worktreeCollapsed ? (
-                                  <div className="chatWorktreeChats">
-                                    {worktree.chats.map((chat) => renderChatRow(chat))}
-                                  </div>
-                                ) : null}
-                              </section>
-                            );
-                          })}
-                          {!group.chats.length && !group.worktrees.length ? <div className="chatProjectEmpty">No chats yet.</div> : null}
-                        </div>
-                      ) : null}
-                    </section>
-                  );
-                })
-              ) : (
-                <div className="archiveEmpty">
-                  <CircleDashed size={17} />
-                  <span>No chats yet.</span>
-                </div>
-              )}
-            </div>
-          </section>
+          <ChatArchive
+            chatProjectGroups={chatProjectGroups} activeChatId={activeChatId}
+            chatJumpKeysVisible={chatJumpKeysVisible} chatJumpNumbersById={chatJumpNumbersById}
+            collapsedProjectKeys={collapsedProjectKeys} collapsedWorktreeKeys={collapsedWorktreeKeys}
+            projectActionMenuKey={projectActionMenuKey} setProjectActionMenuKey={setProjectActionMenuKey}
+            setDeleteCandidate={setDeleteCandidate} chatProjectTarget={chatProjectTarget}
+            toggleProjectGroup={toggleProjectGroup} toggleWorktreeGroup={toggleWorktreeGroup}
+            selectChat={selectChat} newChat={newChat} newProject={newProject}
+            newChatForProject={newChatForProject} newChatForWorktree={newChatForWorktree} busy={busy}
+          />
         </div>
 
         <div className="sidebarFooter">
@@ -4827,43 +4389,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 ) : null}
                 {settingsTab === "keyboard" ? <KeyboardSettingsPanel api={api} /> : null}
                 {settingsTab === "skills" ? (
-                  <SkillsSettingsPanel
-                    skills={skills}
-                    visibleSkills={visibleSkills}
-                    skillsEnabled={skillsEnabled}
-                    skillsLoading={skillsLoading}
-                    skillsLoaded={skillsLoaded}
-                    skillSourceFilter={skillSourceFilter}
-                    selectedSkillId={selectedSkillId}
-                    selectedSkillPreview={selectedSkillPreview}
-                    skillPreviewLoading={skillPreviewLoading}
-                    skillDocument={skillDocument}
-                    newSkillFormOpen={newSkillFormOpen}
-                    newSkillName={newSkillName}
-                    creatingSkill={creatingSkill}
-                    skillsMessage={skillsMessage}
-                    onRefresh={() => {
-                      setSkillsMessage(null);
-                      void loadSkills();
-                    }}
-                    onOpenFolder={() => void openSkillsFolder()}
-                    onImport={() => void importSkill()}
-                    onToggleNewSkillForm={() => {
-                      setNewSkillFormOpen((open) => !open);
-                      setSkillsMessage(null);
-                    }}
-                    onSelectSourceFilter={selectSkillSourceFilter}
-                    onNewSkillName={setNewSkillName}
-                    onCreateSkill={() => void submitCreateSkill()}
-                    onCancelNewSkill={() => {
-                      setNewSkillFormOpen(false);
-                      setNewSkillName("");
-                    }}
-                    onTogglePreview={(skillId) => void toggleSkillPreview(skillId)}
-                    onToggleEnabled={(skillId) => void toggleSkillSetting(skillId)}
-                    onResetSystemSkill={() => void resetSelectedSystemSkill()}
-                    onOpenInEditor={() => void openSelectedSkillInEditor()}
-                  />
+                  <SkillsSettingsPanel {...skillSettings.panelProps} />
                 ) : null}
 
                 {settingsTab === "general" ? (

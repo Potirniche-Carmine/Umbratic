@@ -18,7 +18,6 @@ The remaining pages are internal release and engineering references.
 | --- | --- |
 | [guides/release-desktop.md](guides/release-desktop.md) | Cut and publish a new desktop version |
 | [guides/release-server.md](guides/release-server.md) | Build a signed customer server ZIP |
-| [guides/operate-server.md](guides/operate-server.md) | Restart, change limits, upgrade, back up, recover |
 | [guides/test-locally.md](guides/test-locally.md) | Rehearse the whole thing on your own machine |
 
 ## Look up
@@ -26,14 +25,8 @@ The remaining pages are internal release and engineering references.
 | Reference | What it holds |
 | --- | --- |
 | [reference/storage.md](reference/storage.md) | Every path Umbratic writes, and what to back up |
-| [reference/limits.md](reference/limits.md) | How many users and requests one server serves |
 | [reference/supply-chain.md](reference/supply-chain.md) | Dependency rules and the checks that enforce them |
-
-## Implementation plans
-
-| Plan | What it covers |
-| --- | --- |
-| [plans/veil-console-deployment.md](plans/veil-console-deployment.md) | Customer ZIPs, one-script deployment, HTTP Console setup, HTTPS Veil, and signed seats |
+| [reviews/production-readiness-2026-09-19.md](reviews/production-readiness-2026-09-19.md) | Structural review, fixes, verification evidence, and remaining release qualifications |
 
 `release.env.example` is the template for the [release machine's identity file](setup/release-machine.md#2-the-env-file-both-machines). Copy it,
 do not edit it in place.

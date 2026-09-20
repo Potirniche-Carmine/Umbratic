@@ -154,10 +154,7 @@ test("markdown covers the constructs a model actually writes", () => {
 test("prompt highlighting recognizes file mentions without matching email addresses", () => {
   const segments = promptHighlightSegments(
     "Open @main.tsx, then @metrics.csv) and not email@main.tsx",
-    [
-      { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx" },
-      { path: "reports/metrics.csv", name: "metrics.csv" },
-    ],
+    ["@main.tsx", "@metrics.csv"],
   );
   assert.deepEqual(
     plain(segments.filter((segment) => segment.mention).map((segment) => segment.text)),

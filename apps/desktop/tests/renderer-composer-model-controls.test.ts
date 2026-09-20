@@ -97,7 +97,7 @@ test("the checked level is the one the model is really thinking at", () => {
   assert.match(main, /resolveReasoningEffort\(modelReasoningEfforts, reasoningEffort\) \?\? reasoningEffort/);
   assert.match(main, /effort=\{activeReasoningEffort\}/);
   assert.doesNotMatch(main, /effort=\{reasoningEffort\}/);
-  const shared = readFileSync(new URL("../src/shared/desktopApiTypes.ts", import.meta.url), "utf8");
+  const shared = readFileSync(new URL("../src/shared/modelReasoning.ts", import.meta.url), "utf8");
   assert.match(shared, /export function resolveReasoningEffort\(/);
   // One resolver, so the menu can never check a level the runtime is not using.
   const modelCatalog = readFileSync(new URL("../src/main/modelCatalog.ts", import.meta.url), "utf8");

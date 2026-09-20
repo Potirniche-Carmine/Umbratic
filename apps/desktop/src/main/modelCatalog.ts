@@ -189,6 +189,37 @@ const gemmaReasoning = {
   sampling: { thinking: gemmaSampling, instruct: gemmaSampling },
 };
 
+// Vision encoders from the same pinned revisions as their language weights.
+const gemmaE2bProjector: CatalogFile = {
+  name: "mmproj-BF16.gguf",
+  bytes: 986_833_728,
+  sha256: "a402f10fb5780bf91d03a10cd89061139f522bee2e679b1291bbfdcd71d9547d",
+};
+
+const ornith9bProjector: CatalogFile = {
+  name: "mmproj-Ornith-1.5-9B-BF16.gguf",
+  bytes: 921_704_672,
+  sha256: "626f9f90627402a6bf4a999111d0fbd69b5fcca7aa8ba089d69e5f10e8858e1d",
+};
+
+const ornith35bProjector: CatalogFile = {
+  name: "mmproj-Ornith-1.5-35B-BF16.gguf",
+  bytes: 902_822_016,
+  sha256: "d9ce31026d1cb1f3f8d5152e2e2a014d9d2b302b6c93a7dc07bb0a0487f52837",
+};
+
+const qwen27bProjector: CatalogFile = {
+  name: "mmproj-BF16.gguf",
+  bytes: 931_146_432,
+  sha256: "83ee4f4f205fa514161778c41df1ea14144faa0f713510893b63c2395f5c2d53",
+};
+
+const qwenUncensoredProjector: CatalogFile = {
+  name: "mmproj-model-bf16.gguf",
+  bytes: 931_145_888,
+  sha256: "42cee4f70c7c26bee4dc7e59872ceab4c67d1f6b2c87d9c32725ba1e2eaa9a4d",
+};
+
 /**
  * Ordered, within each kind, from the lightest model to the most capable. The
  * order is load-bearing: the machine's suggestion is the most capable
@@ -211,7 +242,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E2B-it-Q4_K_M.gguf",
           bytes: 3_106_738_272,
           sha256: "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
-        }],
+        }, gemmaE2bProjector],
       },
       {
         quant: "Q5_K_M",
@@ -219,7 +250,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E2B-it-Q5_K_M.gguf",
           bytes: 3_356_037_216,
           sha256: "90293b8cdaf9c973012bf4df8a1e92bde7d74ad66a4fe56cf905ccd563d660c5",
-        }],
+        }, gemmaE2bProjector],
       },
       {
         quant: "Q6_K",
@@ -227,7 +258,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E2B-it-Q6_K.gguf",
           bytes: 4_501_721_184,
           sha256: "f7b8980ecc1c115898fd8d9a3d421d90becbac984194a44b478669c26815843d",
-        }],
+        }, gemmaE2bProjector],
       },
       {
         quant: "Q8_0",
@@ -235,7 +266,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "gemma-4-E2B-it-Q8_0.gguf",
           bytes: 5_048_352_864,
           sha256: "605d3c2647d7c58c1e4b5375ccb5702acf94c2611b4c8d4877812f8fdd32d053",
-        }],
+        }, gemmaE2bProjector],
       },
     ],
     minRamGB: 8,
@@ -249,7 +280,7 @@ export const modelCatalog: readonly CatalogModel[] = [
     hfRepo: "ornith-ai/Ornith-1.5-9B-GGUF",
     hfRevision: "abdd624b12ebf020b767fff532ff44fe552b28c3",
     // The same four rungs the 35B offers. The BF16 is left out at 18.4 GB, and
-    // so is the vision projector — chat here is text-only.
+    // its vision projector is included with every quantization.
     quants: [
       {
         quant: "Q4_K_M",
@@ -257,7 +288,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Ornith-1.5-9B-Q4_K_M.gguf",
           bytes: 5_780_090_816,
           sha256: "70c112196e0b7023803c9762752e46d29e612a92c83f995bc3ba1ceb07e8fab6",
-        }],
+        }, ornith9bProjector],
       },
       {
         quant: "Q5_K_M",
@@ -265,7 +296,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Ornith-1.5-9B-Q5_K_M.gguf",
           bytes: 6_642_544_576,
           sha256: "e4d9634a3b6546a5c00a8680568fe1125f6c98c704ee51ae52ba07650fb4247d",
-        }],
+        }, ornith9bProjector],
       },
       {
         quant: "Q6_K",
@@ -273,7 +304,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Ornith-1.5-9B-Q6_K.gguf",
           bytes: 7_558_901_696,
           sha256: "b6f76e74f86245b3caee014b797c10dca931c4dfdaabfb134eab655f81e4154a",
-        }],
+        }, ornith9bProjector],
       },
       {
         quant: "Q8_0",
@@ -281,7 +312,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Ornith-1.5-9B-Q8_0.gguf",
           bytes: 9_786_060_384,
           sha256: "22086870b009dbe9815ee752c48a82de930118a7c5ce5599590892ae03b8b010",
-        }],
+        }, ornith9bProjector],
       },
     ],
     // The Q4_K_M is 5.8 GB, which leaves room for a working context on an 8 GB
@@ -316,8 +347,7 @@ export const modelCatalog: readonly CatalogModel[] = [
     hfRepo: "ornith-ai/Ornith-1.5-35B-A3B-GGUF",
     hfRevision: "5ae357e3eaf951ae221e8d784c71a8a3cdb6aa5f",
     // The repository's own ladder starts at Q4_K_M; there is no Q3_K_M, and
-    // the BF16 and the vision projector are left out — the one is 71 GB and
-    // the other serves a vision path chat here does not take. The files drop
+    // the 71 GB BF16 language weights are left out. The files drop
     // "A3B" from their names, as the repository spells them.
     quants: [
       {
@@ -326,7 +356,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Ornith-1.5-35B-Q4_K_M.gguf",
           bytes: 21_713_462_848,
           sha256: "ca6ea26329c88b78ffd90a85163be2e746c2fafd1024f56db47e499f117f9a7f",
-        }],
+        }, ornith35bProjector],
       },
       {
         quant: "Q5_K_M",
@@ -334,7 +364,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Ornith-1.5-35B-Q5_K_M.gguf",
           bytes: 25_347_532_352,
           sha256: "2ac3a45979ffbdff1c7a6f3334e6d4c347274adbc33531d23bde6fa1dfdcb994",
-        }],
+        }, ornith35bProjector],
       },
       {
         quant: "Q6_K",
@@ -342,7 +372,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Ornith-1.5-35B-Q6_K.gguf",
           bytes: 29_208_731_200,
           sha256: "1c4e5bb98a74c89a5d93a2488b5748b7b331daf77f6dbb64bd9b2ff864b64eb3",
-        }],
+        }, ornith35bProjector],
       },
       {
         quant: "Q8_0",
@@ -350,7 +380,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Ornith-1.5-35B-Q8_0.gguf",
           bytes: 37_802_149_120,
           sha256: "854cf83f80cd37a061ed86df1fa7201162e4e1fb820b91068cc12a11d2746c9e",
-        }],
+        }, ornith35bProjector],
       },
     ],
     // 35B of weights on disk, 3B of them active per token: it wants the memory
@@ -389,7 +419,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Qwen3.8-27B-Q4_K_M.gguf",
           bytes: 17_106_775_008,
           sha256: "7e78da5d7e3ae28d178121f58646953305f3e5bd3cb46f4a75584e8b6c6fe169",
-        }],
+        }, qwen27bProjector],
       },
       {
         quant: "Q5_K_M",
@@ -397,7 +427,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Qwen3.8-27B-Q5_K_M.gguf",
           bytes: 19_834_055_648,
           sha256: "07deb7fa91bf751d3000774fe5bb8afae5ffb41255fd19980147468052e07177",
-        }],
+        }, qwen27bProjector],
       },
       {
         quant: "Q6_K",
@@ -405,7 +435,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Qwen3.8-27B-Q6_K.gguf",
           bytes: 22_884_408_288,
           sha256: "562fbf760503008f118e5df38de5b3e97992d1f693f475815631198547486727",
-        }],
+        }, qwen27bProjector],
       },
       {
         quant: "Q8_0",
@@ -413,7 +443,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Qwen3.8-27B-Q8_0.gguf",
           bytes: 29_047_086_048,
           sha256: "a680f44a06920e5d689774823782006aa3acc8db95750323373b24139b67e348",
-        }],
+        }, qwen27bProjector],
       },
     ],
     minRamGB: 32,
@@ -451,8 +481,8 @@ export const modelCatalog: readonly CatalogModel[] = [
     hfRevision: "e335d239dbdfae590687e24b800e81a18d070ebe",
     // One repository holding both the safetensors and its own GGUF builds,
     // which is why the server's catalog and this one name the same place. The
-    // vision projector is left out — chat here is text-only — and so is the
-    // BF16 the server serves. IQ4_XS sits below Q4_K_M rather than a Q3: it is
+    // vision projector is included; the BF16 language weights the server serves
+    // are left out. IQ4_XS sits below Q4_K_M rather than a Q3: it is
     // the smallest rung this build publishes, and an importance-weighted
     // four-bit holds together where a three-bit K-quant of a 27B does not.
     quants: [
@@ -462,7 +492,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Qwen3.8-27B-OBLITERATED-Q4_K_M.gguf",
           bytes: 16_810_714_400,
           sha256: "da5da0b87a1501815f659a89641c75cff46cee722de0943a8fc136d39f654540",
-        }],
+        }, qwenUncensoredProjector],
       },
       {
         quant: "IQ4_XS",
@@ -470,7 +500,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Qwen3.8-27B-OBLITERATED-IQ4_XS.gguf",
           bytes: 15_420_450_080,
           sha256: "c8665fafeb02d67c13cde4fa4e2d62f922938962e373d07f7159358b3629fdbb",
-        }],
+        }, qwenUncensoredProjector],
       },
       {
         quant: "Q5_K_M",
@@ -478,7 +508,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Qwen3.8-27B-OBLITERATED-Q5_K_M.gguf",
           bytes: 19_535_701_280,
           sha256: "c52cc63130efda07259a62bb4081b1f0dac7c20564909eb02aafd64cb4d84f2c",
-        }],
+        }, qwenUncensoredProjector],
       },
       {
         quant: "Q6_K",
@@ -486,7 +516,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Qwen3.8-27B-OBLITERATED-Q6_K.gguf",
           bytes: 22_430_999_840,
           sha256: "d8de48c8de37c6238c24a719238e377f94ff1b51c8192029dbfba0a778debcd4",
-        }],
+        }, qwenUncensoredProjector],
       },
       {
         quant: "Q8_0",
@@ -494,7 +524,7 @@ export const modelCatalog: readonly CatalogModel[] = [
           name: "Qwen3.8-27B-OBLITERATED-Q8_0.gguf",
           bytes: 29_047_084_320,
           sha256: "4cfb568f17fb58a0373279cc3b73602a350e25aea2953ce087dcea6b51fa6f3c",
-        }],
+        }, qwenUncensoredProjector],
       },
     ],
     minRamGB: 32,
@@ -625,6 +655,11 @@ export function modelQuant(model: CatalogModel, quant: string): CatalogQuant | n
 /** The weights llama-server loads: not the projector, not the drafting head. */
 export function quantWeightsFile(quant: CatalogQuant): CatalogFile {
   return quant.files.find((file) => !/^(mmproj|mtp)-/i.test(file.name)) ?? quant.files[0];
+}
+
+/** The vision or audio encoder accompanying the language weights. */
+export function quantProjectorFile(quant: CatalogQuant): CatalogFile | null {
+  return quant.files.find((file) => /^mmproj-/i.test(file.name)) ?? null;
 }
 
 /** The separate multi-token-prediction head, when the quant ships one. */

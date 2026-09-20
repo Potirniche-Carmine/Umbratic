@@ -32,12 +32,12 @@ const ignoredDirectories = new Set([
 ]);
 const lineLimit = 1_000;
 // Two remaining exceptions. `main.tsx` is still a single React `App` component;
-// splitting it needs render tests that prove the decomposition is
+// further decomposition needs render tests that prove it is
 // behavior-preserving. `formula.rs` is the spreadsheet evaluator; splitting it
 // is a separate review. Each limit is pinned to the file's exact current size,
 // so it can only shrink.
 const grandfatheredLimits = new Map<string, number>([
-  ["apps/desktop/src/renderer/main.tsx", 4_873],
+  ["apps/desktop/src/renderer/main.tsx", 4_561],
   ["packages/artifacts/src/formula.rs", 1_346],
 ]);
 

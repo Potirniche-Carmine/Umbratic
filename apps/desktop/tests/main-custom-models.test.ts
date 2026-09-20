@@ -191,6 +191,9 @@ test("the active quantization follows the choice only once it is on disk", async
   fs.mkdirSync(downloads.modelDirectory(dataRoot, model), { recursive: true });
   const q4Path = downloads.modelFilePath(dataRoot, model, q4.files[0]);
   writeSizedPlaceholder(q4Path, q4.files[0].bytes);
+  assert.equal(localModels.activeQuant(dataRoot, model), null, "language weights alone cannot read images");
+  const projector = catalog.quantProjectorFile(q4);
+  writeSizedPlaceholder(downloads.modelFilePath(dataRoot, model, projector), projector.bytes);
   assert.equal(localModels.activeQuant(dataRoot, model).quant, "Q4_K_M");
   assert.equal(localModels.selectedLocalChatModel(dataRoot, model.id)?.id, model.id);
 
