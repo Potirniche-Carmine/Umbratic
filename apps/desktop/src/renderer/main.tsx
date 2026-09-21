@@ -1,3 +1,6 @@
+import { ImageSettings } from "./ImageSettings";
+import { GeneratedImages } from "./GeneratedImages";
+import { withoutGeneratedImages } from "../shared/generatedImages";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { trackPanelResize } from "./panelResize";
 import { ChatArchive } from "./ChatArchive";
@@ -473,7 +476,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const settingsToggleAllowedRef = useRef(false);
   const visibleTaskIdRef = useRef<string | null>(previewEnvironment?.task.id ?? null);
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
-
   const latestTaskId = task?.id;
   const rawReviewFiles = task?.reviewFiles ?? workspaceReview?.reviewFiles ?? emptyReviewFiles;
   // Review refreshes usually return byte-identical files. Reusing the previous
@@ -492,8 +494,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       );
     }
     normalizedReviewFilesRef.current = byPath;
-    return Array.from(byPath.values());
-  }, [rawReviewFiles]);
+    return withoutGeneratedImages(Array.from(byPath.values()), events);
+  }, [rawReviewFiles, events]);
   const documentReviewFiles = useMemo(() => reviewFiles.filter((file) => isArtifactPath(file.path)), [reviewFiles]);
   const codeReviewFiles = useMemo(() => reviewFiles.filter((file) => !isArtifactPath(file.path)), [reviewFiles]);
   const codeReviewTotals = useMemo(
@@ -601,9 +603,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const isGenerating = task?.state === "running";
   const hasComposerMessage = prompt.trim().length > 0 || reviewPromptFeedback.length > 0;
   const activeQueuedPrompts = task ? queuedPrompts.filter((item) => item.taskId === task.id) : [];
-  // Only the files the prompt does not already name get a chip. An `@` mention
-  // is drawn in the text where it was typed, so a chip beside it would be the
-  // same reference twice; the paperclip count still covers both kinds.
   const pickedAttachments = attachedFiles.filter(
     (file) => !promptMentionsAttachment(prompt, normalizeAttachment(file)),
   );
@@ -631,16 +630,15 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       ? "No file changes found"
       : stateLabel(task.state);
   const mentionQuery = mention?.query ?? "";
-  // The @ menu walks through modes: "category" (just pressed @ — pick Files,
-  // Folders, or Skills), a scoped search, or "all" (typed straight through the
-  // category list). The $ trigger jumps directly to skills.
   const mentionMode: "category" | FileSearchKind | "skill" | null = !mention
     ? null
     : mention.kind === "skill" || mentionScope === "skill"
       ? "skill"
       : mentionScope === "file" || mentionScope === "folder"
         ? mentionScope
-        : mentionQuery
+        : /^image$/i.test(mentionQuery)
+          ? null
+          : mentionQuery
           ? "all"
           : "category";
   const promptReferenceMenuOpen = mentionMode !== null;
@@ -2327,9 +2325,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     // full, or the turn already ended) must not leave a phantom row behind.
     try {
       const { prompt, attachedFiles, reviewFeedback } = submission;
-      // The queue stores plain prompt text, so pending review comments travel
-      // inside it the same way startTask and steerTask send them. The queued
-      // row re-parses the block to display the clean text plus a feedback chip.
+      // Queue review comments with the prompt.
       await api.queueFollowUpTask({ taskId, prompt: appendReviewFeedback(prompt, reviewFeedback).trim(), attachedFiles });
       clearComposerInput();
       await syncQueuedPrompts(taskId);
@@ -2978,6 +2974,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }
 
   function selectMentionCategory(category: MentionCategoryId) {
+    if (category === "image") {
+      const start = mention?.start ?? prompt.length, end = mention?.end ?? prompt.length;
+      setPrompt(`${prompt.slice(0, start)}@image ${prompt.slice(end)}`);
+      setMention(null);
+      window.setTimeout(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(start + 7, start + 7); }, 0);
+      return;
+    }
     setMentionScope(category);
     setSelectedFileIndex(0);
     setSelectedSkillIndex(0);
@@ -3643,10 +3646,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         canRate={endpointSettings.mode === "server"}
                         onRate={openResponseFeedbackDialog}
                         documents={
-                          // Every turn has an answer, but the documents a run
-                          // produced belong to the newest one — the review state
-                          // they link into is the task's current state, not a
-                          // snapshot of what scrollback said at the time.
+                          // Generated documents belong to the newest answer.
                           item.id === lastAssistantItemId && reviewReadyForDisplay && documentReviewFiles.length ? (
                             <div className="documentResponseLinks" aria-label="Generated documents">
                               {documentReviewFiles.map((file) => (
@@ -3668,8 +3668,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         />
                       </AssistantMessage>
                     ) : (
-                      <WorkingBlock
-                        key={item.id}
+                      <React.Fragment key={item.id}><WorkingBlock
                         item={item}
                         clock={activityClock}
                         expanded={expandedActivityIds.has(item.id)}
@@ -3683,7 +3682,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         onScroll={handleActivityScroll}
                         onTouchMove={handleActivityTouchMove}
                         onWheel={handleActivityWheel}
-                      />
+                      /><GeneratedImages api={api} taskId={task?.id ?? ""} item={item} onPreview={setPreviewAttachment} /></React.Fragment>
                     ),
                   )}
                   {codeReviewFiles.length && reviewReadyForDisplay ? (
@@ -3894,7 +3893,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     {skillMenuOpen
                       ? "Use a skill for this turn"
                       : !repository
-                        ? "Search files after selecting a folder"
+                        ? "Create an image or add context"
                         : categoryMenuOpen
                           ? `Add context from ${repository.name}`
                           : mentionMode === "file"
@@ -4383,6 +4382,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   />
                 ) : null}
 
+                {settingsTab === "image" ? <ImageSettings api={api} serverMode={connectionSettings.settings.mode === "server"} /> : null}
                 {settingsTab === "voice" ? (
                   <VoiceSettings api={api} backend={backend} active onBackendStatus={setBackend}
                     serverMode={connectionSettings.settings.mode === "server"} speechAdvertised={dictationAvailable} />
@@ -4434,7 +4434,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           >
             <div className="imagePreviewHeader">
               <strong>{attachmentLabel(previewAttachment)}</strong>
-              <button className="messageAction" type="button" onClick={() => setPreviewAttachment(null)} title="Close preview">
+              <button className="messageAction" type="button" onClick={() => setPreviewAttachment(null)} aria-label="Close preview" title="Close preview">
                 <X size={15} />
               </button>
             </div>

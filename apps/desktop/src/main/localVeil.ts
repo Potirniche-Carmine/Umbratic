@@ -1,3 +1,4 @@
+import type { LocalImageRuntime } from "./localImage";
 import { spawn, type ChildProcess } from "node:child_process";
 import { stopChild, stopRequested } from "./childShutdown";
 import * as crypto from "node:crypto";
@@ -55,6 +56,7 @@ export type LocalRuntimeConnection = {
    * which is configured with the model id.
    */
   speech?: { baseUrl: string; apiKey: string; model: string };
+  image?: LocalImageRuntime;
 };
 
 export type LocalVeilDiagnostic = {
@@ -114,6 +116,7 @@ function localVeilKey(
     reasoningEffort: runtime.reasoningEffort ?? null,
     sampling: runtime.sampling ?? null,
     speech: runtime.speech ?? null,
+    image: runtime.image ?? null,
   });
 }
 
@@ -303,6 +306,12 @@ export function localVeilEnvironment(input: {
     ...sampling,
     ...reasoningEffort,
     ...speech,
+    ...(runtime.image ? {
+      VEIL_IMAGE_BINARY: runtime.image.binary,
+      VEIL_IMAGE_WEIGHTS: runtime.image.weights,
+      VEIL_IMAGE_ENCODER: runtime.image.encoder,
+      VEIL_IMAGE_VAE: runtime.image.vae,
+    } : {}),
   };
 }
 

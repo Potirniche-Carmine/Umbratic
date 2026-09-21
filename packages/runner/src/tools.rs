@@ -39,6 +39,7 @@ mod contract_tests;
 mod dispatch;
 mod enumerate;
 mod error;
+mod image;
 mod patch;
 mod read;
 mod request;
@@ -220,3 +221,6 @@ mod search_performance;
 mod search_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod image_tests;

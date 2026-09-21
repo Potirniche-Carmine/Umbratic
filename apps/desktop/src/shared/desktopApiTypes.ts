@@ -746,6 +746,9 @@ export type DesktopApi = {
   saveKeyBindings(input: KeyBindingSettings): Promise<KeyBindingSettings>;
   getDictationSettings(): Promise<DictationSettings>;
   saveDictationSettings(input: DictationSettings): Promise<{ dictation: DictationSettings; status: BackendStatus }>;
+  readGeneratedImage(input: { taskId: string; path: string }): Promise<{ dataUrl: string | null }>;
+  getImageSettings(): Promise<{ model: string; runtimeAvailable: boolean }>;
+  saveImageSettings(input: { model: string }): Promise<{ model: string; runtimeAvailable: boolean }>;
   listLocalModels(input: { kind: LocalCatalogModelKind }): Promise<LocalCatalogModel[]>;
   downloadLocalModel(input: { id: string }): Promise<{ ok: true } | { ok: false; message: string }>;
   cancelLocalModelDownload(input: { id: string }): Promise<{ ok: true }>;

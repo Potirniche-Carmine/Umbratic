@@ -53,6 +53,7 @@ export const veilFeature = {
    * Advertised only while both are true, so the composer hides its microphone
    * rather than offering a button that fails on first press.
    */
+  imageGenerate: "image.generate",
   speechTranscribe: "speech.transcribe",
   /**
    * `POST /api/web/search` exists and the server can actually serve it — a

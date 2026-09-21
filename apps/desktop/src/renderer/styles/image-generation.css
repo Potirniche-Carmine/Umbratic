@@ -1,0 +1,12 @@
+.generatedImageCard { width: min(100%, 480px); margin: 18px 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--surface); }
+.generatedImageCard img { display: block; width: 100%; height: auto; }
+.generatedImagePreview { display: block; width: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; line-height: 0; cursor: zoom-in; }
+.generatedImagePreview:hover { filter: brightness(1.03); }
+.generatedImagePreview:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.generatedImageCard figcaption { display: flex; gap: 10px; align-items: center; padding: 12px 14px; font-size: 12px; }
+.generatedImageCard figcaption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.generatedImageCard figcaption a { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; height: 32px; padding: 0; color: inherit; border-radius: 5px; line-height: 0; }
+.generatedImageCard figcaption svg { display: block; flex-shrink: 0; }
+.generatedImagePlaceholder { aspect-ratio: 1; box-sizing: border-box; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px; color: var(--muted); font-size: 13px; }
+.generatedImageCard figcaption a:hover { background: var(--line); }
+.generatedImageCard figcaption a:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }

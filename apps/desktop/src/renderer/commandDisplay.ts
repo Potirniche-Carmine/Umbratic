@@ -29,6 +29,7 @@ export type CommandRun = {
   exitCode: number | null;
   status: "running" | "passed" | "failed";
   resultStatus?: string;
+  details?: Record<string, unknown>;
   errorCode?: string;
   startedAt?: string;
   endedAt?: string;
@@ -42,6 +43,7 @@ const webFetchPreviewCharacterLimit = 600;
 // Every runner tool that is not a shell command. Keyed by the tool name the
 // runner reports, so a new tool cannot silently fall through to shell rendering.
 const workspaceToolLabels: Record<string, string> = {
+  generate_image: "Create image",
   read: "Read workspace",
   read_attachment: "Read attachment",
   read_skill: "Read skill",

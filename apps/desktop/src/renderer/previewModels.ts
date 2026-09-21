@@ -17,7 +17,7 @@ function fitFor(neededRamGB: number): LocalMemoryFit {
  * custom additions with their remove control, and a model found sitting in the
  * models folder.
  */
-export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] {
+export function previewCatalog(kind: "chat" | "dictation" | "image"): LocalCatalogModel[] {
   const row = (
     id: string,
     displayName: string,
@@ -72,6 +72,19 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
     };
   };
 
+  if (kind === "image") {
+    const image = row("qwen-image-2.1", "Qwen Image 2.1", 22814402288, 32, { downloaded: true });
+    image.sharedBytes = 18209844304;
+    image.quants = ([
+      ["Q4_K_M", 4604557984], ["Q4_0", 4050899616], ["Q5_K_M", 5221284512],
+      ["Q6_K", 5876556448], ["Q8_0", 7591557792],
+    ] as const).map(([quant, weightsBytes], index) => {
+      const bytes = weightsBytes + image.sharedBytes!;
+      const neededRamGB = Math.ceil(32 * bytes / image.bytes);
+      return { quant, bytes, recommended: index === 0, downloaded: index === 0, fit: fitFor(neededRamGB), neededRamGB };
+    });
+    return [image];
+  }
   if (kind === "dictation") {
     return [
       row("qwen3-asr-0.6b", "Qwen3 ASR 0.6B", 1_019_141_728, 8, { downloaded: true }),

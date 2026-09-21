@@ -1,3 +1,4 @@
+import { imageModel } from "./imageModelCatalog";
 /**
  * The models Umbratic will download and run locally.
  *
@@ -13,7 +14,7 @@
 import { resolveReasoningEffort } from "../shared/desktopApi";
 import type { ReasoningEffort } from "../shared/desktopApi";
 
-export type CatalogModelKind = "chat" | "dictation";
+export type CatalogModelKind = "chat" | "dictation" | "image";
 
 /**
  * One sampling set, as a model card recommends it.
@@ -229,6 +230,7 @@ const qwenUncensoredProjector: CatalogFile = {
  * suggested, so their position only decides where they are listed.
  */
 export const modelCatalog: readonly CatalogModel[] = [
+  imageModel,
   {
     id: "gemma4-e2b",
     kind: "chat",

@@ -124,7 +124,10 @@ const umbraticApi = {
     invoke("umbratic:save-dictation-settings", input),
   getKeyBindings: () => invoke("umbratic:get-key-bindings"),
   saveKeyBindings: (input: KeyBindingSettings) => invoke("umbratic:save-key-bindings", input),
-  listLocalModels: (input: { kind: "chat" | "dictation" }) =>
+  readGeneratedImage: (input: { taskId: string; path: string }) => invoke("umbratic:read-generated-image", input),
+  getImageSettings: () => invoke("umbratic:get-image-settings"),
+  saveImageSettings: (input: { model: string }) => invoke("umbratic:save-image-settings", input),
+  listLocalModels: (input: { kind: "chat" | "dictation" | "image" }) =>
     invoke("umbratic:list-local-models", input),
   downloadLocalModel: (input: { id: string }) =>
     invoke("umbratic:download-local-model", input),

@@ -45,6 +45,7 @@ type RawSettings = {
   permissionMode?: unknown;
   companyCredential?: unknown;
   dictation?: unknown;
+  imageModel?: unknown;
   keybindings?: unknown;
   remoteConnections?: unknown;
   customModels?: unknown;
@@ -676,4 +677,14 @@ export function writeNotes(content: string): UserNotes {
     db.prepare("INSERT OR REPLACE INTO notes (id, content, updated_at) VALUES (?, ?, ?)").run(userNotesId, notes.content, notes.updatedAt);
   });
   return notes;
+}
+
+export function readImageModelSetting(): string {
+  return readRawSettings().imageModel === "qwen-image-2.1" ? "qwen-image-2.1" : "off";
+}
+
+export function writeImageModelSetting(model: unknown): string {
+  if (model !== "off" && model !== "qwen-image-2.1") throw new Error("Choose an image model from the collection.");
+  writeRawSettings({ ...readRawSettings(), imageModel: model });
+  return model;
 }

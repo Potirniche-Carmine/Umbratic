@@ -61,12 +61,17 @@ export function modelFilePath(dataRoot: string, model: CatalogModel, file: Catal
   return path.join(modelDirectory(dataRoot, model), file.name);
 }
 
-/** A quantization counts as downloaded only when every file is present at its exact size. */
+/** Chat can run without its optional vision encoder; speech and image need every component. */
 export function modelDownloaded(dataRoot: string, model: CatalogModel, quant: CatalogQuant): boolean {
-  return quant.files.every((file) => {
+  return quant.files.filter((file) => model.kind !== "chat" || !/^mmproj-/i.test(file.name)).every((file) => {
     const stat = fs.statSync(modelFilePath(dataRoot, model, file), { throwIfNoEntry: false });
     return stat?.isFile() === true && stat.size === file.bytes;
   });
+}
+
+export function modelFileDownloaded(dataRoot: string, model: CatalogModel, file: CatalogFile): boolean {
+  const stat = fs.statSync(modelFilePath(dataRoot, model, file), { throwIfNoEntry: false });
+  return stat?.isFile() === true && stat.size === file.bytes;
 }
 
 export function downloadingModelId(): string | null {

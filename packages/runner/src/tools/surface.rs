@@ -115,6 +115,7 @@ fn admits(session: &Session, tool: &ToolDefinition, programs: &[String]) -> bool
         // is present exactly when the desktop said it has them. In SSH mode
         // that is still the desktop's answer, which is why this is a declared
         // flag rather than a probe of the machine the runner is on.
+        Gate::Service("image") => enabled("write") && session.config.provider.image_generation,
         Gate::Service("artifact") => enabled("artifact") && session.config.artifact_service,
         Gate::Service(_) => false,
         Gate::ApprovedPrograms => enabled("command") && !programs.is_empty(),

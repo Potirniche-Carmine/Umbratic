@@ -36,6 +36,7 @@ type ModelEntry struct {
 const MaxModelIDBytes = 256
 
 type Config struct {
+	Image               *model.ImageRuntime
 	Addr                string
 	AuthToken           string
 	ControlToken        string
@@ -318,6 +319,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := loadModelRegistry(&cfg); err != nil {
+		return Config{}, err
+	}
+	cfg.Image, err = loadImageRuntime()
+	if err != nil {
 		return Config{}, err
 	}
 	if err := validateSpeech(&cfg); err != nil {

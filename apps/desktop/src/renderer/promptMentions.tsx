@@ -1,15 +1,16 @@
 import React from "react";
-import { File, Folder, Sparkles } from "lucide-react";
+import { File, Folder, Image, Sparkles } from "lucide-react";
 import type { ChatAttachment, SkillInfo } from "../shared/desktopApi";
 import { attachmentMention, matchHighlightSegments, promptHighlightSegments } from "./composerText";
 import { normalizeAttachment } from "./attachmentPreview";
 import type { PromptMention } from "./rendererTypes";
 
-export type MentionCategoryId = "file" | "folder" | "skill";
+export type MentionCategoryId = "file" | "folder" | "skill" | "image";
 
 export type MentionCategory = { id: MentionCategoryId; label: string; hint: string };
 
 export const mentionCategories: MentionCategory[] = [
+  { id: "image", label: "Image", hint: "Create an image with your chat model" },
   { id: "file", label: "Files", hint: "Attach a file from the project" },
   { id: "folder", label: "Folders", hint: "Reference a folder and everything in it" },
   { id: "skill", label: "Skills", hint: "Use a skill for this turn" },
@@ -29,6 +30,8 @@ export function skillMention(skill: SkillInfo): string {
 
 export function mentionCategoryIcon(id: MentionCategoryId): React.ReactNode {
   switch (id) {
+    case "image":
+      return <Image size={14} />;
     case "folder":
       return <Folder size={14} />;
     case "skill":
@@ -54,6 +57,7 @@ export function MentionMatchText({ text, query }: { text: string; query: string 
 
 export function renderPromptHighlights(value: string, files: ChatAttachment[], skills: SkillInfo[]): React.ReactNode[] {
   const segments = promptHighlightSegments(value, [
+    "@image",
     ...files.map(normalizeAttachment).map(attachmentMention),
     ...skills.map(skillMention),
   ]);

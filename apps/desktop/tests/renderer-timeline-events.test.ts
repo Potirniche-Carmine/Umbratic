@@ -8,6 +8,24 @@ const { compactTaskEvents: compactBackendEvents } = loadTypeScriptModule(
   new URL("../src/shared/taskEvents.ts", import.meta.url),
 );
 
+test("generated image metadata survives command aggregation and saved conversation timelines", () => {
+  const { commandRunsFromEvents } = loadRendererFile("composerActivity.ts");
+  const { composerTimelineFromEvents } = loadRendererFile("composerTimeline.ts");
+  const details = { path: "sphere.png", image: true, width: 512, height: 512, bytes: 12000 };
+  const events = [
+    { type: "command.started", taskId: "image-task", id: "image-1", command: "generate image sphere.png", cwd: "/repo", kind: "edit", toolKind: "generate_image", at: "2026-09-21T10:00:00Z" },
+    { type: "command.finished", taskId: "image-task", id: "image-1", exitCode: 0, details, at: "2026-09-21T10:02:00Z" },
+  ];
+  const [run] = commandRunsFromEvents(events);
+  const timeline = composerTimelineFromEvents(JSON.parse(JSON.stringify(events)));
+  const image = timeline.flatMap((item) => item.type === "activity" ? item.segments : []).find((segment) => segment.type === "command");
+  for (const result of [run, image.run]) {
+    assert.equal(result.toolKind, "generate_image");
+    assert.equal(result.status, "passed");
+    assert.deepEqual(JSON.parse(JSON.stringify(result.details)), details);
+  }
+});
+
 test("command aggregation, pending permissions, and timelines reflect real event streams", () => {
   const { activitySummary } = loadRendererFile("activityTiming.ts");
   const {

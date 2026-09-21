@@ -78,6 +78,7 @@ export function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
       run.exitCode = event.exitCode;
       run.status = event.exitCode === 0 ? "passed" : "failed";
       run.resultStatus = event.status;
+      run.details = event.details;
       run.errorCode = event.errorCode;
       if (event.errorMessage && !run.stderr.trim()) run.stderr = event.errorMessage;
       run.endedAt = event.at ?? run.endedAt;

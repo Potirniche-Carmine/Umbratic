@@ -84,3 +84,11 @@ func Features(ragEnabled, modelSelectionEnabled, speechEnabled, webSearchEnabled
 	}
 	return names
 }
+
+func (s *Server) features(rag, selection bool) []string {
+	names := Features(rag, selection, s.cfg.SpeechEnabled(), s.webSearchAvailable())
+	if s.cfg.Image != nil {
+		names = append(names, "image.generate")
+	}
+	return names
+}

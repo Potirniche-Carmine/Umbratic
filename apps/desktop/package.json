@@ -7,7 +7,7 @@
   "packageManager": "npm@11.16.0",
   "main": "dist-electron/main/main.js",
   "scripts": {
-    "dev": "node scripts/dev.ts",
+    "dev": "node scripts/prepare-image-runtime.ts && node scripts/dev.ts",
     "dev:web": "vite --host 127.0.0.1 --port 5173",
     "build": "npm run build:native && npm run build:main && vite build",
     "build:main": "tsc -p tsconfig.main.json && vite build --config vite.preload.config.mts && npm run copy:system-skills",

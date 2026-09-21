@@ -168,6 +168,7 @@ export function buildUmbraticRunnerConfig(
       // where it is offered at all. A company Veil that advertises the name
       // searches on the user's behalf and the query never leaves the
       // deployment; local mode leaves the runner to search the open web itself.
+      imageGeneration: connectedVeilSupports(veilFeature.imageGenerate),
       veilWebSearch:
         endpointSettings.mode === "server"
         && connectedVeilSupports(veilFeature.webSearch),

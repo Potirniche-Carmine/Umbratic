@@ -330,6 +330,13 @@ if (!/^electronDist:\s+\.\.\/\.\.\/node_modules\/electron\/dist\s*$/m.test(elect
   fail("Electron Builder must use the explicitly provisioned local Electron distribution.");
 }
 
+// Reviewed native image runtime releases are pinned outside package managers.
+const imagePin = JSON.parse(fs.readFileSync(path.join(root, "third_party/stable-diffusion.cpp.json"), "utf8"));
+for (const asset of Object.values(imagePin.assets) as Array<{url:string;sha256:string;bytes:number}>) {
+  if (!asset.url.startsWith(`https://github.com/leejet/stable-diffusion.cpp/releases/download/${imagePin.release}/`)
+    || !/^[0-9a-f]{64}$/.test(asset.sha256) || !Number.isSafeInteger(asset.bytes) || asset.bytes <= 0) fail("Image runtime assets must pin an official release and SHA-256.");
+}
+
 if (failures.length) {
   console.error("Supply-chain check failed:");
   for (const failure of failures) console.error(`- ${failure}`);

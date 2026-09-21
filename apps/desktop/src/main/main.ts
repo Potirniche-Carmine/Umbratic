@@ -1,3 +1,6 @@
+import { readGeneratedImage } from "./generatedImage";
+import { imageRuntimeBinary } from "./localImage";
+import { readImageModelSetting, writeImageModelSetting } from "./settingsStorage";
 import { activeRunnerProcesses, stopRunnerProcess } from "./runnerLifecycle";
 import { retryTelemetrySpoolQueue } from "./managedTelemetry";
 import { getMainWindow } from "./mainRuntime";
@@ -403,8 +406,11 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     saveDictationSettings: (input) => saveDictationSettings(input),
     getKeyBindings: async () => readKeyBindings(),
     saveKeyBindings: async (input) => writeKeyBindings(input),
+    readGeneratedImage: async (input) => readGeneratedImage(getTask(requiredString(input?.taskId, "taskId")), input?.path),
+    getImageSettings: async () => ({ model: readImageModelSetting(), runtimeAvailable: !!imageRuntimeBinary() }),
+    saveImageSettings: async (input) => ({ model: writeImageModelSetting(input?.model), runtimeAvailable: !!imageRuntimeBinary() }),
     listLocalModels: async (input) =>
-      listLocalModels(app.getPath("userData"), input?.kind === "dictation" ? "dictation" : "chat"),
+      listLocalModels(app.getPath("userData"), input?.kind === "image" ? "image" : input?.kind === "dictation" ? "dictation" : "chat"),
     downloadLocalModel: async (input) => {
       try {
         const model = resolveLocalModel(String(input?.id ?? ""), app.getPath("userData"));

@@ -1,6 +1,6 @@
 /** The local model collection as the renderer sees it. */
 
-export type LocalCatalogModelKind = "chat" | "dictation";
+export type LocalCatalogModelKind = "chat" | "dictation" | "image";
 
 /**
  * How a download sits in this machine's memory: room to spare, will run but
@@ -34,6 +34,8 @@ export type LocalCatalogModel = {
   kind: LocalCatalogModelKind;
   displayName: string;
   bytes: number;
+  /** Included in `bytes`: image components reused by every quantization. */
+  sharedBytes?: number;
   /** The suggestion for this machine: the most capable model it runs comfortably. */
   recommended: boolean;
   /** Safety training removed. Shown, never suggested. */

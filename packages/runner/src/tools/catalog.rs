@@ -223,6 +223,25 @@ pub(super) struct ToolDefinition {
 
 pub(super) const TOOLS: &[ToolDefinition] = &[
     ToolDefinition {
+        name: "generate_image",
+        gate: Gate::Service("image"),
+        kind: "image",
+        description: "Generate a PNG using the configured background image model. Use for image creation requests, including @image. Supply a self-contained visual prompt using relevant conversation context, a new workspace-relative .png path, and optional width and height (256–1024, multiples of 32; default 512). The image model loads on demand and releases memory when finished. The result includes the saved image path.",
+        fields: &[
+            bounded_text("prompt", true, 1, 8000, "Complete visual description."),
+            bounded_text(
+                "path",
+                true,
+                1,
+                240,
+                "New workspace-relative PNG output path.",
+            ),
+            integer("width", 256, 1024, "Image width, multiple of 32."),
+            integer("height", 256, 1024, "Image height, multiple of 32."),
+        ],
+        rules: &[],
+    },
+    ToolDefinition {
         name: "read",
         kind: "file",
         gate: Gate::Capability("read"),

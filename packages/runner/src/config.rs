@@ -108,6 +108,7 @@ pub struct ProviderConfig {
     /// credential, and only there does the query stay inside the company
     /// boundary.
     pub veil_web_search: bool,
+    pub image_generation: bool,
     pub headers: BTreeMap<String, String>,
     pub mtls: Option<MtlsConfig>,
 }
@@ -580,6 +581,10 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
             .get("reasoningVisible")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        image_generation: provider_object
+            .get("imageGeneration")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         veil_web_search: provider_object
             .get("veilWebSearch")
             .and_then(Value::as_bool)
@@ -713,6 +718,7 @@ mod tests {
             send_reasoning_visible_field: false,
             reasoning_visible: false,
             veil_web_search: false,
+            image_generation: false,
             headers: BTreeMap::new(),
             mtls: None,
         };
@@ -737,6 +743,7 @@ mod tests {
             send_reasoning_visible_field: false,
             reasoning_visible: false,
             veil_web_search: false,
+            image_generation: false,
             headers: BTreeMap::new(),
             mtls: None,
         }

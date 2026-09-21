@@ -51,6 +51,10 @@ type WebSearchClient interface {
 }
 
 type Server struct {
+	image        imageGenerator
+	imageContext context.Context
+	imageCancel  context.CancelFunc
+	imageSlot    chan struct{}
 	cfg          config.Config
 	model        ModelClient
 	identity     *identity.Store
@@ -96,10 +100,13 @@ const (
 // NewServer returns the API handler. It is a concrete type so the process can
 // drive readiness and draining around it.
 func NewServer(cfg config.Config, modelClient ModelClient) *Server {
+	imageContext, imageCancel := context.WithCancel(context.Background())
 	registry, err := templates.LoadFile(cfg.TemplateRegistryPath)
 	profile := cfg.Generation
 	server := &Server{
-		cfg: cfg, model: modelClient, templateData: registry, templateErr: err,
+		imageContext: imageContext, imageCancel: imageCancel,
+		imageSlot: make(chan struct{}, 1),
+		cfg:       cfg, model: modelClient, templateData: registry, templateErr: err,
 		identityRate:   &identityRateLimiter{entries: map[string]rateEntry{}},
 		modelQuota:     newQuotaLimiter(cfg.ModelRequestsPerMinute, time.Minute),
 		telemetryQuota: newQuotaLimiter(cfg.TelemetryBundlesPerHour, time.Hour),
@@ -112,6 +119,9 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 			profile.QueueTimeout,
 		),
 		retriever: rag.New(cfg.RAG, modelClient),
+	}
+	if cfg.Image != nil {
+		server.image = cfg.Image
 	}
 	if cfg.SpeechEnabled() {
 		server.speech = model.NewSpeechClient(cfg.SpeechBaseURL, cfg.SpeechModel, cfg.SpeechAPIKey, cfg.ModelTimeout)
@@ -249,7 +259,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// routes stay available so a restart is still observable.
 	switch r.URL.Path {
 	case "/api/engineering/chat", "/api/marketing/chat", "/api/sales/chat",
-		"/api/internal/context/compact", "/api/internal/orient", "/api/transcribe":
+		"/api/internal/context/compact", "/api/internal/orient", "/api/transcribe", "/api/images/generate":
 		if !s.guardLifecycle(w) {
 			return
 		}
@@ -282,6 +292,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleContextCompact(w, r)
 	case "/api/internal/orient":
 		s.handleOrient(w, r)
+	case "/api/images/generate":
+		s.handleImage(w, r)
 	case "/api/transcribe":
 		s.handleTranscribe(w, r)
 	case "/api/web/search":
@@ -654,7 +666,7 @@ func isActivityProductRoute(path string) bool {
 	switch path {
 	case "/api/model/connect", "/api/model/context", "/api/models", "/api/engineering/chat", "/api/marketing/chat",
 		"/api/sales/chat", "/api/internal/context/compact", "/api/internal/orient", "/api/telemetry",
-		"/api/transcribe", "/api/web/search":
+		"/api/transcribe", "/api/web/search", "/api/images/generate":
 		return true
 	default:
 		return false
@@ -716,7 +728,7 @@ func (s *Server) handleModelContext(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.DefaultModel == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "state": "model_not_configured", "features": Features(false, false, s.cfg.SpeechEnabled(), s.webSearchAvailable())})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "state": "model_not_configured", "features": s.features(false, false)})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
@@ -736,7 +748,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
 		"state":    string(s.lifecycle.state()),
-		"features": Features(s.cfg.RAG.Enabled, s.cfg.ModelSelectionEnabled, s.cfg.SpeechEnabled(), s.webSearchAvailable()),
+		"features": s.features(s.cfg.RAG.Enabled, s.cfg.ModelSelectionEnabled),
 		"capabilities": map[string]bool{
 			"parallel_tool_calls": s.cfg.ModelParallelToolCalls,
 			"vision":              s.cfg.ModelVision,

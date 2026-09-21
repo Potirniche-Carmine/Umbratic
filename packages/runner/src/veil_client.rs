@@ -229,6 +229,10 @@ pub async fn veil_web_search(
         })
 }
 
+#[path = "veil_image.rs"]
+mod image;
+pub use image::generate_image;
+
 fn shared_client(provider: &ProviderConfig) -> Result<Client, String> {
     if let Some(client) = SHARED_HTTP_CLIENT.get() {
         return Ok(client.clone());

@@ -1,3 +1,4 @@
+import { localImageRuntime } from "./localImage";
 /**
  * Local mode's model list and startup chain.
  *
@@ -25,7 +26,7 @@ import {
 } from "./modelCatalog";
 import { customModel, listCustomModels } from "./customModels";
 import { discoveredModel, listDiscoveredModels } from "./discoveredModels";
-import { downloadingModelId, modelDownloaded, modelFilePath } from "./modelDownloads";
+import { downloadingModelId, modelDownloaded, modelFileDownloaded, modelFilePath } from "./modelDownloads";
 import { readLocalQuantSelections } from "./settingsStorage";
 import { ensureLocalLlama } from "./localLlama";
 import { localSpeechEndpoint } from "./localSpeech";
@@ -90,6 +91,7 @@ export async function listLocalModels(dataRoot: string, kind: CatalogModelKind):
       kind: model.kind,
       displayName: model.displayName,
       bytes: catalogQuantBytes(chosen),
+      ...(model.kind === "image" ? { sharedBytes: catalogQuantBytes(chosen) - quantWeightsFile(chosen).bytes } : {}),
       recommended,
       uncensored: model.uncensored === true,
       mtp: model.mtp === true,
@@ -194,7 +196,8 @@ export async function ensureLocalChatRuntime(input: {
 }): Promise<LocalVeilConnection> {
   const model = selectedLocalChatModel(input.dataRoot, input.settings.modelId);
   if (!model) throw new Error(chooseLocalModelMessage);
-  const projector = quantProjectorFile(activeQuant(input.dataRoot, model)!);
+  const offeredProjector = quantProjectorFile(activeQuant(input.dataRoot, model)!);
+  const projector = offeredProjector && modelFileDownloaded(input.dataRoot, model, offeredProjector) ? offeredProjector : null;
   const runtime = await ensureLocalLlama(
     {
       modelFile: localModelWeightsPath(input.dataRoot, model),
@@ -225,6 +228,7 @@ export async function ensureLocalChatRuntime(input: {
       reasoningEffort: effort,
       sampling: samplingFor(model, effort ?? "off"),
       speech,
+      image: localImageRuntime(input.dataRoot),
     },
     input.contextLength,
     input.onVeilDiagnostic,

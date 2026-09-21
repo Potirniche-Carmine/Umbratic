@@ -1,4 +1,5 @@
 import { taskUsesIsolatedWorktree } from "./worktreeOps";
+import { withoutGeneratedImages } from "../shared/generatedImages";
 import { emit, getTask, missingSnapshotValue, publicTask, saveTask } from "./mainRuntime";
 import { buildBinaryDiff, buildSnapshotDiff } from "./taskPromptContext";
 import { readTextFileIfSafe, snapshotFileValue, snapshotFolder } from "./workspaceSnapshot";
@@ -48,9 +49,9 @@ export function folderReviewFiles(task: TaskRecord): ReviewFile[] {
   const paths = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
     .filter((file) => !isGeneratedRuntimePath(file))
     .sort((a, b) => a.localeCompare(b));
-  return paths
+  return withoutGeneratedImages(paths
     .map((file) => buildSnapshotDiff(file, before[file] ?? null, after[file] ?? null))
-    .filter((file): file is ReviewFile => !!file);
+    .filter((file): file is ReviewFile => !!file), task.events ?? []);
 }
 
 /// Each changed file costs one or two git subprocesses. Reviews of large
@@ -122,9 +123,12 @@ export async function gitLocalReviewFiles(task: TaskRecord): Promise<ReviewFile[
 
 export async function gitReviewFiles(task: TaskRecord, baseline = task.baseCommit, repositoryPath = task.worktreePath): Promise<ReviewFile[]> {
   if (task.baselineFiles && baseline !== "HEAD") {
-    return task.workspaceKind === "git" ? gitLocalReviewFiles(task) : folderReviewFiles(task);
+    const files = task.workspaceKind === "git" ? await gitLocalReviewFiles(task) : folderReviewFiles(task);
+    return withoutGeneratedImages(files, task.events ?? []);
   }
-  return gitWorkspaceReviewFiles(repositoryPath, baseline);
+  const files = await gitWorkspaceReviewFiles(repositoryPath, baseline);
+  return path.resolve(repositoryPath) === path.resolve(task.worktreePath)
+    ? withoutGeneratedImages(files, task.events ?? []) : files;
 }
 
 export async function gitFileStatus(repositoryPath: string, baseline: string, file: string): Promise<ReviewFile["status"]> {

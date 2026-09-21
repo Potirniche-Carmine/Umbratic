@@ -222,4 +222,9 @@ verifyBinary(
   { ...process.env, VEIL_MODE: "local", VEIL_AUTH_TOKEN: "" },
 );
 verifyLlamaServer(path.join(resources, "llama-server"));
+const imagePin = JSON.parse(fs.readFileSync(path.resolve(desktopRoot, "../../third_party/stable-diffusion.cpp.json"), "utf8"));
+if (imagePin.assets[`${process.platform}-${process.arch}`]) {
+  const imageProbe = spawnSync(path.join(resources, "image-runtime", executable("sd-cli")), ["--help"], { encoding: "utf8", timeout: 15000 });
+  if (imageProbe.status !== 0 || !`${imageProbe.stdout}${imageProbe.stderr}`.includes(imagePin.commit)) throw new Error("Packaged image runtime is missing or has the wrong revision.");
+}
 console.log(`Verified packaged desktop resources in ${path.relative(path.resolve(desktopRoot, "../.."), resources)}.`);
