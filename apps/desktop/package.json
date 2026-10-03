@@ -27,7 +27,7 @@
     "generate:skill-references": "node scripts/generate-skill-references.ts"
   },
   "dependencies": {
-    "@cantoo/pdf-lib": "2.8.1",
+    "@cantoo/pdf-lib": "2.11.1",
     "@napi-rs/canvas": "1.0.6",
     "@xmldom/xmldom": "0.9.12",
     "electron-updater": "6.8.9",
