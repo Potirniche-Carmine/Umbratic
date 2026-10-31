@@ -189,10 +189,6 @@ async function createCompanySession(transport: TransportOptions, generation: num
   if (!token.startsWith("umbs_") || !orgName || !Number.isFinite(expiresAt)) {
     throw new Error("Veil returned an invalid company session.");
   }
-  // Veil mints this alongside the session; the update feed accepts it for
-  // thirty days. Collecting it here is the whole of the app's part in it —
-  // nothing asks the user for a key, and a company that stops running Veil
-  // simply stops receiving new ones.
   if (credential.orgName !== orgName) {
     writeCompanyDeviceCredential({ ...credential, orgName });
   }

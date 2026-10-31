@@ -36,9 +36,13 @@ if (existing) {
   const allowed = new Set([...files, "SHA256SUMS"]);
   const assets = api(`repos/${repository}/releases/${existing.id}/assets?per_page=100`);
   if (assets.some((asset) => !allowed.has(asset.name))) throw new Error("Existing draft contains unexpected assets. Remove the stale draft before retrying.");
+  // A draft may not have a tag yet. Its saved target can otherwise create the
+  // eventual tag from an older branch/commit despite our verified checkout.
+  gh(["release", "edit", tag, "--repo", repository, "--target", commit, "--draft"]);
 }
 // The release stays a draft until every platform artifact and its metadata
 // have uploaded; the public updater can never observe a partial release.
 gh(["release", "upload", tag, "--repo", repository, "--clobber", ...files.map((name) => path.join(directory, name)), path.join(directory, "SHA256SUMS")]);
-gh(["release", "edit", tag, "--repo", repository, "--draft=false", "--latest"]);
+if (api(`repos/${repository}/commits/main`).sha !== commit) throw new Error("Main changed during upload. The release remains a draft.");
+gh(["release", "edit", tag, "--repo", repository, "--target", commit, "--draft=false", "--latest"]);
 console.log(`Published verified ${tag} from ${commit}.`);

@@ -77,6 +77,7 @@ export function localSpeechArgs(request: LocalSpeechRequest): string[] {
     "--ctx-size", "4096",
     "--parallel", "1",
     "--no-webui",
+    "--offline",
   ];
 }
 

@@ -3,8 +3,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { llamaBuildJobs, llamaCpuBuildFlags, windowsArmClangCompilers } from "../scripts/llama-build-config.ts";
+import { llamaBuildJobs, llamaCpuBuildFlags, parseLlamaPin, windowsArmClangCompilers } from "../scripts/llama-build-config.ts";
 import { verifyPeArchitecture } from "../scripts/verify-pe.ts";
+
+test("llama source pins require an exact upstream stable release and immutable commit", () => {
+  const pin = fs.readFileSync(new URL("../../../third_party/llama.cpp.pin", import.meta.url), "utf8");
+  assert.equal(parseLlamaPin(pin).tag, "v0.8.0");
+  for (const tag of ["b12000", "v0.8.0-rc.1", "v0.8", "v00.8.0", "main"]) {
+    assert.throws(() => parseLlamaPin(pin.replace(/^tag=.*$/m, `tag=${tag}`)), /stable vX.Y.Z/);
+  }
+  assert.throws(() => parseLlamaPin(pin.replace("repository=https://github.com/ggml-org/", "repository=https://github.com/other/")), /upstream/);
+  assert.throws(() => parseLlamaPin(pin.replace(/^commit=.*$/m, "commit=8642541")), /40-character/);
+  assert.throws(() => parseLlamaPin(`${pin}\ntag=v0.8.0`), /field/);
+  assert.throws(() => parseLlamaPin(`${pin}\nunknown=value`), /field/);
+});
 
 test("Windows ARM uses the supported portable Clang target and other release platforms retain CPU variants", () => {
   const arm = llamaCpuBuildFlags("win32", "arm64");

@@ -1,0 +1,73 @@
+[
+  {
+    "name": "qdrant",
+    "release": "1.20.0",
+    "filename": "qdrant.tar.gz",
+    "url": "https://github.com/qdrant/qdrant/releases/download/v1.20.0/qdrant-aarch64-apple-darwin.tar.gz",
+    "sha256": "531904e822050790bb8c1da6705f801ee48b91eb4c229d0d605ff06f6331b20a",
+    "size": 29070255,
+    "member": "qdrant"
+  },
+  {
+    "name": "uv",
+    "release": "0.13.6",
+    "filename": "uv.tar.gz",
+    "url": "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-aarch64-apple-darwin.tar.gz",
+    "sha256": "60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472",
+    "size": 14235670,
+    "member": "uv-aarch64-apple-darwin/uv"
+  },
+  {
+    "name": "python",
+    "release": "3.12.16+20261026",
+    "filename": "python.tar.gz",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-aarch64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "353d5f1b4fd2715e7053f12f068435d5bbad16b91e057006b5d01e0925709a7e",
+    "size": 25035343
+  },
+  {
+    "name": "ffmpeg",
+    "release": "7.1.5",
+    "filename": "ffmpeg-7.1.5.tar.xz",
+    "url": "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz",
+    "sha256": "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f",
+    "size": 11050340,
+    "build": "ffmpeg"
+  },
+  {
+    "name": "lame",
+    "release": "3.101",
+    "filename": "lame-3.101.tar.gz",
+    "url": "https://downloads.sourceforge.net/project/lame/lame/3.101/lame-3.101.tar.gz",
+    "sha256": "7578af6eebd578b2bd64e468fac4ae1f03670a7e028166e67f855674b9b6aeac",
+    "size": 1466586,
+    "build": "ffmpeg"
+  },
+  {
+    "name": "x264",
+    "release": "b35605ace3ddf7c1a5d67a2eb553f034aef41d55",
+    "filename": "x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.gz",
+    "url": "https://code.videolan.org/videolan/x264/-/archive/b35605ace3ddf7c1a5d67a2eb553f034aef41d55/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.gz",
+    "sha256": "cd71a7515b0e9a012e1ac9b1f8415bebcaf6fc97d4db32286642ac4c0fbe24f9",
+    "size": 1040327,
+    "build": "ffmpeg"
+  },
+  {
+    "name": "opus",
+    "release": "1.6.1",
+    "filename": "opus-1.6.1.tar.gz",
+    "url": "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz",
+    "sha256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
+    "size": 10472813,
+    "build": "ffmpeg"
+  },
+  {
+    "name": "pkgconf",
+    "release": "2.5.1",
+    "filename": "pkgconf-2.5.1.tar.xz",
+    "url": "https://distfiles.ariadne.space/pkgconf/pkgconf-2.5.1.tar.xz",
+    "sha256": "cd05c9589b9f86ecf044c10a2269822bc9eb001eced2582cfffd658b0a50c243",
+    "size": 328064,
+    "build": "ffmpeg"
+  }
+]

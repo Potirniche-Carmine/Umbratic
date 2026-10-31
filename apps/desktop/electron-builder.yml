@@ -88,6 +88,9 @@ dmg:
     - { x: 700, y: 130, type: file, path: assets/dmg/background.tiff, name: .background.tiff }
     - { x: 700, y: 290, type: file, path: assets/icons/icon.icns, name: .VolumeIcon.icns }
 win:
+  extraFiles:
+    - from: .package/windows-runtime
+      to: .
   forceCodeSigning: true
   verifyUpdateCodeSignature: true
   signExts: [".dll", ".node"]

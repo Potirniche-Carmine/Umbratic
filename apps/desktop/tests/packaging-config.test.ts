@@ -83,14 +83,26 @@ test("desktop builds llama-server from the pinned commit and packages it", () =>
   const pin = fs.readFileSync(new URL("../../../third_party/llama.cpp.pin", import.meta.url), "utf8");
 
   assert.match(pin, /^repository=https:\/\/github\.com\/ggml-org\/llama\.cpp\.git$/m);
-  assert.match(pin, /^tag=b\d+$/m);
+  assert.match(pin, /^tag=v\d+\.\d+\.\d+$/m);
   assert.match(pin, /^commit=[0-9a-f]{40}$/m);
 
   assert.match(config, /- from: \.package\/llama-server\r?\n\s+to: llama-server/);
   // Cloning a tag is not enough: a tag can be moved, a commit cannot.
   assert.match(preparePackage, /head !== pin\.commit/);
-  // No libcurl, and with it no `-hf` remote-download path.
-  assert.match(preparePackage, /"-DLLAMA_CURL=OFF"/);
+  // No platform-dependent TLS library discovery or extra source downloads.
+  for (const flag of ["LLAMA_OPENSSL", "LLAMA_BUILD_BORINGSSL", "LLAMA_BUILD_LIBRESSL"]) {
+    assert.ok(preparePackage.includes(`"-D${flag}=OFF"`));
+  }
+  assert.match(preparePackage, /"-DGGML_RPC=OFF"/);
+  for (const flag of ["LLAMA_SUBPROCESS", "LLAMA_BUILD_APP", "LLAMA_BUILD_UI", "LLAMA_USE_PREBUILT_UI", "LLAMA_CONNECT", "LLAMA_LLGUIDANCE"]) {
+    assert.ok(preparePackage.includes(`"-D${flag}=OFF"`));
+  }
+  assert.match(preparePackage, /llama\.cpp-disable-remote-downloads\.patch/);
+  const noDownloads = fs.readFileSync(new URL("../../../third_party/llama.cpp-disable-remote-downloads.patch", import.meta.url), "utf8");
+  assert.match(noDownloads, /\+\s+throw std::runtime_error\("Remote downloads are disabled in the Umbratic runtime\."\);/);
+  assert.doesNotMatch(noDownloads.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).join("\n"), /httplib::Client cli|common_http_parse_url\(/);
+  assert.match(verifyPackage, /for \(const scheme of \["http", "https"\]\)/);
+  assert.match(verifyPackage, /"--model-url"/);
   // Never -march=native: a release binary must run on CPUs older than the one
   // that built it, and macOS older than the SDK that built it.
   const cpuBuild = fs.readFileSync(new URL("../scripts/llama-build-config.ts", import.meta.url), "utf8");
@@ -186,10 +198,11 @@ test("CI installs locked dependencies without lifecycle scripts and retains vuln
   }
   assert.ok(workflow.jobs.audit.steps.some((step) => step.run === "npm run supply-chain:audit"));
   assert.ok(workflow.jobs.audit.steps.some((step) => step.run === "npm run supply-chain:sbom"));
-  const linuxRace = workflow.jobs.audit.steps.find((step) => step.name === "Race-test both Go services on Linux");
+  const linuxRace = workflow.jobs.audit.steps.find((step) => step.name === "Race-test Go services and Caddy on Linux");
   assert.equal(linuxRace.env.CGO_ENABLED, "1");
   assert.match(linuxRace.run, /go -C infrastructure\/veil test -race \.\/\.\.\./);
   assert.match(linuxRace.run, /go -C infrastructure\/veil-console test -race \.\/\.\.\./);
+  assert.match(linuxRace.run, /go -C infrastructure\/veil-console\/deploy\/caddy test -race \.\/\.\.\. github\.com\/go-jose\/go-jose\/v3\/\.\.\./);
 });
 
 test("CI pins actions and stays read-only", () => {

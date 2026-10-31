@@ -1,5 +1,7 @@
 import "./prepare-image-runtime.ts";
-import { llamaBuildJobs, llamaCpuBuildFlags, windowsArmClangCompilers } from "./llama-build-config.ts";
+import { msvcEnvironment } from "./windows-build-environment.ts";
+import { prepareWindowsDependencies } from "./windows-dependencies.ts";
+import { llamaBuildJobs, llamaCpuBuildFlags, parseLlamaPin } from "./llama-build-config.ts";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -31,28 +33,6 @@ const llamaTarget = path.join(desktopRoot, ".package", "llama-server");
 // them, and so a repeat packaging run at the same pin skips the whole build.
 const llamaCacheRoot = path.join(desktopRoot, ".llama-cache");
 const llamaServerBinaryName = process.platform === "win32" ? "llama-server.exe" : "llama-server";
-
-type LlamaPin = { repository: string; tag: string; commit: string };
-
-function parseLlamaPin(contents: string): LlamaPin {
-  const fields = new Map<string, string>();
-  for (const line of contents.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const separator = trimmed.indexOf("=");
-    if (separator < 0) throw new Error(`Malformed llama.cpp pin line: ${trimmed}`);
-    fields.set(trimmed.slice(0, separator).trim(), trimmed.slice(separator + 1).trim());
-  }
-  const repository = fields.get("repository") ?? "";
-  const tag = fields.get("tag") ?? "";
-  const commit = fields.get("commit") ?? "";
-  if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\.git$/.test(repository)) {
-    throw new Error("llama.cpp pin must set repository to an https GitHub clone URL.");
-  }
-  if (!/^b\d+$/.test(tag)) throw new Error("llama.cpp pin must set tag to a llama.cpp build tag such as b10419.");
-  if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("llama.cpp pin must set commit to a full 40-character SHA.");
-  return { repository, tag, commit };
-}
 
 function run(command: string, args: string[], cwd: string, what: string) {
   const result = spawnSync(command, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -162,89 +142,6 @@ const llamaGenerator = process.env.UMBRATIC_LLAMA_GENERATOR?.trim()
   || (process.platform === "win32" ? "Ninja" : null);
 
 /**
- * The environment MSVC needs, as vcvarsall.bat would leave it.
- *
- * The Visual Studio generator locates the toolchain itself; Ninja does not, and
- * wants cl.exe on PATH with INCLUDE and LIB already set. Rather than require
- * that packaging be started from a Developer Command Prompt — easy to forget,
- * and reported as "no CMAKE_C_COMPILER could be found" when it is — the batch
- * file is run here and the environment it produces is captured for CMake.
- *
- * Returns process.env unchanged off Windows, where none of this applies.
- */
-let msvcEnvironmentCache: NodeJS.ProcessEnv | null = null;
-function msvcEnvironment(): NodeJS.ProcessEnv {
-  if (process.platform !== "win32") return process.env;
-  if (msvcEnvironmentCache) return msvcEnvironmentCache;
-
-  // vswhere ships with the Visual Studio Installer at a fixed location, which
-  // is the documented way to find an installation without guessing at edition
-  // or year in Program Files.
-  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
-  const vswhere = path.join(programFilesX86, "Microsoft Visual Studio", "Installer", "vswhere.exe");
-  const missingToolset = new Error(
-    "The MSVC C++ toolset is required to build the bundled model runtime, and was not found.\n"
-    + "  Install it with:  winget install Microsoft.VisualStudio.2022.BuildTools"
-    + " --override \"--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\"\n"
-    + "  An existing Visual Studio with the \"Desktop development with C++\" workload also works.",
-  );
-  if (!fs.existsSync(vswhere)) throw missingToolset;
-
-  const found = spawnSync(vswhere, [
-    "-latest",
-    "-products", "*",
-    "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-    "-property", "installationPath",
-  ], { encoding: "utf8", windowsHide: true });
-  const installPath = found.stdout?.trim().split(/\r?\n/)[0] ?? "";
-  if (!installPath) throw missingToolset;
-
-  const vcvarsall = path.join(installPath, "VC", "Auxiliary", "Build", "vcvarsall.bat");
-  if (!fs.existsSync(vcvarsall)) throw missingToolset;
-
-  // A marker rather than parsing from the first line: vcvarsall prints its own
-  // banner, and on some installs a line of it looks enough like KEY=VALUE to be
-  // picked up as a variable.
-  const marker = "__umbratic_vcvars__";
-  const hostArch = process.arch === "arm64" ? "arm64" : "amd64";
-  const dumped = spawnSync(
-    "cmd.exe",
-    ["/d", "/s", "/c", `""${vcvarsall}" ${hostArch} >nul && echo ${marker} && set"`],
-    {
-      encoding: "utf8",
-      windowsHide: true,
-      maxBuffer: 8 * 1024 * 1024,
-      // The doubled quotes above are the /s form, which cmd strips to reach a
-      // batch path containing spaces. Node's own argument quoting rewrites them
-      // into something cmd parses as a UNC path instead, and the whole thing
-      // fails as "the network path was not found"; verbatim leaves them alone.
-      windowsVerbatimArguments: true,
-    },
-  );
-  const output = dumped.stdout ?? "";
-  const markerAt = output.indexOf(marker);
-  if (dumped.status !== 0 || markerAt < 0) {
-    throw new Error(
-      `Setting up the MSVC environment failed: ${vcvarsall} ${hostArch}\n`
-      + `  ${(dumped.stderr || output).trim().split(/\r?\n/).slice(-5).join("\n  ")}`,
-    );
-  }
-
-  const environment: NodeJS.ProcessEnv = {};
-  for (const line of output.slice(markerAt + marker.length).split(/\r?\n/)) {
-    const separator = line.indexOf("=");
-    if (separator > 0) environment[line.slice(0, separator)] = line.slice(separator + 1);
-  }
-  if (process.arch === "arm64") {
-    const clang = windowsArmClangCompilers(installPath);
-    environment.CC = clang.c;
-    environment.CXX = clang.cxx;
-  }
-  msvcEnvironmentCache = environment;
-  return environment;
-}
-
-/**
  * Checks the toolchain before CMake does, because CMake's own failure for a
  * missing dependency is twenty lines of module backtrace with the actionable
  * part — a package to install — nowhere in it.
@@ -308,7 +205,7 @@ function requireLlamaBuildTools(wantsVulkan: boolean) {
  * rather than a silent drift.
  */
 const llamaPatchDir = path.resolve(desktopRoot, "../../third_party");
-const llamaPatchFiles = ["llama.cpp-list-device-type.patch"];
+const llamaPatchFiles = ["llama.cpp-list-device-type.patch", "llama.cpp-disable-remote-downloads.patch"];
 
 /** Whether anything changed, which is what makes a cached build tree stale. */
 function applyLlamaPatches(sourceDir: string): boolean {
@@ -391,9 +288,19 @@ async function buildLlamaServer() {
       // runtime CPU variants are supported on macOS and x64; Windows ARM uses
       // its supported Clang build with an explicit ARMv8 baseline instead.
       ...llamaCpuBuildFlags(process.platform, process.arch),
-      // Drops libcurl and with it the `-hf` remote-download path. Umbratic
-      // downloads weights itself, from a revision-pinned URL it can checksum.
-      "-DLLAMA_CURL=OFF",
+      // The local server needs HTTP only. Do not discover/link a host OpenSSL
+      // installation or fetch an additional TLS implementation.
+      "-DLLAMA_OPENSSL=OFF",
+      "-DLLAMA_BUILD_BORINGSSL=OFF",
+      "-DLLAMA_BUILD_LIBRESSL=OFF",
+      // No distributed RPC service or backend is part of the desktop runtime.
+      "-DGGML_RPC=OFF",
+      "-DLLAMA_SUBPROCESS=OFF",
+      "-DLLAMA_BUILD_APP=OFF",
+      "-DLLAMA_BUILD_UI=OFF",
+      "-DLLAMA_USE_PREBUILT_UI=OFF",
+      "-DLLAMA_CONNECT=OFF",
+      "-DLLAMA_LLGUIDANCE=OFF",
       "-DLLAMA_BUILD_TESTS=OFF",
       "-DLLAMA_BUILD_EXAMPLES=OFF",
       "-DLLAMA_BUILD_SERVER=ON",
@@ -410,7 +317,7 @@ async function buildLlamaServer() {
       // library keeps it inside the backend rather than as a loose .metallib
       // that would have to be found, signed, and notarized separately.
       configure.push("-DGGML_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON");
-      // Match Electron's own floor. Left unset, CMake targets the SDK the build
+      // Remain below the Electron app's floor. Left unset, CMake targets the SDK the build
       // machine happens to have, and the binary refuses to load on any older
       // macOS the app otherwise supports.
       configure.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0");
@@ -446,6 +353,17 @@ async function buildLlamaServer() {
 
   fs.rmSync(llamaTarget, { recursive: true, force: true });
   fs.mkdirSync(llamaTarget, { recursive: true });
+  // Preserve the original notices, including nested decoder/JSON notices
+  // embedded in headers, without selectively rewriting their legal text.
+  const licenses = path.join(llamaTarget, "licenses");
+  for (const relative of ["LICENSE", "ggml/src/ggml-cpu/llamafile/sgemm.cpp", "ggml/src/ggml-cpu/ops.cpp",
+    "vendor/cpp-httplib/LICENSE", "vendor/hash", "vendor/nlohmann/json.hpp",
+    "vendor/miniaudio/miniaudio.h", "vendor/stb/stb_image.h", "vendor/sheredom/subprocess.h"]) {
+    const destination = path.join(licenses, relative);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.cpSync(path.join(sourceDir, relative), destination, { recursive: true });
+  }
+  fs.copyFileSync(path.join(llamaPatchDir, "apache-2.0.txt"), path.join(licenses, "APACHE-2.0.txt"));
   // The executable and the libraries it dynamically loads, and nothing else:
   // the build tree also holds llama.cpp's other tools, which Umbratic never
   // runs and must not ship.
@@ -622,4 +540,5 @@ if (veilBuild.error || veilBuild.status !== 0) {
 console.log(`Prepared packaged Veil at ${path.relative(desktopRoot, veilBinary)}`);
 
 await buildLlamaServer();
+prepareWindowsDependencies(desktopRoot);
 

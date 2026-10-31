@@ -70,6 +70,8 @@ export function localLlamaArgs(request: LocalLlamaRequest): string[] {
     "--parallel", "1",
     // Nothing should be reachable here but Veil.
     "--no-webui",
+    // The app provisions revision-pinned, verified model files itself.
+    "--offline",
     // Speculative decoding from the model's own MTP head: it drafts a couple
     // of tokens and the model verifies them in one pass, which is the same
     // output faster. Two is the draft length that holds up across GPUs; more

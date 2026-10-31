@@ -88,12 +88,13 @@ jobs:
       - run: npm ci --ignore-scripts --omit=peer
       - run: cargo install cargo-audit --locked --version "$(node -p 'JSON.parse(require("fs").readFileSync("supply-chain-policy.json")).cargoAuditVersion')"
       - run: go install "golang.org/x/vuln/cmd/govulncheck@v$(node -p 'JSON.parse(require("fs").readFileSync("supply-chain-policy.json")).govulncheckVersion')"
-      - name: Race-test both Go services on Linux
+      - name: Race-test Go services and Caddy on Linux
         env:
           CGO_ENABLED: '1'
         run: |
           go -C infrastructure/veil test -race ./...
           go -C infrastructure/veil-console test -race ./...
+          go -C infrastructure/veil-console/deploy/caddy test -race ./... github.com/go-jose/go-jose/v3/...
       - run: npm run supply-chain:audit
       - name: Fetch locked Cargo sources for offline SBOM generation
         run: cargo fetch --locked

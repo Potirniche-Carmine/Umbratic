@@ -1,9 +1,9 @@
 // Runs on each native release host before its artifacts can leave the job.
 import fs from "node:fs";
 import path from "node:path";
-import { hashFile } from "./release-artifacts.ts";
+import { hashFile, verifyMacSigningTeam, verifyUpdaterPublisher } from "./release-artifacts.ts";
 import { createRequire } from "node:module";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 const root = path.resolve("target/release/desktop");
 function run(command: string, args: string[]) {
@@ -19,6 +19,9 @@ fs.mkdirSync(stage, { recursive: true });
 if (process.platform === "darwin") {
   const app = path.join(root, "mac-arm64/Umbratic.app");
   run("codesign", ["--verify", "--deep", "--strict", app]);
+  const identity = spawnSync("codesign", ["--display", "--verbose=4", app], { encoding: "utf8" });
+  if (identity.error || identity.status !== 0) throw new Error("Unable to read the macOS signing identity.");
+  verifyMacSigningTeam(identity.stderr, process.env.APPLE_TEAM_ID!);
   run("spctl", ["--assess", "--type", "execute", "--verbose=2", app]);
   run("xcrun", ["stapler", "validate", app]);
   const dmg = path.join(root, `Umbratic-${version}.dmg`);
@@ -45,6 +48,9 @@ if (process.platform === "darwin") {
   if (metadata.path === path.basename(dmg)) metadata.sha512 = hashFile(dmg, "sha512", "base64");
   fs.writeFileSync(channelPath, dump(metadata));
 } else if (process.platform === "win32") {
+  const unpacked = process.arch === "x64" ? "win-unpacked" : "win-arm64-unpacked";
+  const { load } = createRequire(import.meta.url)("js-yaml");
+  verifyUpdaterPublisher(load(fs.readFileSync(path.join(root, unpacked, "resources/app-update.yml"), "utf8")), process.env.UMBRATIC_WIN_SIGN_PUBLISHER!);
   // Check the installer AND all shipped native executables/libraries. A signed
   // wrapper around unsigned sidecars does not meet the release contract.
   const files = walk(root).filter((file) => /\.(exe|dll|node)$/i.test(file));

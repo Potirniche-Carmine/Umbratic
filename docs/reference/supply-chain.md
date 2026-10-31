@@ -1,8 +1,10 @@
 # Supply chain
 
-Dependency changes are security changes. Only locked crates.io and npm
-packages plus the reviewed source patch described below; Veil stays on the Go standard library; executable downloads are
-explicit.
+Dependency changes are security changes. npm, Cargo, Go and the managed-server
+wheels use reviewed locked graphs; native sources and executable downloads have
+explicit pins and provenance. Veil stays on the Go standard library. Local
+source backports and wheel changes are recorded below and in the
+[runtime advisory review](runtime-security.md).
 
 ## Set up a machine
 
@@ -46,7 +48,16 @@ toolchains, explicit GitHub runner images, full-SHA Action references.
 npm run supply-chain:audit
 ```
 
-npm vulnerability and registry-signature checks, RustSec, `govulncheck`.
+npm vulnerability and registry-signature checks, RustSec, `govulncheck` for
+Veil, Console and the Caddy source graph, plus OSV queries for the exact server
+wheel versions and actually compiled Go modules. Unreviewed runtime matches fail.
+Source-patched JOSE matches require the pinned complete source manifest and actual
+module replacement. The scoped setuptools findings require the exact reviewed
+Mac/offline-wheel controls, including hashes of their executable implementation;
+changed controls invalidate that applicability decision. Incomplete, erroneous or
+paginated OSV responses fail; changed advisory modification timestamps require
+review. All raw matches and verified dispositions remain visible in the audit log
+and generated report.
 Install the exact audited versions of cargo-audit and govulncheck from
 `supply-chain-policy.json` first.
 
@@ -54,7 +65,11 @@ Install the exact audited versions of cargo-audit and govulncheck from
 npm run supply-chain:sbom
 ```
 
-CycloneDX 1.6 inventory from `package-lock.json` and locked Cargo metadata.
+CycloneDX 1.6 source inventory includes npm, locked Cargo metadata, host-compiled
+Go modules, server wheels and pinned native sources. It generates offline after
+the locked sources/toolchain are provisioned. Caddy's effective binary/module
+inventory and natively modified wheel hashes also appear in the sealed server
+kit; generated binaries are not mislabeled with their upstream archive hashes.
 
 ## Unreachable OpenPGP advisory
 
@@ -62,6 +77,7 @@ CycloneDX 1.6 inventory from `package-lock.json` and locked Cargo metadata.
 scope for the deprecated `golang.org/x/crypto/openpgp` packages. They have no
 published fix. Console uses `golang.org/x/crypto` for Argon2id password hashing;
 its compiled dependencies include `argon2` and `blake2b`, and no OpenPGP package.
+The reviewed Caddy graph also uses crypto helpers without importing OpenPGP.
 The scanner reports zero affected imported packages or called symbols for this
 advisory. `supply-chain-policy.json` records the reviewed exception, and the audit
 continues to display it; it is not suppressed.
@@ -99,7 +115,8 @@ Local mode runs `llama-server`, built from source during desktop packaging at
 the commit in `third_party/llama.cpp.pin`. No prebuilt archive is downloaded.
 Packaging refuses to continue when the cloned tag does not resolve to the
 pinned SHA, and `verify:package` asserts the packaged executable reports the
-pinned build number.
+pinned commit. The pin selects an upstream stable release; the current native
+advisory review is recorded in [Runtime security](runtime-security.md).
 
 Build machines also need CMake 3.21+, and per platform:
 
@@ -134,7 +151,14 @@ loadable backend it is simply absent there.
 crashes with an illegal instruction on any older user CPU, at first launch.
 Native macOS sidecars target macOS 12; the Electron desktop app requires macOS 13 or later.
 
-`-DLLAMA_CURL=OFF` removes llama.cpp's `-hf` remote-download path. Umbratic
+The reviewed `llama.cpp-disable-remote-downloads.patch` rejects the shared
+outgoing HTTP client before URL parsing, DNS or socket creation. This covers
+model, Hugging Face, Docker and HTTP(S) image/audio downloads. Package verification
+executes HTTP and HTTPS download attempts without `--offline`, requires the
+compiled rejection, and checks that a live listener received no connection.
+The app also passes `--offline` for chat and speech. TLS, RPC, router subprocesses,
+the embedded Web UI and optional tunnel/helper downloads are disabled at build
+time. The loopback inference server remains available. Umbratic
 fetches weights itself from revision-pinned URLs it checksums against
 `apps/desktop/src/main/modelCatalog.ts`. Models a user adds by Hugging Face
 reference follow the same rule with the pin moved to add time: resolving the
@@ -189,6 +213,17 @@ requests and can be disabled in Settings → About. It does not need a company t
 
 Runbook: [../guides/release-desktop.md](../guides/release-desktop.md).
 
+Windows packaging inspects normal and delay-load PE imports with the installed
+MSVC `dumpbin`. Only the explicit Windows OS/API-set contract list remains
+external. Required CRT/OpenMP DLLs come from the matching `VCToolsRedistDir`;
+their architecture and Microsoft Authenticode chain are verified before copying
+them beside the executable or native module. Original Microsoft signatures,
+public version/certificate/hash provenance and Visual Studio notices are retained.
+Package verification checks the resulting dependency closure. The sole non-OS
+exception is `ggml-vulkan.dll`'s optional `vulkan-1.dll` driver loader: the CPU
+backend remains available when that driver backend cannot load. This adds no
+downloads and changes no compiler optimizations or selected backends.
+
 ## Not supported, deliberately
 
 PKCS#12/PFX client identities. Managed endpoints must use PEM `certPath` and
@@ -202,6 +237,6 @@ of source control; follow the [release guide](../guides/release-desktop.md).
 
 ## Image runtime sources
 
-The macOS image CLI is built from the official stable-diffusion.cpp source and its exact ggml submodule revision, with archive sizes and SHA-256 hashes pinned in `third_party/stable-diffusion.cpp.json`. The build uses CMake, targets macOS 12, links its libraries statically, and embeds the Metal library. Its only dynamic dependencies are system frameworks and libraries. Packaging verifies its minimum OS, linked dependencies, and `--help` revision before accepting it.
+Every supported image CLI is built from the same official stable-diffusion.cpp source and exact ggml submodule revision, with archive sizes and SHA-256 hashes pinned in `third_party/stable-diffusion.cpp.json`. This replaces the former Windows/Linux binaries, whose embedded ggml lacked later GGUF overflow checks. The macOS build targets macOS 12, links its libraries statically, and embeds Metal; its only dynamic dependencies are system frameworks and libraries. Windows x64 and Linux x64 retain their CPU backend. Packaging verifies the actual architecture, platform libraries and reported revision.
 
-The build uses bundled tokenizer/image helpers, disables CMake dependency downloads, and builds only the CLI. The app uses PNG output; optional WebP/WebM codecs and the upstream server frontend are excluded. Cached sources and build outputs live under `apps/desktop/.llama-cache/image-runtime/`. Delete that directory to rebuild. Windows and Linux assets remain pinned to reviewed release archives with exact sizes and hashes. Model weights retain their own licenses.
+The build uses bundled tokenizer/image helpers, disables CMake dependency downloads, and builds only the CLI. The app uses PNG output; optional WebP/WebM codecs and the upstream server frontend are excluded. Cached sources and build outputs live under `apps/desktop/.llama-cache/image-runtime/`. Delete that directory to rebuild. Model weights retain their own licenses.

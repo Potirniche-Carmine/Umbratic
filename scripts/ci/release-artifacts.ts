@@ -5,6 +5,19 @@ import { createRequire } from "node:module";
 
 const { load } = createRequire(import.meta.url)("js-yaml");
 
+export function verifyUpdaterPublisher(metadata: { publisherName?: unknown }, expected: string): void {
+  const publishers = Array.isArray(metadata.publisherName) ? metadata.publisherName : [metadata.publisherName];
+  if (!expected?.trim() || publishers.length !== 1 || publishers[0] !== expected) {
+    throw new Error("Packaged updater publisher does not match the release signing identity.");
+  }
+}
+
+export function verifyMacSigningTeam(description: string, expected: string): void {
+  if (!/^[A-Z0-9]{10}$/.test(expected ?? "") || description.match(/^TeamIdentifier=(.+)$/m)?.[1] !== expected) {
+    throw new Error("Packaged macOS app does not use the configured Developer ID team.");
+  }
+}
+
 export function hashFile(file: string, algorithm: string, encoding: "hex" | "base64"): string {
   const hash = crypto.createHash(algorithm);
   const descriptor = fs.openSync(file, "r");

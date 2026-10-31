@@ -1,0 +1,75 @@
+Disable the runtime's outgoing model and media download client.
+
+All common model/Hugging Face/Docker downloads and server HTTP(S) media
+loads use common_http_client. Reject before parsing the URL, resolving DNS,
+or constructing a network client. The loopback HTTP server remains available.
+Umbratic provisions revision-pinned, checksum-verified models itself and sends
+media as inline data. Its chat and speech launches also request --offline.
+
+diff --git a/common/http.h b/common/http.h
+index 10d017f..9ac6a98 100644
+--- a/common/http.h
++++ b/common/http.h
+@@ -211,60 +211,8 @@ static bool common_http_proxy_bypass(const std::string & no_proxy, const std::st
+     return false;
+ }
+ 
+-static std::pair<httplib::Client, common_http_url> common_http_client(const std::string & url) {
+-    common_http_url parts = common_http_parse_url(url);
+-
+-    if (parts.host.empty()) {
+-        throw std::runtime_error("error: invalid URL format");
+-    }
+-
+-#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+-    if (parts.scheme == "https") {
+-        throw std::runtime_error(
+-            "HTTPS is not supported. Please rebuild with one of:\n"
+-            "  -DLLAMA_BUILD_BORINGSSL=ON\n"
+-            "  -DLLAMA_BUILD_LIBRESSL=ON\n"
+-            "  -DLLAMA_OPENSSL=ON (default, requires OpenSSL dev files installed)"
+-        );
+-    }
+-#endif
+-
+-    httplib::Client cli(parts.scheme + "://" + common_http_format_host(parts.host) + ":" + std::to_string(parts.port));
+-
+-    if (!parts.user.empty()) {
+-        cli.set_basic_auth(parts.user, parts.password);
+-    }
+-
+-    cli.set_follow_location(true);
+-
+-    // Honor HTTP_PROXY / HTTPS_PROXY environment variables (both lower- and upper-case).
+-    auto getenv_s = [](const char * upper, const char * lower) -> std::string {
+-        const char * val = std::getenv(upper);
+-        if (!val) {
+-            val = std::getenv(lower);
+-        }
+-        return val ? val : "";
+-    };
+-
+-    const std::string proxy_url = (parts.scheme == "https")
+-        ? getenv_s("HTTPS_PROXY", "https_proxy")
+-        : getenv_s("HTTP_PROXY",  "http_proxy");
+-
+-    if (!proxy_url.empty() && !common_http_is_loopback(parts.host) &&
+-        !common_http_proxy_bypass(getenv_s("NO_PROXY", "no_proxy"), parts.host)) {
+-        try {
+-            common_http_url proxy = common_http_parse_url(proxy_url);
+-            cli.set_proxy(proxy.host, proxy.port);
+-            if (!proxy.user.empty()) {
+-                cli.set_proxy_basic_auth(proxy.user, proxy.password);
+-            }
+-        } catch (const std::exception & e) {
+-            // fall back to a direct connection, the URL itself is not logged as it can carry credentials
+-            LOG_WRN("%s: ignoring malformed proxy URL from the environment: %s\n", __func__, e.what());
+-        }
+-    }
+-
+-    return { std::move(cli), std::move(parts) };
++static std::pair<httplib::Client, common_http_url> common_http_client(const std::string &) {
++    throw std::runtime_error("Remote downloads are disabled in the Umbratic runtime.");
+ }
+ 
+ static std::string common_http_show_masked_url(const common_http_url & parts) {

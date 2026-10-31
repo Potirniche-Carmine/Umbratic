@@ -26,6 +26,7 @@ test("the dictation sidecar is launched with its projector and a small context",
     "--ctx-size", "4096",
     "--parallel", "1",
     "--no-webui",
+    "--offline",
   ]);
 });
 

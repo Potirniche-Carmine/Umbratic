@@ -2,6 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
 import { loadReleaseEnv, requireSigningEnvironment } from "../../../scripts/release-env.ts";
+import { verifyMacSigningTeam, verifyUpdaterPublisher } from "../../../scripts/ci/release-artifacts.ts";
+
+test("signed release identities cannot omit updater verification or switch Apple developer teams", () => {
+  for (const publisherName of [undefined, null, [], ["Other"], ["Umbratic", "Other"], ""]) {
+    assert.throws(() => verifyUpdaterPublisher({ publisherName }, "Umbratic"), /publisher/);
+  }
+  assert.doesNotThrow(() => verifyUpdaterPublisher({ publisherName: "Umbratic" }, "Umbratic"));
+  assert.doesNotThrow(() => verifyUpdaterPublisher({ publisherName: ["Umbratic"] }, "Umbratic"));
+  assert.throws(() => verifyUpdaterPublisher({ publisherName: "Umbratic" }, ""), /publisher/);
+  for (const description of ["", "TeamIdentifier=not set", "TeamIdentifier=OTHER12345"]) {
+    assert.throws(() => verifyMacSigningTeam(description, "P3UF4Y6ASK"), /Developer ID team/);
+  }
+  assert.doesNotThrow(() => verifyMacSigningTeam("Identifier=ai.umbratic.desktop\nTeamIdentifier=P3UF4Y6ASK\n", "P3UF4Y6ASK"));
+});
 
 test("signed packages fail closed on missing credentials and development CPU-only mode", (t) => {
   const names = ["APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID",

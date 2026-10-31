@@ -13,7 +13,7 @@
       "package": "golang.org/x/crypto/openpgp",
       "reachable": false,
       "fixedIn": null,
-      "reason": "Permanent deprecation notice with no fix, reported under Module Results only. The single import from this module is golang.org/x/crypto/argon2 (veil-console internal/auth/auth.go); go list -deps confirms only argon2 and blake2b compile in. Go 1.26 ships no Argon2 in the standard library, so replacing the password hash to silence an unreachable advisory would be a net security loss."
+      "reason": "Permanent deprecation notice with no fix, reported only at module scope. Console compiles argon2 and blake2b, and the reviewed Caddy graph compiles other required crypto helpers; neither imports OpenPGP. Source and unstripped-binary govulncheck report no reachable/imported findings. This entry documents the residual module notice; scanner failures are never suppressed."
     }
   ],
   "acceptedNpmReleaseAgeExceptions": [
@@ -254,5 +254,18 @@
       "manifestSha256": "5ec80b4034fdc11ba81fe9ec449f73535c5fb54bab6ef2061bfb1187b80e50ef",
       "reason": "Only published fix for the vulnerable zip8 dependency chain; nonempty validation-formula condition corrected locally. See PROVENANCE.json and artifact round-trip regression tests."
     }
-  ]
+  ],
+  "reviewedVendoredGoPackages": [
+    {
+      "name": "github.com/go-jose/go-jose/v3",
+      "version": "v3.0.5",
+      "path": "third_party/go-jose-v3",
+      "manifestSha256": "3f7539e52cbb899588f0936434413014fff6eb195a718312e0b60a51b6074200"
+    }
+  ],
+  "setuptoolsInstallControlSha256": {
+    "infrastructure/veil-console/deploy/build-metal-kit.py": "a0d29c2e1d4d0c8ead1020af33b6de8a714c434e4b18a9c51462694a6272adca",
+    "infrastructure/veil-console/internal/deployment/host.go": "86d36d7e749fb69873315b81481324c56f06cb422610a0ec1e2805011767f833",
+    "infrastructure/veil-console/internal/deployment/package.go": "f1d4b533d552d1254f25c2ef2f9f06c6aca84d866d861080659994da498315c7"
+  }
 }

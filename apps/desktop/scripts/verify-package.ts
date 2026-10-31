@@ -1,12 +1,15 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { extractFile } from "@electron/asar";
 import { verifyPeArchitecture } from "./verify-pe.ts";
 import { resolveInstalledElectron } from "./electron-runtime.ts";
+import { verifyImageRuntimeGgufBounds } from "./build-image-runtime.ts";
+import { verifyWindowsDependencies } from "./windows-dependencies.ts";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const releaseRoot = path.resolve(desktopRoot, "../../target/release/desktop");
@@ -87,6 +90,10 @@ function verifyLlamaServer(directory: string) {
   }
 
   const shipped = fs.readdirSync(directory);
+  for (const notice of ["LICENSE", "APACHE-2.0.txt", "vendor/cpp-httplib/LICENSE", "vendor/nlohmann/json.hpp",
+    "vendor/miniaudio/miniaudio.h", "vendor/stb/stb_image.h", "vendor/sheredom/subprocess.h"]) {
+    requireFile(path.join(directory, "licenses", notice));
+  }
   if (process.platform === "win32") {
     for (const name of shipped.filter((name) => /\.(exe|dll)$/i.test(name))) verifyPeArchitecture(path.join(directory, name), process.arch);
   }
@@ -115,9 +122,38 @@ function verifyLlamaServer(directory: string) {
   }
   if (process.platform === "darwin") {
     for (const name of shipped) {
-      verifyMachOResolvesBesideItself(path.join(directory, name), new Set(shipped));
+      const file = path.join(directory, name);
+      if (fs.statSync(file).isFile()) verifyMachOResolvesBesideItself(file, new Set(shipped));
     }
   }
+}
+
+async function verifyLlamaDownloads(file: string) {
+  // Deliberately omit --offline: the compiled patch must reject before any
+  // connection, even when a caller forgets the launch flag. A live listener
+  // independently catches a client that prints an error after contacting us.
+  let connected = false;
+  const listener = net.createServer((socket) => { connected = true; socket.destroy(); });
+  const probe = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-download-probe-"));
+  try {
+    await new Promise<void>((resolve, reject) => listener.once("error", reject).listen(0, "127.0.0.1", resolve));
+    const port = (listener.address() as net.AddressInfo).port;
+    for (const scheme of ["http", "https"]) {
+      await new Promise<void>((resolve, reject) => {
+        execFile(file, ["--model-url", `${scheme}://127.0.0.1:${port}/model.gguf`, "-m", path.join(probe, "model.gguf")], {
+          encoding: "utf8", timeout: 15_000, windowsHide: true, maxBuffer: 1024 * 1024,
+        }, (error, stdout, stderr) => {
+          if (!error || error.killed || !`${stdout}${stderr}`.includes("Remote downloads are disabled in the Umbratic runtime.")) {
+            reject(new Error(`Packaged llama-server did not reject ${scheme.toUpperCase()} model downloads.`));
+          } else resolve();
+        });
+      });
+    }
+  } finally {
+    if (listener.listening) await new Promise<void>((resolve) => listener.close(() => resolve()));
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
+  if (connected) throw new Error("Packaged llama-server attempted a disabled remote download.");
 }
 
 /**
@@ -212,6 +248,7 @@ const resources = packagedResources();
 const executable = (name: string) => process.platform === "win32" ? `${name}.exe` : name;
 const appArchive = requireFile(path.join(resources, "app.asar"));
 if (process.platform === "win32") {
+  verifyWindowsDependencies(path.resolve(resources, ".."));
   verifyPeArchitecture(path.resolve(resources, "../Umbratic.exe"), process.arch);
   verifyPeArchitecture(requireFile(path.join(resources, "code-index", "umbratic-code-index.exe")), process.arch);
 }
@@ -236,11 +273,24 @@ verifyBinary(
   { ...process.env, VEIL_MODE: "local", VEIL_AUTH_TOKEN: "" },
 );
 verifyLlamaServer(path.join(resources, "llama-server"));
+await verifyLlamaDownloads(path.join(resources, "llama-server", executable("llama-server")));
 const imagePin = JSON.parse(fs.readFileSync(path.resolve(desktopRoot, "../../third_party/stable-diffusion.cpp.json"), "utf8"));
-if ((process.platform === "darwin" && imagePin.macSource) || imagePin.assets[`${process.platform}-${process.arch}`]) {
-  if (process.platform === "darwin") requireFile(path.join(resources, "image-runtime", "third-party-notices.txt"));
-  if (process.platform === "win32") verifyPeArchitecture(path.join(resources, "image-runtime", executable("sd-cli")), process.arch);
+if (imagePin.targets.includes(`${process.platform}-${process.arch}`)) {
+  requireFile(path.join(resources, "image-runtime", "third-party-notices.txt"));
+  for (const notice of ["APACHE-2.0.txt", "LICENSE.darts_clone.txt", "json.hpp", "stb_image.h", "miniz.h"]) {
+    requireFile(path.join(resources, "image-runtime", "licenses", notice));
+  }
+  if (process.platform === "win32") {
+    for (const name of fs.readdirSync(path.join(resources, "image-runtime")).filter((name) => /\.(?:exe|dll)$/i.test(name))) {
+      verifyPeArchitecture(path.join(resources, "image-runtime", name), process.arch);
+    }
+  }
   const imageProbe = spawnSync(path.join(resources, "image-runtime", executable("sd-cli")), ["--help"], { encoding: "utf8", timeout: 15000 });
   if (imageProbe.status !== 0 || !`${imageProbe.stdout}${imageProbe.stderr}`.includes(imagePin.commit)) throw new Error("Packaged image runtime is missing or has the wrong revision.");
+  const devices = spawnSync(path.join(resources, "image-runtime", executable("sd-cli")), ["--list-devices"], {
+    encoding: "utf8", timeout: 30_000, env: { ...process.env, GGML_BACKEND_PATH: path.join(resources, "image-runtime") },
+  });
+  if (devices.error || devices.status !== 0 || !/^CPU\t.+$/m.test(devices.stdout ?? "")) throw new Error("Packaged image runtime has no usable CPU backend.");
+  await verifyImageRuntimeGgufBounds(path.join(resources, "image-runtime", executable("sd-cli")));
 }
 console.log(`Verified packaged desktop resources in ${path.relative(path.resolve(desktopRoot, "../.."), resources)}.`);

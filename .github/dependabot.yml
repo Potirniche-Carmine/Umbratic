@@ -42,6 +42,17 @@ updates:
     cooldown:
       default-days: 14
 
+  - package-ecosystem: gomod
+    directory: /infrastructure/veil-console/deploy/caddy
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      caddy-routine:
+        update-types: [minor, patch]
+    cooldown:
+      default-days: 14
+
   - package-ecosystem: github-actions
     directory: /
     groups:

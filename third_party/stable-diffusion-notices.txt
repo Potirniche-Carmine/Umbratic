@@ -1,5 +1,5 @@
 Additional notices for the pinned stable-diffusion.cpp CLI dependencies.
-Source: https://github.com/leejet/stable-diffusion.cpp/tree/74988b290e40155fe2313914e44b979b750e958b
+Source: https://github.com/leejet/stable-diffusion.cpp/tree/0a067120b388bfefb9a87b96960cb548b97e9157
 
 JSON for Modern C++
 MIT License

@@ -1,0 +1,4 @@
+{
+  "from": "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@9e6acca691e64d6d8bb808c328fcdea459099cca ; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
+  "to": "mlx-lm==0.32.2; platform_system == \"Darwin\" and platform_machine == \"arm64\""
+}

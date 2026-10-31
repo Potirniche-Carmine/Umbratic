@@ -21,7 +21,7 @@ For an existing deployment, pass `--org-uid` from its previous `entitlement.json
 
 ## First build on macOS
 
-Build the dependency kit once from the repository root:
+Build a fresh dependency kit from the repository root (Python 3.9+, Xcode Command Line Tools, the pinned Go toolchain, and `govulncheck` are required):
 
 ```sh
 python3 infrastructure/veil-console/deploy/build-metal-kit.py \
@@ -29,8 +29,20 @@ python3 infrastructure/veil-console/deploy/build-metal-kit.py \
   --cache "$PWD/artifacts/release-work/download-cache"
 ```
 
-macOS builds need Xcode Command Line Tools for the models-folder launcher. For Linux kit preparation and verification, follow [dependency kits](../reference/dependency-kits.md).
+The output directory must not already exist, so older wheels and executables cannot survive a rebuild. The download and source-build cache can be reused. The kit source-builds Caddy and FFmpeg, applies the reviewed wheel changes, retains corresponding sources/notices, and writes exact offline requirements and a manifest. See the [runtime review](../reference/runtime-security.md#managed-metal-server-kit) for pins, advisory scope and media validation. For a rebuild, select a fresh output folder and pass it to the server ZIP command with `--dependency-dir`.
+
+Qualify the complete offline environment before distributing the kit (the work directory must also be fresh):
+
+```sh
+python3 infrastructure/veil-console/deploy/verify-metal-kit.py \
+  --kit "$PWD/artifacts/release-work/metal-kit" \
+  --work "$PWD/artifacts/release-work/metal-qualification"
+```
+
+This installs the full locked environment offline, checks package consistency and Metal plugin imports, then exercises audio, image, video and CLI paths without downloading a model.
+
+macOS builds also need Xcode Command Line Tools for the models-folder launcher. Linux uses an operator-provided dependency kit; its images and packages must be reviewed separately.
 
 The OS and CPU default to this machine. For another supported target, use `--os`, `--arch`, and `--profile`; `--dependency-dir` selects another reviewed kit. Install the target's Rust toolchain before building.
 
-Before distributing the ZIP, complete the [release checks](../reference/dependency-kits.md). Distribute the ZIP and an authenticated checksum, supply your selected model folders, and follow the [self-hosting quickstart](deploy-customer.md). Administrators configure the server address in Console. Desktop application updates come from public GitHub Releases and use no company token.
+Before distributing the ZIP, complete the [release checks](../../infrastructure/veil-console/SMOKE_TEST.md). Distribute the ZIP and an authenticated checksum, supply your selected model folders, and follow the [self-hosting quickstart](deploy-customer.md). Administrators configure the server address in Console. Desktop application updates come from public GitHub Releases and use no company token.

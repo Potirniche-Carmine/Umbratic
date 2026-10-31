@@ -22,6 +22,7 @@ test("the chat sidecar is launched with the weights, the whole context, and one 
     "--jinja",
     "--parallel", "1",
     "--no-webui",
+    "--offline",
   ]);
   // --jinja is what makes llama.cpp parse tool calls out of the chat template
   // rather than leaving them in the content stream as prose.

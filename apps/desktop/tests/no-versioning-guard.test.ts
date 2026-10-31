@@ -50,7 +50,12 @@ const descriptiveVersionFiles = new Set([
   // electron-updater's UpdateInfo, a shape we do not own, describing a release.
   "apps/desktop/tests/main-app-updates.test.ts",
   "apps/desktop/tests/release-artifacts.test.ts",
+  "apps/desktop/tests/release-publish.test.ts",
   "apps/desktop/tests/release-version.test.ts",
+  // Software advisory/version inventory and a native dependency build pin.
+  "apps/desktop/tests/runtime-audit.test.ts",
+  "scripts/audit-managed-runtimes.ts",
+  "infrastructure/veil-console/deploy/metal-wheels.lock.json",
   "scripts/ci/release-artifacts.ts",
   "apps/desktop/tests/no-versioning-guard.test.ts",
 ]);

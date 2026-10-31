@@ -534,6 +534,25 @@ pub(super) fn safe_command_environment() -> BTreeMap<String, String> {
     // Never inherit a parent PATH that may prefer workspace-controlled runtimes.
     env.retain(|name, _| !name.eq_ignore_ascii_case("PATH"));
     env.insert("PATH".into(), trusted_command_path());
+    #[cfg(windows)]
+    {
+        // Windows PowerShell otherwise probes user/global module locations
+        // during cmdlet discovery even with -NoProfile/-NonInteractive. Only
+        // the modules beside the trusted system shell may enter this path.
+        let root = std::env::var_os("SystemRoot")
+            .or_else(|| std::env::var_os("WINDIR"))
+            .unwrap_or_else(|| r"C:\Windows".into());
+        let modules = PathBuf::from(root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("Modules");
+        env.retain(|name, _| !name.eq_ignore_ascii_case("PSModulePath"));
+        env.insert(
+            "PSModulePath".into(),
+            modules.to_string_lossy().into_owned(),
+        );
+    }
     env
 }
 

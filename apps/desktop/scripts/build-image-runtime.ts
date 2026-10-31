@@ -4,9 +4,11 @@ import crypto from "node:crypto";
 import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import JSZip from "jszip";
+import { llamaBuildJobs } from "./llama-build-config.ts";
+import { msvcEnvironment } from "./windows-build-environment.ts";
 
 export type SourceArchive = { repository: string; commit: string; sha256: string; bytes: number };
-export type MacImageSource = { runtime: SourceArchive; ggml: SourceArchive; deploymentTarget: string };
+export type ImageSource = { runtime: SourceArchive; ggml: SourceArchive; deploymentTarget: string };
 
 export function sourceArchiveUrl(pin: SourceArchive): string {
   if (!/^leejet\/(?:stable-diffusion\.cpp|ggml)$/.test(pin.repository) || !/^[0-9a-f]{40}$/.test(pin.commit)
@@ -16,13 +18,20 @@ export function sourceArchiveUrl(pin: SourceArchive): string {
   return `https://codeload.github.com/${pin.repository}/zip/${pin.commit}`;
 }
 
-export function imageRuntimeCmakeArgs(source: string, build: string, pin: MacImageSource, arch: string): string[] {
-  if (!["arm64", "x64"].includes(arch) || pin.deploymentTarget !== "12.0") throw new Error("Unsupported image-runtime build target.");
-  return ["-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=Release", `-DCMAKE_OSX_ARCHITECTURES=${arch === "x64" ? "x86_64" : arch}`,
-    `-DCMAKE_OSX_DEPLOYMENT_TARGET=${pin.deploymentTarget}`, `-DGGML_METAL_MACOSX_VERSION_MIN=${pin.deploymentTarget}`,
-    "-DSD_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON", "-DSD_BUILD_SHARED_LIBS=OFF", "-DBUILD_SHARED_LIBS=OFF",
+export function imageRuntimeCmakeArgs(source: string, build: string, pin: ImageSource, arch: string, platform: string): string[] {
+  if (pin.deploymentTarget !== "12.0" || !(platform === "darwin" && ["arm64", "x64"].includes(arch)
+    || ["win32", "linux"].includes(platform) && arch === "x64")) throw new Error("Unsupported image-runtime build target.");
+  const mac = platform === "darwin";
+  return ["-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=Release",
+    ...(platform === "win32" ? ["-G", "Ninja"] : []),
+    ...(mac ? [`-DCMAKE_OSX_ARCHITECTURES=${arch === "x64" ? "x86_64" : arch}`, `-DCMAKE_OSX_DEPLOYMENT_TARGET=${pin.deploymentTarget}`,
+      `-DGGML_METAL_MACOSX_VERSION_MIN=${pin.deploymentTarget}`, "-DSD_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON",
+      "-DSD_BUILD_SHARED_LIBS=OFF", "-DBUILD_SHARED_LIBS=OFF"]
+      : ["-DSD_METAL=OFF", "-DSD_BUILD_SHARED_LIBS=ON", "-DSD_BUILD_SHARED_GGML_LIB=ON", "-DBUILD_SHARED_LIBS=ON",
+        "-DGGML_BACKEND_DL=ON", "-DGGML_CPU_ALL_VARIANTS=ON", "-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON", "-DCMAKE_INSTALL_RPATH=$ORIGIN"]),
     "-DSD_BUILD_EXAMPLES=ON", "-DSD_SERVER_BUILD_FRONTEND=OFF", "-DSD_WEBP=OFF", "-DSD_WEBM=OFF", "-DGGML_NATIVE=OFF",
-    "-DGGML_OPENMP=OFF", "-DGGML_BLAS=OFF", "-DGGML_CPU_KLEIDIAI=OFF", "-DGGML_BUILD_TESTS=OFF", "-DGGML_BUILD_EXAMPLES=OFF",
+    "-DGGML_OPENMP=OFF", "-DGGML_BLAS=OFF", "-DGGML_CPU_KLEIDIAI=OFF", "-DGGML_RPC=OFF", "-DSD_VULKAN=OFF",
+    "-DGGML_BUILD_TESTS=OFF", "-DGGML_BUILD_EXAMPLES=OFF",
     "-DFETCHCONTENT_FULLY_DISCONNECTED=ON", "-DGGML_CCACHE=OFF", `-DSDCPP_BUILD_COMMIT=${pin.runtime.commit}`,
     "-DSDCPP_BUILD_VERSION=umbratic", `-DGGML_BUILD_COMMIT=${pin.ggml.commit}`];
 }
@@ -74,7 +83,8 @@ export async function extractImageSource(bytes: Buffer, destination: string, pin
 
 async function run(command: string, args: string[], cwd: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env: { ...process.env, MACOSX_DEPLOYMENT_TARGET: "12.0" }, stdio: "inherit" });
+    const child = spawn(command, args, { cwd, env: { ...msvcEnvironment(), MACOSX_DEPLOYMENT_TARGET: "12.0",
+      CMAKE_BUILD_PARALLEL_LEVEL: String(llamaBuildJobs(os.availableParallelism(), os.totalmem())) }, stdio: "inherit" });
     child.once("error", reject);
     child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`${command} failed (${code}).`)));
   });
@@ -92,20 +102,58 @@ export function verifyMacImageRuntime(binary: string, target: string): void {
   }
 }
 
-export async function buildMacImageRuntime(pin: MacImageSource, destination: string): Promise<void> {
+export async function verifyImageRuntimeGgufBounds(binary: string): Promise<void> {
+  // Conversion reaches the same GGUF reader without loading weights. The CLI
+  // still registers backends for system information before conversion, so hide
+  // Metal devices from this parser-only probe to avoid initializing a GPU.
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "umbratic-image-gguf-"));
+  try {
+    for (const [name, dimensions, type, expected] of [
+      ["shape", [2n ** 31n, 2n ** 31n, 4n, 1n], 0, "may cause overflow errors"],
+      ["padding", [2n ** 63n - 1n, 1n, 1n, 1n], 1, "overflows after padding"],
+    ] as const) {
+      const bytes = Buffer.alloc(96);
+      bytes.write("GGUF"); bytes.writeUInt32LE(3, 4);
+      bytes.writeBigUInt64LE(1n, 8); // one tensor, no metadata
+      bytes.writeBigUInt64LE(1n, 24); bytes.write("x", 32);
+      bytes.writeUInt32LE(4, 33);
+      dimensions.forEach((dimension, index) => bytes.writeBigUInt64LE(dimension, 37 + index * 8));
+      bytes.writeUInt32LE(type, 69); // f32 for shape overflow; f16 for padding overflow
+      const file = path.join(directory, `${name}.gguf`);
+      await fs.writeFile(file, bytes);
+      const result = spawnSync(binary, ["--mode", "convert", "--backend", "cpu", "-m", file, "-o", path.join(directory, "output.gguf")], {
+        encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024, windowsHide: true,
+        env: { ...process.env, GGML_METAL_DEVICES: "0" },
+      });
+      if (result.error || result.status !== 1 || !`${result.stdout}${result.stderr}`.includes(expected)) {
+        const details = JSON.stringify({ status: result.status, signal: result.signal,
+          error: result.error ? { code: result.error.code, message: result.error.message.slice(0, 256) } : null,
+          stdout: (result.stdout ?? "").slice(-2048), stderr: (result.stderr ?? "").slice(-2048) });
+        throw new Error(`Image runtime did not safely reject the GGUF ${name} overflow fixture. ${details}`);
+      }
+    }
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+}
+
+export async function buildImageRuntime(pin: ImageSource, destination: string): Promise<void> {
   const desktop = path.resolve(import.meta.dirname, "..");
   const cache = path.join(desktop, ".llama-cache", "image-runtime");
-  const identity = crypto.createHash("sha256").update(JSON.stringify({ pin, arch: process.arch, revision: 1 })).digest("hex");
+  const identity = crypto.createHash("sha256").update(JSON.stringify({ pin, platform: process.platform, arch: process.arch, revision: 2 })).digest("hex");
+  const executable = process.platform === "win32" ? "sd-cli.exe" : "sd-cli";
   const receipt = path.join(destination, "sha256");
-  if (await fs.readFile(receipt, "utf8").catch(() => "") === identity) {
-    verifyMacImageRuntime(path.join(destination, "sd-cli"), pin.deploymentTarget);
+  if (await fs.readFile(receipt, "utf8").catch(() => "") === identity
+      && await fs.stat(path.join(destination, "licenses", "APACHE-2.0.txt")).then((stat) => stat.isFile()).catch(() => false)
+      && await fs.stat(path.join(destination, "licenses", "ggml-cpu-ops.cpp")).then((stat) => stat.isFile()).catch(() => false)) {
+    if (process.platform === "darwin") verifyMacImageRuntime(path.join(destination, executable), pin.deploymentTarget);
     return;
   }
   const source = path.join(cache, identity, "source");
   const build = path.join(cache, identity, "build");
-  const binary = path.join(build, "bin", "sd-cli");
+  const binary = path.join(build, "bin", executable);
   if (!await fs.stat(binary).then((stat) => stat.isFile()).catch(() => false)) {
-    console.log("Building the pinned image runtime for macOS 12 and later…");
+    console.log(`Building the pinned image runtime for ${process.platform}/${process.arch}…`);
     await fs.rm(source, { recursive: true, force: true });
     await fs.mkdir(source, { recursive: true });
     await extractImageSource(await archiveBytes(pin.runtime, path.join(cache, "downloads")), source, pin.runtime);
@@ -119,17 +167,31 @@ export async function buildMacImageRuntime(pin: MacImageSource, destination: str
       if (!text.includes("if(GIT_EXE)")) throw new Error("Image runtime Git identity configuration changed.");
       await fs.writeFile(input, text.replace("if(GIT_EXE)", `if(GIT_EXE AND NOT ${variable})`));
     }
-    await run("cmake", imageRuntimeCmakeArgs(source, build, pin, process.arch), desktop);
-    await run("cmake", ["--build", build, "--target", "sd-cli", "--parallel", String(Math.min(4, os.availableParallelism()))], desktop);
+    await run("cmake", imageRuntimeCmakeArgs(source, build, pin, process.arch, process.platform), desktop);
+    await run("cmake", ["--build", build, ...(process.platform === "darwin" ? ["--target", "sd-cli"] : []),
+      "--parallel", String(llamaBuildJobs(os.availableParallelism(), os.totalmem()))], desktop);
   }
-  verifyMacImageRuntime(binary, pin.deploymentTarget);
+  if (process.platform === "darwin") verifyMacImageRuntime(binary, pin.deploymentTarget);
   await fs.rm(destination, { recursive: true, force: true });
   await fs.mkdir(destination, { recursive: true });
-  await fs.copyFile(binary, path.join(destination, "sd-cli"));
-  await fs.chmod(path.join(destination, "sd-cli"), 0o755);
+  for (const entry of await fs.readdir(path.dirname(binary), { withFileTypes: true })) {
+    if (!(entry.isFile() || entry.isSymbolicLink()) || !(entry.name === executable || /\.(?:dll|so)(?:\.\d+)*$/.test(entry.name))) continue;
+    await fs.copyFile(path.join(path.dirname(binary), entry.name), path.join(destination, entry.name));
+    await fs.chmod(path.join(destination, entry.name), 0o755);
+  }
   for (const [from, name] of [["LICENSE", "stable-diffusion.cpp.txt"], ["ggml/LICENSE", "ggml.txt"],
     ["thirdparty/oniguruma/COPYING", "oniguruma.txt"], ["thirdparty/utf8proc/LICENSE.md", "utf8proc.txt"]]) {
     await fs.copyFile(path.join(source, from), path.join(destination, name));
   }
+  // Retain nested copyright/license notices verbatim, including those inside
+  // the bundled JSON, image, ZIP, HTTP and tokenizer headers.
+  const licenses = path.join(destination, "licenses");
+  await fs.mkdir(licenses, { recursive: true });
+  await fs.copyFile(path.join(source, "ggml/src/ggml-cpu/ops.cpp"), path.join(licenses, "ggml-cpu-ops.cpp"));
+  for (const entry of await fs.readdir(path.join(source, "thirdparty"), { withFileTypes: true })) {
+    if (!entry.isFile() || entry.name === "CMakeLists.txt") continue;
+    await fs.copyFile(path.join(source, "thirdparty", entry.name), path.join(licenses, entry.name));
+  }
+  await fs.copyFile(path.resolve(desktop, "../../third_party/apache-2.0.txt"), path.join(licenses, "APACHE-2.0.txt"));
   await fs.writeFile(receipt, identity);
 }

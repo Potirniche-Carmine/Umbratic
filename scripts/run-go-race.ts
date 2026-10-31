@@ -13,7 +13,7 @@ export function goTestArguments(environment: { CGO_ENABLED: string; GOOS: string
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const project = process.argv[2];
   if (!project) {
-    console.error("Usage: node scripts/run-go-race.ts <project-directory>");
+    console.error("Usage: node scripts/run-go-race.ts <project-directory> [additional-package-pattern ...]");
     process.exit(2);
   }
   const repositoryRoot = path.resolve(import.meta.dirname, "..");
@@ -27,6 +27,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   const environment = JSON.parse(result.stdout);
   const args = goTestArguments(environment);
+  args.push(...process.argv.slice(3));
   if (!args.includes("-race")) {
     console.log(`Go race detection is unavailable on ${environment.GOOS}/${environment.GOARCH} with CGO=${environment.CGO_ENABLED}; running all Go tests without it.`);
   }

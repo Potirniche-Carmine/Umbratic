@@ -27,7 +27,7 @@ For shared infrastructure, follow the [self-hosted server guide](docs/guides/dep
 
 ## Build from source
 
-Install Node.js and npm at the versions in [package.json](package.json), Rust from [rust-toolchain.toml](rust-toolchain.toml), and Go from [infrastructure/veil/go.mod](infrastructure/veil/go.mod). Platform builds also require the native toolchain for that operating system.
+Install Node.js and npm at the versions in [package.json](package.json), Rust from [rust-toolchain.toml](rust-toolchain.toml), and Go from [infrastructure/veil/go.mod](infrastructure/veil/go.mod). Platform builds also require the native toolchain for that operating system. Repository checks use Python 3.9 or newer.
 
 Install locked dependencies and explicitly provision the checksum-verified Electron runtime:
 
