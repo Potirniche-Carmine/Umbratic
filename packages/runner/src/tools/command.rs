@@ -118,6 +118,9 @@ pub(super) async fn command_tool(
         .current_dir(&session.config.cwd)
         .env_clear()
         .envs(safe_command_environment())
+        // Tools have no stdin contract. Never expose the runner control stream
+        // or let a noninteractive child wait for that stream to close.
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);

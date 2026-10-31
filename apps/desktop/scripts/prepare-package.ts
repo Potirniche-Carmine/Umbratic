@@ -1,4 +1,5 @@
 import "./prepare-image-runtime.ts";
+import { llamaCpuBuildFlags, windowsArmClangCompilers } from "./llama-build-config.ts";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -224,6 +225,11 @@ function msvcEnvironment(): NodeJS.ProcessEnv {
     const separator = line.indexOf("=");
     if (separator > 0) environment[line.slice(0, separator)] = line.slice(separator + 1);
   }
+  if (process.arch === "arm64") {
+    const clang = windowsArmClangCompilers(installPath);
+    environment.CC = clang.c;
+    environment.CXX = clang.cxx;
+  }
   msvcEnvironmentCache = environment;
   return environment;
 }
@@ -371,12 +377,10 @@ async function buildLlamaServer() {
       // property is traded for that.
       "-DBUILD_SHARED_LIBS=ON",
       "-DGGML_BACKEND_DL=ON",
-      "-DGGML_CPU_ALL_VARIANTS=ON",
-      // ggml defaults this ON, which compiles -march=native against whatever
-      // CPU happened to run the build; a release built that way dies with an
-      // illegal instruction on any older user CPU, at first launch, with no
-      // diagnosis. It is also rejected outright alongside GGML_BACKEND_DL.
-      "-DGGML_NATIVE=OFF",
+      // Keep CPU code portable: native tuning is off everywhere. Upstream's
+      // runtime CPU variants are supported on macOS and x64; Windows ARM uses
+      // its supported Clang build with an explicit ARMv8 baseline instead.
+      ...llamaCpuBuildFlags(process.platform, process.arch),
       // Drops libcurl and with it the `-hf` remote-download path. Umbratic
       // downloads weights itself, from a revision-pinned URL it can checksum.
       "-DLLAMA_CURL=OFF",
@@ -387,7 +391,7 @@ async function buildLlamaServer() {
     // Vulkan reaches every desktop GPU vendor with one backend, through the
     // vulkan-1.dll the user's display driver installs. Left off on Windows ARM,
     // where the Adreno Vulkan path is not dependable enough to ship: those
-    // machines run on the ARM CPU variants instead.
+    // machines run on the portable ARM CPU backend instead.
     if (process.platform === "win32" && process.arch === "x64" && !llamaCpuOnly) {
       configure.push("-DGGML_VULKAN=ON");
     }
@@ -410,6 +414,9 @@ async function buildLlamaServer() {
       + " later packaging runs reuse apps/desktop/.llama-cache and skip it.",
     );
     const buildEnv = msvcEnvironment();
+    if (process.platform === "win32" && process.arch === "arm64") {
+      configure.push(`-DCMAKE_C_COMPILER=${buildEnv.CC}`, `-DCMAKE_CXX_COMPILER=${buildEnv.CXX}`);
+    }
     await runLong("cmake", configure, llamaCacheRoot, `Configuring llama.cpp ${pin.tag}`, buildEnv);
     // No --target: the backend libraries are loaded by ggml at run time rather
     // than linked, so building only llama-server would leave every one of them

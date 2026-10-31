@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { extractFile } from "@electron/asar";
+import { verifyPeArchitecture } from "./verify-pe.ts";
 import { resolveInstalledElectron } from "./electron-runtime.ts";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -37,6 +38,7 @@ function requireFile(file: string) {
 
 function verifyBinary(file: string, expected: RegExp, env = process.env) {
   requireFile(file);
+  if (process.platform === "win32") verifyPeArchitecture(file, process.arch);
   if (process.platform !== "win32" && (fs.statSync(file).mode & 0o111) === 0) {
     throw new Error(`Packaged binary is not executable: ${file}`);
   }
@@ -59,6 +61,7 @@ function verifyBinary(file: string, expected: RegExp, env = process.env) {
 function verifyLlamaServer(directory: string) {
   const file = path.join(directory, executable("llama-server"));
   requireFile(file);
+  if (process.platform === "win32") verifyPeArchitecture(file, process.arch);
   if (process.platform !== "win32" && (fs.statSync(file).mode & 0o111) === 0) {
     throw new Error(`Packaged binary is not executable: ${file}`);
   }
@@ -84,6 +87,9 @@ function verifyLlamaServer(directory: string) {
   }
 
   const shipped = fs.readdirSync(directory);
+  if (process.platform === "win32") {
+    for (const name of shipped.filter((name) => /\.(exe|dll)$/i.test(name))) verifyPeArchitecture(path.join(directory, name), process.arch);
+  }
   const backends = shipped.filter((name) => /ggml-(?:cpu|vulkan|metal|blas)/i.test(name));
   if (backends.length === 0) {
     throw new Error(`Packaged llama-server has no loadable ggml backend: ${shipped.join(", ")}`);
@@ -205,6 +211,10 @@ function verifyMacCodeSignature(appBundle: string) {
 const resources = packagedResources();
 const executable = (name: string) => process.platform === "win32" ? `${name}.exe` : name;
 const appArchive = requireFile(path.join(resources, "app.asar"));
+if (process.platform === "win32") {
+  verifyPeArchitecture(path.resolve(resources, "../Umbratic.exe"), process.arch);
+  verifyPeArchitecture(requireFile(path.join(resources, "code-index", "umbratic-code-index.exe")), process.arch);
+}
 const updateConfiguration = JSON.parse(fs.readFileSync(requireFile(path.join(resources, "app-update.yml")), "utf8"));
 if (updateConfiguration.provider !== "github" || updateConfiguration.owner !== "Potirniche-Carmine"
     || updateConfiguration.repo !== "Umbratic" || updateConfiguration.private || updateConfiguration.token) {
@@ -229,6 +239,7 @@ verifyLlamaServer(path.join(resources, "llama-server"));
 const imagePin = JSON.parse(fs.readFileSync(path.resolve(desktopRoot, "../../third_party/stable-diffusion.cpp.json"), "utf8"));
 if ((process.platform === "darwin" && imagePin.macSource) || imagePin.assets[`${process.platform}-${process.arch}`]) {
   if (process.platform === "darwin") requireFile(path.join(resources, "image-runtime", "third-party-notices.txt"));
+  if (process.platform === "win32") verifyPeArchitecture(path.join(resources, "image-runtime", executable("sd-cli")), process.arch);
   const imageProbe = spawnSync(path.join(resources, "image-runtime", executable("sd-cli")), ["--help"], { encoding: "utf8", timeout: 15000 });
   if (imageProbe.status !== 0 || !`${imageProbe.stdout}${imageProbe.stderr}`.includes(imagePin.commit)) throw new Error("Packaged image runtime is missing or has the wrong revision.");
 }

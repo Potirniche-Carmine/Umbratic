@@ -93,13 +93,15 @@ test("desktop builds llama-server from the pinned commit and packages it", () =>
   assert.match(preparePackage, /"-DLLAMA_CURL=OFF"/);
   // Never -march=native: a release binary must run on CPUs older than the one
   // that built it, and macOS older than the SDK that built it.
-  assert.match(preparePackage, /"-DGGML_NATIVE=OFF"/);
+  const cpuBuild = fs.readFileSync(new URL("../scripts/llama-build-config.ts", import.meta.url), "utf8");
+  assert.match(cpuBuild, /"-DGGML_NATIVE=OFF"/);
+  assert.match(preparePackage, /llamaCpuBuildFlags\(process\.platform, process\.arch\)/);
   assert.match(preparePackage, /-DCMAKE_OSX_DEPLOYMENT_TARGET=12\.0/);
   // One build serves every machine because the backends are chosen on the
   // user's machine: a missing Vulkan loader is a skipped backend, not a
   // process that will not start.
   assert.match(preparePackage, /"-DGGML_BACKEND_DL=ON"/);
-  assert.match(preparePackage, /"-DGGML_CPU_ALL_VARIANTS=ON"/);
+  assert.match(cpuBuild, /"-DGGML_CPU_ALL_VARIANTS=ON"/);
   // Backend libraries are loaded, not linked, so a targeted build would leave
   // them unbuilt and ship an app with nothing to run on.
   assert.doesNotMatch(preparePackage, /"--target", "llama-server"/);

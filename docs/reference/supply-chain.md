@@ -107,7 +107,7 @@ Build machines also need CMake 3.21+, and per platform:
 | --- | --- | --- | --- |
 | macOS (Apple Silicon) | Xcode Command Line Tools, `brew install cmake` | Metal, shader library embedded | ARM variants |
 | Windows x64 | MSVC Build Tools 2022, Vulkan SDK (`VULKAN_SDK` set), Ninja | Vulkan, via the display driver's loader | x86 variants |
-| Windows arm64 | same | none — the Adreno Vulkan path is not dependable enough to ship | ARM variants |
+| Windows arm64 | Visual Studio ARM64 toolset and Clang, Ninja | none — the Adreno Vulkan path is not dependable enough to ship | portable ARMv8 NEON backend; OpenMP disabled |
 
 Windows needs Ninja because the default MSBuild generator trips MAX_PATH in the
 nested shader build. `UMBRATIC_LLAMA_GENERATOR` overrides the generator.

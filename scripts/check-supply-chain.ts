@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
+import { llamaCpuBuildFlags } from "../apps/desktop/scripts/llama-build-config.ts";
 
 const root = process.cwd();
 const manifestPaths = [
@@ -352,15 +353,27 @@ if (!/^[0-9a-f]{40}$/.test(llamaFields.get("commit") ?? "")) {
 const preparePackageScript = fs.readFileSync(path.join(root, "apps/desktop/scripts/prepare-package.ts"), "utf8");
 for (const requiredFlag of [
   "-DLLAMA_CURL=OFF",
-  // Never -march=native in a build somebody else runs.
-  "-DGGML_NATIVE=OFF",
   // Backends are selected on the user's machine, not on the build machine.
   "-DGGML_BACKEND_DL=ON",
-  "-DGGML_CPU_ALL_VARIANTS=ON",
 ]) {
   if (!preparePackageScript.includes(requiredFlag)) {
     fail(`Packaged llama-server must be configured with ${requiredFlag}.`);
   }
+}
+if (!preparePackageScript.includes("...llamaCpuBuildFlags(process.platform, process.arch)")) {
+  fail("Packaged llama-server must use the reviewed per-platform CPU build flags.");
+}
+for (const [platform, arch] of [
+  ["darwin", "arm64"], ["darwin", "x64"], ["win32", "x64"], ["win32", "arm64"],
+] as const) {
+  const expected = platform === "win32" && arch === "arm64"
+    ? [
+      "-DGGML_NATIVE=OFF", "-DGGML_CPU_ALL_VARIANTS=OFF", "-DGGML_CPU_ARM_ARCH=armv8-a",
+      "-DGGML_OPENMP=OFF", "-DCMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc",
+      "-DCMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc",
+    ]
+    : ["-DGGML_NATIVE=OFF", "-DGGML_CPU_ALL_VARIANTS=ON"];
+  compareExactSet(`llama-server ${platform}/${arch} CPU flag`, llamaCpuBuildFlags(platform, arch), expected);
 }
 if (!preparePackageScript.includes("pin.commit")) {
   fail("Packaged llama-server must verify the cloned checkout against the pinned commit SHA.");
