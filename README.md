@@ -2,7 +2,7 @@
 
 An open-source AI harness for working with code, files, and documents. Run models on your computer or connect to a Veil server on your own infrastructure.
 
-[Download the desktop app](https://github.com/Potirniche-Carmine/Umbratic/releases/latest) · [Website](https://umbratic.ai) · [Documentation](docs/README.md) · [Report an issue](https://github.com/Potirniche-Carmine/Umbratic/issues)
+[Download the desktop app](https://github.com/Potirniche-Carmine/Umbratic/releases) · [Website](https://umbratic.ai) · [Documentation](docs/README.md) · [Report an issue](https://github.com/Potirniche-Carmine/Umbratic/issues)
 
 ## What you can do
 
@@ -21,7 +21,7 @@ Model downloads, application release checks, server enrollment, and explicitly u
 
 ## Getting started
 
-Download an available macOS or Windows build from [GitHub Releases](https://github.com/Potirniche-Carmine/Umbratic/releases/latest). Local mode is the first-run default. Choose and download a model in the app; the download size and hardware requirements depend on the model.
+Download an available macOS or Windows build from [GitHub Releases](https://github.com/Potirniche-Carmine/Umbratic/releases). Local mode is the first-run default. Choose and download a model in the app; the download size and hardware requirements depend on the model.
 
 For shared infrastructure, follow the [self-hosted server guide](docs/guides/deploy-customer.md). An administrator runs Veil Console and Veil, adds models, and provides an enrollment code. Select **Company server** in Settings to enroll your device.
 
