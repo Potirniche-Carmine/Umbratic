@@ -122,6 +122,8 @@ func TestModelsRouteCachesAvailabilityProbes(t *testing.T) {
 		server.ServeHTTP(response, authorizedRequest(http.MethodGet, "/api/models", ""))
 		decodeModelList(t, response)
 	}
+	client.availableCallsMu.Lock()
+	defer client.availableCallsMu.Unlock()
 	if len(client.availableCalls) != 2 {
 		t.Fatalf("repeat listings must reuse one probe round: %#v", client.availableCalls)
 	}

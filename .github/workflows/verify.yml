@@ -45,22 +45,27 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - name: Install locked dependencies without lifecycle scripts
+        id: dependencies
         run: npm ci --ignore-scripts --omit=peer
       - run: node scripts/check-release-version.ts
-      - run: npm run dependencies:provision
+      - id: electron
+        run: npm run dependencies:provision
       - name: Run complete verification suite
         run: npm run test:all
       - name: Provision and verify reviewed Windows signing tools
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && steps.electron.outcome == 'success' && runner.os == 'Windows' }}
         shell: pwsh
         run: ./scripts/ci/install-windows-signing.ps1
       - name: Install reviewed Vulkan SDK
-        if: matrix.os == 'windows-2025'
+        if: ${{ !cancelled() && steps.electron.outcome == 'success' && matrix.os == 'windows-2025' }}
         shell: pwsh
         run: ./scripts/ci/install-vulkan.ps1
       - name: Build installers and smoke-test production native resources
+        id: installers
+        if: ${{ !cancelled() && steps.electron.outcome == 'success' }}
         run: npm run desktop:release -- --unsigned
       - name: Verify installer archives and actual updater checksums
+        if: ${{ !cancelled() && steps.installers.outcome == 'success' }}
         run: node scripts/ci/verify-installer-artifacts.ts
 
   audit:

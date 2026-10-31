@@ -68,8 +68,8 @@ func backupDirectory(timestamp string) string {
 	return installDir + ".backup-" + timestamp
 }
 
-// Move the complete former layout, including historical backups and the held
-// deployment-lock inode, only after the new services have passed readiness.
+// Move the complete former layout, including historical backups, only after the
+// new services have passed readiness. The current-layout lock stays outside it.
 func archiveFormerLayout(formerRoot, backup string) error {
 	if info, err := os.Lstat(formerRoot); os.IsNotExist(err) {
 		return nil

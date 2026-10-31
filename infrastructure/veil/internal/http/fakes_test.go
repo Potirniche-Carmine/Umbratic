@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"umbratic-veil/internal/config"
@@ -34,6 +35,7 @@ type fakeModelClient struct {
 	embedQuery        string
 	available         map[string]bool
 	availableErr      error
+	availableCallsMu  sync.Mutex
 	availableCalls    []string
 	thinkingSupported map[string]bool
 }
@@ -106,7 +108,9 @@ func (f *fakeModelClient) DoChat(ctx context.Context, req model.ChatRequest) (*h
 }
 
 func (f *fakeModelClient) Available(ctx context.Context, modelID string) (bool, error) {
+	f.availableCallsMu.Lock()
 	f.availableCalls = append(f.availableCalls, modelID)
+	f.availableCallsMu.Unlock()
 	if f.availableErr != nil {
 		return false, f.availableErr
 	}

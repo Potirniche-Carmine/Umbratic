@@ -100,27 +100,34 @@ func TestDeploymentLockRemainsExclusiveAcrossDirectoryRename(t *testing.T) {
 	if err := os.Mkdir(before, 0700); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := acquireDeploymentLock(filepath.Join(before, "deploy-lock"))
+	program := filepath.Join(root, "current", "Program")
+	lock, err := acquireInstallationLock(program)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lock.Close()
+	if other, err := acquireInstallationLock(program); err == nil {
+		other.Close()
+		t.Fatal("contender acquired the installation lock before migration")
+	} else if !strings.Contains(err.Error(), "another deployment is running") {
+		t.Fatal(err)
+	}
 	if err := os.Rename(before, after); err != nil {
 		t.Fatal(err)
 	}
-	moved := filepath.Join(after, "deploy-lock")
-	if other, err := acquireDeploymentLock(moved); err == nil {
+	// A contender discovers either layout only after taking this same lock.
+	if other, err := acquireInstallationLock(program); err == nil {
 		other.Close()
-		t.Fatal("renaming the directory released the deployment lock")
+		t.Fatal("renaming the former directory released the installation lock")
 	} else if !strings.Contains(err.Error(), "another deployment is running") {
 		t.Fatal(err)
 	}
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
 	}
-	next, err := acquireDeploymentLock(moved)
+	next, err := acquireInstallationLock(program)
 	if err != nil {
-		t.Fatalf("closing the moved lock did not release it: %v", err)
+		t.Fatalf("closing the stable lock did not release it: %v", err)
 	}
 	next.Close()
 }

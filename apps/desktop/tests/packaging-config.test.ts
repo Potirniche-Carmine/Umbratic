@@ -168,7 +168,7 @@ test("CI verifies every native platform on pull requests and main without releas
   assert.ok(commands.includes("node scripts/check-release-version.ts"));
   assert.ok(commands.includes("node scripts/ci/verify-installer-artifacts.ts"));
   const vulkan = workflow.jobs.verify.steps.find((step) => step.run === "./scripts/ci/install-vulkan.ps1");
-  assert.equal(vulkan.if, "matrix.os == 'windows-2025'");
+  assert.equal(vulkan.if, "${{ !cancelled() && steps.electron.outcome == 'success' && matrix.os == 'windows-2025' }}");
   assert.ok(commands.includes("./scripts/ci/install-windows-signing.ps1"));
   assert.doesNotMatch(source, /UMBRATIC_LLAMA_CPU_ONLY/);
   assert.doesNotMatch(source, /secrets\./);
@@ -219,4 +219,21 @@ test("release publication waits for every signed platform and scopes write acces
   }
   assert.ok(workflow.jobs.package.steps.some((step) => step.run === "node scripts/ci/verify-release.ts"));
   assert.ok(workflow.jobs.publish.steps.some((step) => step.run === "node scripts/ci/publish-release.ts"));
+});
+
+test("credential-free installer qualification still runs after suite failure without hiding it", () => {
+  const source = fs.readFileSync(verifyWorkflowUrl, "utf8");
+  const workflow = load(source);
+  const steps = workflow.jobs.verify.steps;
+  const suite = steps.find((step) => step.run === "npm run test:all");
+  const electron = steps.find((step) => step.id === "electron");
+  const installers = steps.find((step) => step.id === "installers");
+  const archives = steps.find((step) => step.run === "node scripts/ci/verify-installer-artifacts.ts");
+  assert.equal(electron.run, "npm run dependencies:provision");
+  assert.equal(installers.if, "${{ !cancelled() && steps.electron.outcome == 'success' }}");
+  assert.equal(archives.if, "${{ !cancelled() && steps.installers.outcome == 'success' }}");
+  assert.equal(suite["continue-on-error"], undefined);
+  assert.doesNotMatch(source, /continue-on-error/);
+  assert.equal(workflow.jobs.required.if, "always()");
+  assert.match(workflow.jobs.required.steps[0].run, /all\(\. == "success"\)/);
 });

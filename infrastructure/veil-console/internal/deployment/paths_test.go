@@ -59,17 +59,26 @@ func TestArchiveFormerLayoutPreservesHistoryAndNeverOverwrites(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(former, name), []byte("preserved"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := acquireDeploymentLock(filepath.Join(former, "veil-console.deploy-lock"))
+	program := filepath.Join(root, "Application Support", "Program")
+	lock, err := acquireInstallationLock(program)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lock.Close()
+	if other, err := acquireInstallationLock(program); err == nil {
+		other.Close()
+		t.Fatal("contender acquired the installation lock before archival")
+	} else if !strings.Contains(err.Error(), "another deployment is running") {
+		t.Fatal(err)
+	}
 	if err := archiveFormerLayout(former, backup); err != nil {
 		t.Fatal(err)
 	}
-	if other, err := acquireDeploymentLock(filepath.Join(backup, "previous-layout", "veil-console.deploy-lock")); err == nil {
+	if other, err := acquireInstallationLock(program); err == nil {
 		other.Close()
-		t.Fatal("moving the old layout lost its held deployment lock")
+		t.Fatal("archiving the old layout lost the current installation lock")
+	} else if !strings.Contains(err.Error(), "another deployment is running") {
+		t.Fatal(err)
 	}
 	if _, err := os.Stat(former); !os.IsNotExist(err) {
 		t.Fatal("former directory remains")
@@ -87,6 +96,14 @@ func TestArchiveFormerLayoutPreservesHistoryAndNeverOverwrites(t *testing.T) {
 	if _, err := os.Stat(former); err != nil {
 		t.Fatal("failed archive removed its source")
 	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := acquireInstallationLock(program)
+	if err != nil {
+		t.Fatalf("completed migration left the installation locked: %v", err)
+	}
+	next.Close()
 }
 
 func TestLaunchdPathsWithSpacesRemainSingleArguments(t *testing.T) {

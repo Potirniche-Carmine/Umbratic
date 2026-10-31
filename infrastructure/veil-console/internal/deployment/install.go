@@ -20,23 +20,11 @@ func Install(p Package, clean bool) (result error) {
 	if os.Geteuid() != 0 {
 		return errors.New("run sudo ./deploy.sh")
 	}
-	if err := os.MkdirAll(filepath.Dir(installDir), 0755); err != nil {
-		return err
-	}
-	lock, err := acquireDeploymentLock(installDir + ".deploy-lock")
+	lock, err := acquireInstallationLock(installDir)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
-	if runtime.GOOS == "darwin" {
-		if _, err := os.Stat(filepath.Dir(formerMacInstallDir)); err == nil {
-			formerLock, err := acquireDeploymentLock(formerMacInstallDir + ".deploy-lock")
-			if err != nil {
-				return err
-			}
-			defer formerLock.Close()
-		}
-	}
 	previousProgram, err := existingProgram()
 	if err != nil {
 		return err
