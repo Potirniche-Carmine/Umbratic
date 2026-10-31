@@ -27,11 +27,11 @@ export function loadReleaseEnv(): boolean {
   } catch {
     return false;
   }
-  for (const raw of text.split(/\r?\n/)) {
+  for (const [index, raw] of text.split(/\r?\n/).entries()) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
     const separator = line.indexOf("=");
-    if (separator <= 0) throw new Error(`${releaseEnvPath}: expected KEY=value, got: ${line}`);
+    if (separator <= 0) throw new Error(`${releaseEnvPath}:${index + 1}: expected KEY=value`);
     const key = line.slice(0, separator).trim();
     let value = line.slice(separator + 1).trim();
     // Quotes are allowed around a value, and stripped, so a path with spaces

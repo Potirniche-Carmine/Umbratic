@@ -50,6 +50,7 @@ const descriptiveVersionFiles = new Set([
   // electron-updater's UpdateInfo, a shape we do not own, describing a release.
   "apps/desktop/tests/main-app-updates.test.ts",
   "apps/desktop/tests/release-artifacts.test.ts",
+  "apps/desktop/tests/release-version.test.ts",
   "scripts/ci/release-artifacts.ts",
   "apps/desktop/tests/no-versioning-guard.test.ts",
 ]);

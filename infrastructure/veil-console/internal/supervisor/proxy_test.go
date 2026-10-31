@@ -3,10 +3,15 @@ package supervisor
 import (
 	"bytes"
 	"context"
+	"encoding/pem"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"umbratic-veil-console/internal/config"
 )
@@ -86,4 +91,58 @@ func TestProxyApplyRollbackEnrollmentAndStop(t *testing.T) {
 		t.Fatalf("proxy left listener after shutdown: %v", err)
 	}
 	l.Close()
+}
+
+func TestProxyProbeDialsOnlyItsLoopbackListenerAndNeverFollowsRedirects(t *testing.T) {
+	var requests atomic.Int32
+	var redirect atomic.Bool
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if redirect.Load() {
+			http.Redirect(w, r, "/redirected", http.StatusFound)
+			return
+		}
+		if r.URL.Path != "/api/control" && r.URL.Path != "/api/control/users" {
+			t.Errorf("unexpected probe path %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	certificate := server.Certificate()
+	if len(certificate.DNSNames) == 0 {
+		t.Fatal("test server certificate has no DNS name")
+	}
+	host := certificate.DNSNames[0]
+	if host == "localhost" || net.ParseIP(host) != nil {
+		t.Fatal("test must exercise a non-loopback URL hostname")
+	}
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	proxy := NewProxy("", t.TempDir(), "127.0.0.1:8080", 8177, config.Connection{})
+	defer proxy.Stop()
+	if err := os.MkdirAll(filepath.Dir(proxy.CAPath()), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(proxy.CAPath(), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	connection := config.Connection{Host: host, Port: port, TLS: "internal"}
+	if err := connection.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// The URL names an external DNS host, but both requests must arrive at our
+	// listener on 127.0.0.1 without resolving or connecting to that host.
+	if err := proxy.probe(t.Context(), connection); err != nil {
+		t.Fatalf("loopback probe: %v", err)
+	}
+	if requests.Load() != 2 {
+		t.Fatalf("expected two local control probes, got %d", requests.Load())
+	}
+	requests.Store(0)
+	redirect.Store(true)
+	if err := proxy.probe(t.Context(), connection); err == nil {
+		t.Fatal("redirect response was accepted")
+	}
+	if requests.Load() != 1 {
+		t.Fatal("probe followed a redirect")
+	}
 }

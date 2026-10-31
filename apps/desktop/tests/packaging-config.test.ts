@@ -200,6 +200,14 @@ test("release publication waits for every signed platform and scopes write acces
   assert.deepEqual(workflow.jobs.package.strategy.matrix.os, ["macos-15", "windows-2025", "windows-11-arm"]);
   assert.equal(workflow.permissions.contents, "read");
   assert.equal(workflow.jobs.publish.permissions.contents, "write");
+  for (const name of ["package", "publish"]) {
+    const checkout = workflow.jobs[name].steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+    assert.equal(checkout.with.ref, "${{ github.sha }}");
+    for (const step of workflow.jobs[name].steps) {
+      if (step.uses?.startsWith("actions/setup-node@")) assert.equal(step.with["package-manager-cache"], false);
+      if (step.uses?.startsWith("actions/setup-go@")) assert.equal(step.with.cache, false);
+    }
+  }
   assert.ok(workflow.jobs.package.steps.some((step) => step.run === "node scripts/ci/verify-release.ts"));
   assert.ok(workflow.jobs.publish.steps.some((step) => step.run === "node scripts/ci/publish-release.ts"));
 });

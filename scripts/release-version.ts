@@ -17,5 +17,5 @@ for (const entry of metadata.packages.filter((entry) => metadata.workspace_membe
 }
 // Re-resolve only local workspace versions using the already locked registry
 // graph. Offline mode prevents fetching dependencies during a version bump.
-execFileSync("cargo", ["metadata", "--offline", "--no-deps", "--format-version", "1"], { cwd: root, stdio: "ignore" });
+execFileSync("cargo", ["update", "--workspace", "--offline"], { cwd: root, stdio: "inherit" });
 execFileSync(process.execPath, [path.join(root, "scripts/check-release-version.ts")], { cwd: root, stdio: "inherit" });

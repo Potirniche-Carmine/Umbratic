@@ -194,10 +194,6 @@ async function downloadFile(
   const url = catalogFileUrl(model, file);
   const chunkCount = Math.max(1, Math.ceil(file.bytes / rangeBytes));
   const chunkSize = (index: number) => Math.min(file.bytes, (index + 1) * rangeBytes) - index * rangeBytes;
-  const ledger = fs.existsSync(partialPath) ? readChunkLedger(ledgerPath, file) : null;
-  const done = new Set<number>(ledger?.done.filter((index) => index < chunkCount) ?? []);
-  if (!ledger) fs.rmSync(partialPath, { force: true });
-
   const fd = fs.openSync(partialPath, fs.constants.O_RDWR | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
   try {
     const stat = fs.fstatSync(fd);
@@ -205,6 +201,9 @@ async function downloadFile(
     if (!stat.isFile() || entry.isSymbolicLink() || stat.dev !== entry.dev || stat.ino !== entry.ino) {
       throw new Error("The partial model download must be a regular file.");
     }
+    const ledger = stat.size > 0 ? readChunkLedger(ledgerPath, file) : null;
+    const done = new Set<number>(ledger?.done.filter((index) => index < chunkCount) ?? []);
+    if (!ledger) fs.ftruncateSync(fd, 0);
     let landedBytes = [...done].reduce((total, index) => total + chunkSize(index), 0);
     const inFlight = new Map<number, number>();
     const report = () =>

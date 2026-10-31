@@ -8,6 +8,7 @@ function api(endpoint: string) {
 }
 if (process.env.GITHUB_REF !== "refs/heads/main") throw new Error("Releases must run from main.");
 const main = api(`repos/${repository}/commits/main`).sha;
+if (main !== process.env.GITHUB_SHA) throw new Error("Release event no longer identifies current main. Rerun from verified main.");
 const runId = process.env.CI_RUN_ID;
 const runs = runId ? [api(`repos/${repository}/actions/runs/${runId}`)]
   : api(`repos/${repository}/actions/workflows/verify.yml/runs?branch=main&event=push&status=success&per_page=20`).workflow_runs;
@@ -25,5 +26,5 @@ if (existing && !existing.draft) {
   if (tags.some((ref) => ref.ref === `refs/tags/${tag}` && ref.object.sha !== main)) {
     throw new Error(`${tag} already identifies another commit. Bump the version.`);
   }
-  fs.appendFileSync(process.env.GITHUB_OUTPUT!, `prepare=true\ntag=${tag}\ncommit=${main}\n`);
+  fs.appendFileSync(process.env.GITHUB_OUTPUT!, `prepare=true\ntag=${tag}\n`);
 }

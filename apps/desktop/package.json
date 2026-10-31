@@ -4,7 +4,7 @@
   "version": "0.0.3",
   "description": "Private AI workbench for local and company-managed models",
   "author": "Umbratic",
-  "packageManager": "npm@11.16.0",
+  "packageManager": "npm@11.20.0",
   "main": "dist-electron/main/main.js",
   "scripts": {
     "dev": "node scripts/prepare-image-runtime.ts && node scripts/dev.ts",
@@ -46,7 +46,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.0.5",
-    "electron": "44.9.1",
+    "electron": "44.10.0",
     "electron-builder": "26.18.0",
     "typescript": "5.9.3",
     "vite": "8.3.5"

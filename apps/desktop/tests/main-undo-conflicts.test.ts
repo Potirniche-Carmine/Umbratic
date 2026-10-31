@@ -42,3 +42,46 @@ test("undo refuses staging changes even when the working file is unchanged", asy
     assert.equal(git("show", ":file.txt"), "turn result\n");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("undo fingerprinting rejects replacement after open and closes without reading the replacement", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-undo-race-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "result.txt");
+  fs.writeFileSync(file, "turn result");
+  let reads = 0;
+  let closed = false;
+  const undo = loadTypeScriptModule(new URL("../src/main/checkpoints/undo.ts", import.meta.url), { mocks: { "node:fs": {
+    ...fs,
+    openSync: (...args) => {
+      const descriptor = fs.openSync(...args);
+      fs.renameSync(file, path.join(root, "original.txt"));
+      fs.writeFileSync(file, "later change");
+      return descriptor;
+    },
+    readSync: (...args) => { reads += 1; return fs.readSync(...args); },
+    closeSync: (descriptor) => { closed = true; fs.closeSync(descriptor); },
+  } } });
+  await assert.rejects(() => undo.captureUndoFiles({ worktreePath: root, changedFiles: ["result.txt"] }), /changed while opening/);
+  assert.equal(reads, 0);
+  assert.equal(closed, true);
+  assert.equal(fs.readFileSync(file, "utf8"), "later change");
+});
+
+test("undo fingerprinting rejects a file that grows during hashing", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-undo-growth-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "result.txt");
+  fs.writeFileSync(file, "turn result");
+  let reads = 0;
+  const undo = loadTypeScriptModule(new URL("../src/main/checkpoints/undo.ts", import.meta.url), { mocks: { "node:fs": {
+    ...fs,
+    readSync: (...args) => {
+      const count = fs.readSync(...args);
+      reads += 1;
+      fs.appendFileSync(file, "later work");
+      return count;
+    },
+  } } });
+  await assert.rejects(() => undo.captureUndoFiles({ worktreePath: root, changedFiles: ["result.txt"] }), /changed while reading/);
+  assert.equal(reads, 1);
+});

@@ -3,6 +3,9 @@ $ErrorActionPreference = 'Stop'
 $pin = Get-Content -Raw (Join-Path $PSScriptRoot '../../third_party/windows-signing.json') | ConvertFrom-Json
 $root = $env:UMBRATIC_SIGNING_TOOLS
 if (!$root) { throw 'Provision reviewed signing tools with scripts/ci/install-windows-signing.ps1 first.' }
+# The native mixed-mode signing library also consults DOTNET_ROOT directly.
+$env:DOTNET_ROOT = Join-Path $root 'dotnet'
+$env:DOTNET_ROOT_X64 = $env:DOTNET_ROOT
 # Builder can sign extra resources concurrently. Each invocation owns its
 # metadata file so no process can observe another writer's partial JSON.
 $metadata = Join-Path $root ("metadata-" + [guid]::NewGuid().ToString('N') + '.json')

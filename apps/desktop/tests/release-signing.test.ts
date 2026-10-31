@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { requireSigningEnvironment } from "../../../scripts/release-env.ts";
+import fs from "node:fs";
+import { loadReleaseEnv, requireSigningEnvironment } from "../../../scripts/release-env.ts";
 
 test("signed packages fail closed on missing credentials and development CPU-only mode", (t) => {
   const names = ["APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID",
@@ -21,4 +22,14 @@ test("signed packages fail closed on missing credentials and development CPU-onl
   assert.doesNotThrow(() => requireSigningEnvironment("darwin"));
   process.env.UMBRATIC_LLAMA_CPU_ONLY = "1";
   assert.throws(() => requireSigningEnvironment("darwin"), /cannot be released/);
+});
+
+test("malformed release environment errors never echo credential contents", (t) => {
+  const secret = "pasted-private-credential-without-equals";
+  t.mock.method(fs, "readFileSync", () => `# release environment\n\n${secret}`);
+  assert.throws(() => loadReleaseEnv(), (error) => {
+    assert.match(error.message, /:3: expected KEY=value$/);
+    assert.ok(!error.message.includes(secret));
+    return true;
+  });
 });

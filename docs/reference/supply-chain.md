@@ -155,7 +155,10 @@ No security advisory is suppressed.
 The October 2026 refresh updates Electron, Vite, matching and HTTP dependencies,
 Rust TLS/certificate roots, Tokio and archive consumers. ZIP codecs beyond deflate
 are disabled, removing the unused vulnerable zstd chain. Go modules require 1.26.10
-for standard-library security fixes. Native and procedural-code allowlists track the
+for standard-library security fixes. The build runtime is pinned to Node26.12.1
+and its bundled npm11.20.0 for the [October21 Node security fixes](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases).
+Electron44.10.0 embeds the fixed Node24.22.1 runtime; an npm-only audit does not
+cover the embedded runtime, so its [official release notes](https://releases.electronjs.org/release/v44.10.0) are reviewed too. Native and procedural-code allowlists track the
 reviewed graph; the Brotli decompressor's `BSD-3-Clause/MIT` license expression is
 reviewed alongside the already allowed individual licenses.
 
@@ -180,3 +183,9 @@ PKCS#12/PFX client identities. Managed endpoints must use PEM `certPath` and
 Release signing, notarization, branch protection, repository rulesets,
 CODEOWNERS assignment, and GitHub private-repository dependency review require
 repository or organization administration and are not configured here.
+
+## Image runtime sources
+
+The macOS image CLI is built from the official stable-diffusion.cpp source and its exact ggml submodule revision, with archive sizes and SHA-256 hashes pinned in `third_party/stable-diffusion.cpp.json`. The build uses CMake, targets macOS 12, links its libraries statically, and embeds the Metal library. Its only dynamic dependencies are system frameworks and libraries. Packaging verifies its minimum OS, linked dependencies, and `--help` revision before accepting it.
+
+The build uses bundled tokenizer/image helpers, disables CMake dependency downloads, and builds only the CLI. The app uses PNG output; optional WebP/WebM codecs and the upstream server frontend are excluded. Cached sources and build outputs live under `apps/desktop/.llama-cache/image-runtime/`. Delete that directory to rebuild. Windows and Linux assets remain pinned to reviewed release archives with exact sizes and hashes. Model weights retain their own licenses.

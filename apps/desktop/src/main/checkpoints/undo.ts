@@ -20,14 +20,35 @@ async function indexEntries(task: TaskRecord, relative?: string): Promise<Map<st
 function fileFingerprint(root: string, relative: string): string {
   const target = path.resolve(root, relative);
   if (!pathInside(root, target) || hasSymlinkComponent(root, target)) throw new Error("Unsafe undo path.");
+  let fd: number;
   try {
-    const stat = fs.lstatSync(target);
-    if (!stat.isFile()) throw new Error("Undo requires a regular file.");
-    return `${stat.mode & 0o111}:${crypto.createHash("sha256").update(fs.readFileSync(target)).digest("hex")}`;
+    fd = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
     throw error;
   }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new Error("Undo requires a regular file.");
+    const entry = fs.lstatSync(target);
+    if (entry.isSymbolicLink() || stat.dev !== entry.dev || stat.ino !== entry.ino || hasSymlinkComponent(root, target)) {
+      throw new Error("The undo file changed while opening it.");
+    }
+    const hash = crypto.createHash("sha256");
+    const buffer = Buffer.alloc(1024 * 1024);
+    let offset = 0;
+    while (offset < stat.size) {
+      const length = fs.readSync(fd, buffer, 0, Math.min(buffer.length, stat.size - offset), offset);
+      if (!length) throw new Error("The undo file changed while reading it.");
+      hash.update(buffer.subarray(0, length));
+      offset += length;
+    }
+    const after = fs.fstatSync(fd);
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) {
+      throw new Error("The undo file changed while reading it.");
+    }
+    return `${stat.mode & 0o111}:${hash.digest("hex")}`;
+  } finally { fs.closeSync(fd); }
 }
 
 // Capture once when the writer has stopped, not when a stale review is

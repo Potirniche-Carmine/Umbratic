@@ -7,6 +7,7 @@ const repository = process.env.GITHUB_REPOSITORY!;
 const commit = process.env.RELEASE_COMMIT!;
 const tag = process.env.RELEASE_TAG!;
 const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+if (execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim() !== commit) throw new Error("Release checkout does not match the trusted event commit.");
 if (tag !== `v${version}` || !/^[0-9a-f]{40}$/.test(commit)) throw new Error("Invalid release identity.");
 function gh(args: string[]) {
   return execFileSync("gh", args, { encoding: "utf8" });

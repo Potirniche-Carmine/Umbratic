@@ -16,7 +16,10 @@ for (const file of npmManifests) {
   if (lock.packages[path.posix.dirname(file)]?.version !== version) throw new Error(`Lockfile version for ${file} is out of sync.`);
 }
 const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--offline", "--no-deps", "--format-version", "1"], { cwd: root, encoding: "utf8" }));
+const cargoLock = fs.readFileSync(path.join(root, "Cargo.lock"), "utf8").split("\n[[package]]\n");
 for (const entry of metadata.packages.filter((entry) => metadata.workspace_members.includes(entry.id))) {
   if (entry.version !== version) throw new Error(`${entry.name} does not match release ${version}. Run npm run release:version -- ${version}.`);
+  const locked = cargoLock.find((block) => block.match(/^name = "([^"]+)"$/m)?.[1] === entry.name && !/^source =/m.test(block));
+  if (locked?.match(/^version = "([^"]+)"$/m)?.[1] !== version) throw new Error(`Cargo.lock version for ${entry.name} is out of sync.`);
 }
 console.log(`Release versions match ${version} across npm, Cargo and locked workspaces.`);

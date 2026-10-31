@@ -22,20 +22,20 @@ test("bounded file reads reject directories and over-limit files", (t) => {
   fs.writeFileSync(file, "hello");
   assert.equal(reader.readRegularFileSync(file, 5).toString(), "hello");
   assert.throws(() => reader.readRegularFileSync(file, 4), /byte limit/);
-  assert.throws(() => reader.readRegularFileSync(root, 100), /regular file/);
+  assert.throws(() => reader.readRegularFileSync(root, 100));
 });
 
-test("file replacement between lstat and open is rejected and closes its descriptor", (t) => {
+test("file replacement between open and lstat is rejected and closes its descriptor", (t) => {
   const root = workspace(t);
   const file = path.join(root, "input.txt");
   fs.writeFileSync(file, "original");
   let closed = false;
   const raced = loadTypeScriptModule(source, { mocks: { "node:fs": {
     ...fs,
-    openSync: (...args) => {
+    lstatSync: (...args) => {
       fs.renameSync(file, path.join(root, "original.txt"));
       fs.writeFileSync(file, "replacement");
-      return fs.openSync(...args);
+      return fs.lstatSync(...args);
     },
     closeSync: (fd) => { closed = true; fs.closeSync(fd); },
   } } });

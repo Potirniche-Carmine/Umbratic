@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import JSZip from "jszip";
+import { buildMacImageRuntime } from "./build-image-runtime.ts";
 
 const desktopRoot = path.resolve(import.meta.dirname, "..");
 const destination = path.join(desktopRoot, ".package", "image-runtime");
@@ -18,7 +19,11 @@ function verifyExecutable() {
   }
 }
 
-if (!asset) {
+if (process.platform === "darwin") {
+  await buildMacImageRuntime(pin.macSource, destination);
+  await fs.copyFile(path.resolve(desktopRoot, "../../third_party/stable-diffusion-notices.txt"), path.join(destination, "third-party-notices.txt"));
+  verifyExecutable();
+} else if (!asset) {
   // Keep the desktop build available on platforms without a reviewed runtime.
   // No executable means Veil does not advertise image generation there.
   await fs.rm(destination, { recursive: true, force: true });
@@ -48,4 +53,4 @@ if (!asset) {
   verifyExecutable();
   await fs.writeFile(receipt, asset.sha256);
 }
-if (asset) console.log("Image runtime verified.");
+if (asset || process.platform === "darwin") console.log("Image runtime verified.");

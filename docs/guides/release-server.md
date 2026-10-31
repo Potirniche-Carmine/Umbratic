@@ -1,26 +1,27 @@
-# Build a customer ZIP
+# Build a server ZIP
+
+A company or self-hosting administrator builds their own deployment from source. No Umbratic-issued credential or update-feed key is required.
 
 From the repository root:
 
 ```sh
-npm run veil-console:release -- --customer acme --seats 10 --version 0.1.0
+npm run veil-console:release -- --customer acme --seats 10 --version 0.0.3
 ```
 
-The ZIP appears in `artifacts/releases/`, with `acme` in its filename.
+The ZIP appears in `artifacts/releases/`, with the administrator-selected label `acme` in its filename. `--seats` and `--devices-per-user` are your deployment's access limits.
 
-The build uses the repository's ignored `artifacts/release-work/` on Mac and `~/umbratic-release/` on Linux automatically:
+The build uses the repository's ignored `artifacts/release-work/` on macOS and `~/umbratic-release/` on Linux:
 
-- `umbratic-feed-master.key`: your existing master key.
-- `umbratic-entitlement-signing.key`: created once if missing, then reused.
-- `metal-kit/`: the dependency kit on Mac (`cuda-kit/` by default on Linux).
+- `umbratic-entitlement-signing.key` is generated once with owner-only permissions, then reused.
+- `metal-kit/` is the reviewed dependency kit on macOS; Linux defaults to `cuda-kit/`.
 
-Customer update keys are derived automatically from the master key. Neither master key nor signing key goes into the ZIP. Back up both files; if you already have a signing key elsewhere, put the original here before building.
+The command signs your selected limits and embeds the public verification key into Veil and Console. The private signing key stays on the build machine. Back it up privately and reuse it for updates; `--signing-key-file` selects an existing key elsewhere. See [server signing keys](../setup/signing-keys.md).
 
-For an existing deployment, add `--org-uid` with the value from its previous ZIP’s `entitlement.json`. Keep its configured `--searches-per-month` allowance if applicable.
+For an existing deployment, pass `--org-uid` from its previous `entitlement.json` and keep its configured access and search limits. Web search is optional: a nonzero `--searches-per-month` budget requires your own `UMBRATIC_BRAVE_SEARCH_API_KEY` in the build environment or private release environment file. No search credential is needed for a zero budget.
 
-## First-time Mac setup
+## First build on macOS
 
-Put your feed master key at `artifacts/release-work/umbratic-feed-master.key`. If the kit is missing, build it once from the repository root:
+Build the dependency kit once from the repository root:
 
 ```sh
 python3 infrastructure/veil-console/deploy/build-metal-kit.py \
@@ -28,8 +29,8 @@ python3 infrastructure/veil-console/deploy/build-metal-kit.py \
   --cache "$PWD/artifacts/release-work/download-cache"
 ```
 
-Mac builds need the Xcode command-line tools to compile the models-folder launcher.
+macOS builds need Xcode Command Line Tools for the models-folder launcher. For Linux kit preparation and verification, follow [dependency kits](../reference/dependency-kits.md).
 
-The OS and CPU default to this machine. For another supported target, use `--os`, `--arch`, and `--profile`; `--dependency-dir` selects another reviewed kit. Build with the target’s Rust toolchain.
+The OS and CPU default to this machine. For another supported target, use `--os`, `--arch`, and `--profile`; `--dependency-dir` selects another reviewed kit. Install the target's Rust toolchain before building.
 
-Before sending the ZIP, complete the [release checks](../reference/dependency-kits.md). Send the customer their ZIP, its authenticated checksum, model folders, and the [quickstart](deploy-customer.md). They configure their server address in Console.
+Before distributing the ZIP, complete the [release checks](../reference/dependency-kits.md). Distribute the ZIP and an authenticated checksum, supply your selected model folders, and follow the [self-hosting quickstart](deploy-customer.md). Administrators configure the server address in Console. Desktop application updates come from public GitHub Releases and use no company token.

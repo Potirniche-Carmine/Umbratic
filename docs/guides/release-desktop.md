@@ -27,14 +27,66 @@ In the repository's **Settings → Secrets and variables → Actions**, configur
 | Variable | `UMBRATIC_WIN_SIGN_PROFILE` | Public-trust certificate profile name |
 | Variable | `UMBRATIC_WIN_SIGN_PUBLISHER` | Exact certificate subject common name |
 
-The Azure principal needs **Trusted Signing Certificate Profile Signer** on
-that profile. Keep the Apple team, app ID and Windows publisher stable so
+The Azure principal needs **Artifact Signing Certificate Profile Signer** on
+that profile. Microsoft now calls Trusted Signing **Artifact Signing**; the
+existing `UMBRATIC_WIN_SIGN_*` names still name that service. Keep the Apple team, app ID and Windows publisher stable so
 installed copies can verify future updates. The Apple secret names match
 GamePack; secrets must be configured separately for this repository.
 
 The workflow uses its short-lived `GITHUB_TOKEN` to publish. A personal access
 token is unnecessary. Missing signing credentials fail the release before
 packaging and cannot result in an unsigned public release.
+
+## Add the signing credentials step by step
+
+1. On the Mac that signs GamePack, open **Keychain Access → My Certificates**.
+   Select the same **Developer ID Application** identity, including its private
+   key, and choose **File → Export Items**. Save a password-protected `.p12`
+   outside the repository. Copy its base64 directly to the clipboard without
+   printing the private key in the terminal:
+   ```sh
+   base64 -i /absolute/path/to/Developer-ID.p12 | pbcopy
+   ```
+2. Open [Umbratic's Actions secrets settings](https://github.com/Potirniche-Carmine/Umbratic/settings/secrets/actions).
+   Choose **New repository secret**, name it `MACOS_CERTIFICATE_P12`, and paste
+   the clipboard. Add `MACOS_CERTIFICATE_PASSWORD` with the export password.
+   Existing GamePack secrets cannot be read back from GitHub; reuse the
+   original certificate or export the same identity again.
+3. At [Apple Account](https://account.apple.com), choose **Sign-In and Security
+   → App-Specific Passwords → Generate an app-specific password**. Store it as
+   `APPLE_NOTARY_PASSWORD`, and store that account's email as
+   `APPLE_NOTARY_APPLE_ID`. Two-factor authentication is required. In GitHub's
+   **Secrets and variables → Actions → Variables → New repository variable**,
+   add `APPLE_TEAM_ID` using the team shown in the Apple Developer membership
+   details. Use the same team as the exported certificate.
+   [Apple's instructions](https://support.apple.com/en-us/102654).
+4. In the [Azure portal](https://portal.azure.com), create or select an
+   **Artifact Signing** account, complete identity validation, and create a
+   **Public Trust** certificate profile. Record its endpoint, account name,
+   profile name and certificate subject common name in the four
+   `UMBRATIC_WIN_SIGN_*` repository variables from the table. Private Trust and
+   test profiles do not provide the public installer trust this release needs.
+   [Microsoft's setup guide](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart).
+5. In **Microsoft Entra ID → App registrations → New registration**, create a
+   signing application. Its **Overview** supplies the tenant and application
+   IDs for `AZURE_TENANT_ID` and `AZURE_CLIENT_ID`. Under **Certificates & secrets
+   → Client secrets → New client secret**, copy the secret **Value** into
+   `AZURE_CLIENT_SECRET`. Assign that application **Artifact Signing Certificate
+   Profile Signer** through the signing profile/account's **Access control
+   (IAM) → Add role assignment**. Scope it to the profile where possible.
+   [Service principal setup](https://learn.microsoft.com/en-us/entra/identity-platform/howto-create-service-principal-portal),
+   [signing roles](https://learn.microsoft.com/en-us/azure/artifact-signing/concept-resources-roles).
+6. After `main` has passed **CI required**, open **Actions → Release → Run
+   workflow**, select `main`, and run it. The existing `0.0.3` version can be
+   released without another bump while it has no published release. All three
+   signed builds must pass before the draft becomes public. The pipeline
+   provisions its reviewed build/signing tools automatically.
+7. Download and install the resulting signed build. For the first GitHub
+   release, install it manually if the previous app points at the former feed.
+   Qualify automatic installation using a later signed GitHub release with a
+   higher version: the installed build must show the update ready, restart,
+   and report the new version. This final installed-upgrade check requires
+   real signing credentials and two signed versions.
 
 ## Cut a release
 

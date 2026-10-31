@@ -17,17 +17,17 @@ Umbratic has no usage analytics or automatic telemetry uploads. Task history and
 
 Local mode runs inference on your computer. Company server mode sends model requests to the Veil server you configure, where the administrator controls access, runtime infrastructure, and server logs. That deployment determines its own retention policy.
 
-Model and runtime downloads, application release checks, server enrollment, and explicitly used web search require network access. Commands you approve may also use the network. See [storage locations](docs/reference/storage.md) for local and server state.
+Model downloads, application release checks, server enrollment, and explicitly used web search require network access. Commands you approve may also use the network. See [storage locations](docs/reference/storage.md) for local and server state.
 
 ## Getting started
 
-Download an available macOS or Windows build from [GitHub Releases](https://github.com/Potirniche-Carmine/Umbratic/releases/latest). Local mode is the first-run default. Choose a model and provision its runtime in the app; the download size and hardware requirements depend on the model.
+Download an available macOS or Windows build from [GitHub Releases](https://github.com/Potirniche-Carmine/Umbratic/releases/latest). Local mode is the first-run default. Choose and download a model in the app; the download size and hardware requirements depend on the model.
 
 For shared infrastructure, follow the [self-hosted server guide](docs/guides/deploy-customer.md). An administrator runs Veil Console and Veil, adds models, and provides an enrollment code. Select **Company server** in Settings to enroll your device.
 
 ## Build from source
 
-Install Node.js and npm at the versions in [package.json](package.json), Rust from [rust-toolchain.toml](rust-toolchain.toml), and Go 1.26.5. Platform builds also require the native toolchain for that operating system.
+Install Node.js and npm at the versions in [package.json](package.json), Rust from [rust-toolchain.toml](rust-toolchain.toml), and Go from [infrastructure/veil/go.mod](infrastructure/veil/go.mod). Platform builds also require the native toolchain for that operating system.
 
 Install locked dependencies and explicitly provision the checksum-verified Electron runtime:
 
@@ -43,13 +43,13 @@ Start the desktop app:
 npm run desktop:dev
 ```
 
-Build for the machine you are on:
+Build an unsigned local application for the machine you are on:
 
 ```sh
-npm run desktop:release
+npm run desktop:release -- --unsigned --dir
 ```
 
-Build outputs go to `target/release/desktop`. Each operating system is built on that platform. Packaged applications include Veil; users do not need to start it separately or create a Veil `.env` file. Model weights and inference runtimes are provisioned separately.
+Build outputs go to `target/release/desktop`. Each operating system is built on that platform. Packaged applications include Veil and the local inference runtime; users do not need to start Veil separately or create a Veil `.env` file. Image generation includes its own runtime on supported platforms. Download model weights separately in the app.
 
 See [desktop releases](docs/guides/release-desktop.md) for signing, packaging, and GitHub publication, and [supply-chain rules](docs/reference/supply-chain.md) for dependency updates, audits, and SBOMs.
 

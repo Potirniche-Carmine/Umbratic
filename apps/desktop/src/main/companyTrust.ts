@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { app } from "electron";
 import type { EndpointMtlsConfig } from "./config";
+import { readRegularFileSync } from "./readFile";
 import { readCompanyCertificate } from "./storage";
 
 // Trust is supplied out of band by the administrator, never learned from an
@@ -27,8 +28,14 @@ export function certificateTransport(ca: string | undefined, fallback?: Endpoint
   const directory = path.join(app.getPath("userData"), "company-certificates");
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const caPath = path.join(directory, createHash("sha256").update(ca).digest("hex") + ".pem");
-  if (!fs.existsSync(caPath)) fs.writeFileSync(caPath, ca, { mode: 0o600, flag: "wx" });
-  if (fs.readFileSync(caPath, "utf8") !== ca) throw new Error("The saved company certificate was modified. Enroll again.");
+  try {
+    fs.writeFileSync(caPath, ca, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  try {
+    if (readRegularFileSync(caPath, 8192).toString("utf8") !== ca) throw new Error();
+  } catch { throw new Error("The saved company certificate was modified. Enroll again."); }
   return { ...fallback, caPath };
 }
 

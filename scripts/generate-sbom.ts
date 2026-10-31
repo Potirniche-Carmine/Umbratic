@@ -101,8 +101,38 @@ function cargoComponents() {
     });
 }
 
+function imageRuntimeComponents() {
+  const pin = readJson("third_party/stable-diffusion.cpp.json");
+  const binaries = Object.entries(pin.assets).map(([platform, asset]) => ({
+    type: "application",
+    "bom-ref": `pkg:generic/stable-diffusion.cpp@${pin.release}?platform=${platform}`,
+    name: "stable-diffusion.cpp",
+    version: pin.release,
+    hashes: [{ alg: "SHA-256", content: asset.sha256 }],
+    externalReferences: [{ type: "distribution", url: asset.url }],
+    properties: [{ name: "umbratic:platform", value: platform }],
+  }));
+  const sources = [pin.macSource.runtime, pin.macSource.ggml].map((source) => ({
+    type: "library",
+    "bom-ref": `pkg:github/${source.repository}@${source.commit}`,
+    name: source.repository,
+    version: source.commit,
+    hashes: [{ alg: "SHA-256", content: source.sha256 }],
+    externalReferences: [
+      { type: "vcs", url: `https://github.com/${source.repository}/tree/${source.commit}` },
+      { type: "distribution", url: `https://codeload.github.com/${source.repository}/zip/${source.commit}` },
+    ],
+    properties: [
+      { name: "umbratic:platform", value: "darwin-arm64" },
+      { name: "umbratic:archive-bytes", value: String(source.bytes) },
+      { name: "umbratic:deployment-target", value: pin.macSource.deploymentTarget },
+    ],
+  }));
+  return [...binaries, ...sources];
+}
+
 const rootManifest = readJson("package.json");
-const components = [...npmComponents(), ...cargoComponents()].sort((left, right) =>
+const components = [...npmComponents(), ...cargoComponents(), ...imageRuntimeComponents()].sort((left, right) =>
   left["bom-ref"].localeCompare(right["bom-ref"]),
 );
 const sbom = {

@@ -183,6 +183,25 @@ for (const vendored of supplyChainPolicy.reviewedVendoredCargoPackages ?? []) {
   }
 }
 
+// The sole omitted peer is a backend we do not ship. Pin the exception to
+// the actual locked peer and require NSIS-only Windows packaging.
+for (const omitted of supplyChainPolicy.omittedNpmPeerPackages ?? []) {
+  const separator = omitted.lastIndexOf("@");
+  const name = omitted.slice(0, separator);
+  const version = omitted.slice(separator + 1);
+  const entry = lock.packages[`node_modules/${name}`];
+  if (name !== "electron-builder-squirrel-windows" || entry?.version !== version || entry.peer !== true) {
+    fail(`Omitted npm peer ${omitted} does not match the reviewed unused Squirrel backend.`);
+  }
+  const builder = fs.readFileSync(path.join(root, "apps/desktop/electron-builder.yml"), "utf8");
+  const windows = builder.match(/^win:\n([\s\S]*?)(?=^[a-zA-Z][^\n]*:|$(?![\s\S]))/m)?.[1] ?? "";
+  const targets = (windows.match(/^  target:\n((?: {4}.*(?:\n|$))*)/m)?.[1] ?? "")
+    .split("\n").map((line) => line.trim()).filter(Boolean);
+  if (targets.length !== 1 || targets[0] !== "- nsis" || /squirrel/i.test(windows)) {
+    fail("Omitting the Squirrel peer requires NSIS-only Windows packaging.");
+  }
+}
+
 const cargoLock = fs.readFileSync(path.join(root, "Cargo.lock"), "utf8");
 for (const source of cargoLock.matchAll(/^source = "([^"]+)"$/gm)) {
   if (source[1] !== "registry+https://github.com/rust-lang/crates.io-index") {
@@ -361,6 +380,14 @@ if (!/^electronDist:\s+\.\.\/\.\.\/node_modules\/electron\/dist\s*$/m.test(elect
 
 // Reviewed native image runtime releases are pinned outside package managers.
 const imagePin = JSON.parse(fs.readFileSync(path.join(root, "third_party/stable-diffusion.cpp.json"), "utf8"));
+const imageSource = imagePin.macSource;
+if (imageSource?.deploymentTarget !== "12.0") fail("The macOS image runtime must preserve the macOS 12 deployment target.");
+for (const [name, repository] of [["runtime", "leejet/stable-diffusion.cpp"], ["ggml", "leejet/ggml"]]) {
+  const source = imageSource?.[name];
+  if (source?.repository !== repository || !/^[0-9a-f]{40}$/.test(source?.commit ?? "")
+      || !/^[0-9a-f]{64}$/.test(source?.sha256 ?? "") || !Number.isSafeInteger(source?.bytes)
+      || source.bytes < 1 || source.bytes > 150 * 1024 * 1024) fail(`The macOS image runtime ${name} must pin its official source archive and SHA-256.`);
+}
 for (const asset of Object.values(imagePin.assets) as Array<{url:string;sha256:string;bytes:number}>) {
   if (!asset.url.startsWith(`https://github.com/leejet/stable-diffusion.cpp/releases/download/${imagePin.release}/`)
     || !/^[0-9a-f]{64}$/.test(asset.sha256) || !Number.isSafeInteger(asset.bytes) || asset.bytes <= 0) fail("Image runtime assets must pin an official release and SHA-256.");

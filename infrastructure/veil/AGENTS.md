@@ -14,7 +14,7 @@ Keep package boundaries simple:
 
 - `cmd/veil` starts the service.
 - `internal/config` loads and validates trusted server configuration, including the `VEIL_MODELS` registry.
-- `internal/http` owns routes, authentication, middleware, limits, and response contracts.
+- `internal/http` owns routes, authentication, middleware, limits, response contracts, and operator-owned runtime metrics.
 - `internal/model` owns outbound private-runtime calls and streaming. One `Client` per registry entry, behind a `Registry` that routes by model id.
 - `internal/prompts` owns protected global and route prompt assembly.
 - `internal/policy` owns request validation and access rules.

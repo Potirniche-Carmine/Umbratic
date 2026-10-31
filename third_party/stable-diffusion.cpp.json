@@ -2,16 +2,6 @@
   "release": "master-890-74988b2",
   "commit": "74988b2",
   "assets": {
-    "darwin-arm64": {
-      "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-890-74988b2/sd-master-74988b2-bin-Darwin-macOS-26.6.2-arm64.zip",
-      "sha256": "fbffe2165d2e34098a673a3398286880d7dc1cdf2625e87ebb8b6235aac51553",
-      "bytes": 34308825
-    },
-    "darwin-x64": {
-      "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-890-74988b2/sd-master-74988b2-bin-Darwin-macOS-26.6.2-arm64.zip",
-      "sha256": "fbffe2165d2e34098a673a3398286880d7dc1cdf2625e87ebb8b6235aac51553",
-      "bytes": 34308825
-    },
     "win32-x64": {
       "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-890-74988b2/sd-master-74988b2-bin-win-cpu-x64.zip",
       "sha256": "24fcac70fadc41eb3524837893f1cb7ea54895fe4d807f88ef7afdeee8bd484b",
@@ -21,6 +11,21 @@
       "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-890-74988b2/sd-master-74988b2-bin-Linux-Ubuntu-24.04-x86_64.zip",
       "sha256": "04f7b4db880167c1b7b25eefcde27aa301301568eadb17623876eb3b8c938198",
       "bytes": 25418220
+    }
+  },
+  "macSource": {
+    "deploymentTarget": "12.0",
+    "runtime": {
+      "repository": "leejet/stable-diffusion.cpp",
+      "commit": "74988b290e40155fe2313914e44b979b750e958b",
+      "sha256": "967b07d6e30acedd74e841585370e92c4ec5db6bf1e0f9ba18cf08c080952cc2",
+      "bytes": 119464133
+    },
+    "ggml": {
+      "repository": "leejet/ggml",
+      "commit": "f583f393cd5dfdc129360bbf75cb3d49ccc837a8",
+      "sha256": "2d0652ec4a1c3a7f7e58e00d54b9ba527782addaeda73a270618e30a228e50fe",
+      "bytes": 4855685
     }
   }
 }

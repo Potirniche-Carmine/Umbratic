@@ -23,3 +23,23 @@ test("enrollment trust is bounded, supplied out of band, and scoped to its origi
  assert.throws(()=>trust.companyTLS(credential.baseUrl),/modified/);
  credential=undefined;assert.equal(trust.companyTLS("https://other.example"),undefined);
 });
+
+test("certificate reuse rejects a substituted symlink before reading its contents", (t) => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), "company-trust-race-"));
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ let reads = 0;
+ const trust = loadTypeScriptModule(new URL("../src/main/companyTrust.ts", import.meta.url), { mocks: {
+  electron: { app: { getPath: () => directory } },
+  "./storage": { readCompanyCertificate: () => undefined },
+  "node:fs": {
+   ...fs,
+   lstatSync: (...args) => {
+    const stat = fs.lstatSync(...args);
+    return String(args[0]).endsWith(".pem") ? Object.assign(stat, { isSymbolicLink: () => true }) : stat;
+   },
+   readSync: (...args) => { reads += 1; return fs.readSync(...args); },
+  },
+ } });
+ assert.throws(() => trust.certificateTransport("same-certificate"), /saved company certificate was modified/);
+ assert.equal(reads, 0);
+});

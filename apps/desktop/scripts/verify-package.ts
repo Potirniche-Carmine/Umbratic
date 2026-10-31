@@ -205,7 +205,11 @@ function verifyMacCodeSignature(appBundle: string) {
 const resources = packagedResources();
 const executable = (name: string) => process.platform === "win32" ? `${name}.exe` : name;
 const appArchive = requireFile(path.join(resources, "app.asar"));
-requireFile(path.join(resources, "app-update.yml"));
+const updateConfiguration = JSON.parse(fs.readFileSync(requireFile(path.join(resources, "app-update.yml")), "utf8"));
+if (updateConfiguration.provider !== "github" || updateConfiguration.owner !== "Potirniche-Carmine"
+    || updateConfiguration.repo !== "Umbratic" || updateConfiguration.private || updateConfiguration.token) {
+  throw new Error("Packaged updater must use the public Umbratic GitHub release feed without credentials.");
+}
 verifyMacCodeSignature(path.resolve(resources, "../.."));
 verifyDocumentsSkill(appArchive);
 verifyArtifactWorker(appArchive);
@@ -223,7 +227,8 @@ verifyBinary(
 );
 verifyLlamaServer(path.join(resources, "llama-server"));
 const imagePin = JSON.parse(fs.readFileSync(path.resolve(desktopRoot, "../../third_party/stable-diffusion.cpp.json"), "utf8"));
-if (imagePin.assets[`${process.platform}-${process.arch}`]) {
+if ((process.platform === "darwin" && imagePin.macSource) || imagePin.assets[`${process.platform}-${process.arch}`]) {
+  if (process.platform === "darwin") requireFile(path.join(resources, "image-runtime", "third-party-notices.txt"));
   const imageProbe = spawnSync(path.join(resources, "image-runtime", executable("sd-cli")), ["--help"], { encoding: "utf8", timeout: 15000 });
   if (imageProbe.status !== 0 || !`${imageProbe.stdout}${imageProbe.stderr}`.includes(imagePin.commit)) throw new Error("Packaged image runtime is missing or has the wrong revision.");
 }
