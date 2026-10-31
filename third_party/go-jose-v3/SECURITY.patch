@@ -1,0 +1,104 @@
+--- upstream/go.mod
++++ reviewed/go.mod
+@@ -3 +3 @@
+-go 1.12
++go 1.26.10
+@@ -5,5 +5 @@
+-require (
+-	github.com/google/go-cmp v0.5.9
+-	github.com/stretchr/testify v1.7.0
+-	golang.org/x/crypto v0.19.0
+-)
++require golang.org/x/crypto v0.58.0
+--- upstream/cipher/cbc_hmac.go
++++ reviewed/cipher/cbc_hmac.go
+@@ -179 +179,2 @@
+-	if len(buffer)%blockSize != 0 {
++	// Empty plaintext is padded with a complete block, so padded data is never empty.
++	if len(buffer) == 0 || len(buffer)%blockSize != 0 {
+--- upstream/json/scanner.go
++++ reviewed/json/scanner.go
+@@ -142,0 +143,3 @@
++// Match the upstream security bound before recursive JSON decoding begins.
++const maxNestingDepth = 10000
++
+@@ -173 +176 @@
+-func (s *scanner) pushParseState(p int) {
++func (s *scanner) pushParseState(c byte, p int, successState int) int {
+@@ -174,0 +178,4 @@
++	if len(s.parseState) <= maxNestingDepth {
++		return successState
++	}
++	return s.error(c, "exceeded max depth")
+@@ -214,2 +221 @@
+-		s.pushParseState(parseObjectKey)
+-		return scanBeginObject
++		return s.pushParseState(c, parseObjectKey, scanBeginObject)
+@@ -218,2 +224 @@
+-		s.pushParseState(parseArrayValue)
+-		return scanBeginArray
++		return s.pushParseState(c, parseArrayValue, scanBeginArray)
+--- upstream/jwk.go
++++ reviewed/jwk.go
+@@ -178 +178,5 @@
+-func (k *JSONWebKey) UnmarshalJSON(data []byte) (err error) {
++func (k *JSONWebKey) UnmarshalJSON(data []byte) error {
++	return k.unmarshalJSON(data, true)
++}
++
++func (k *JSONWebKey) unmarshalJSON(data []byte, allowPrivate bool) (err error) {
+@@ -182,0 +187,4 @@
++	}
++	if !allowPrivate && (raw.K != nil || raw.D != nil || raw.P != nil || raw.Q != nil ||
++		raw.Dp != nil || raw.Dq != nil || raw.Qi != nil) {
++		return errors.New("go-jose/go-jose: JWK contains private parameters")
+@@ -483,0 +492,3 @@
++// Same 4096-bit bound as the upstream v4.1.6 security fix.
++const maxRSAModulusBits = 4096
++
+@@ -488,0 +500,4 @@
++	n := key.N.bigInt()
++	if n.BitLen() > maxRSAModulusBits {
++		return nil, errors.New("go-jose/go-jose: invalid RSA key, modulus too large")
++	}
+@@ -490 +505 @@
+-		N: key.N.bigInt(),
++		N: n,
+@@ -630,0 +646,9 @@
++	n := key.N.bigInt()
++	if n.BitLen() > maxRSAModulusBits {
++		return nil, errors.New("go-jose/go-jose: invalid RSA key, modulus too large")
++	}
++	p, q := key.P.bigInt(), key.Q.bigInt()
++	if p.BitLen()+q.BitLen() > n.BitLen()+1 || new(big.Int).Mul(p, q).Cmp(n) != 0 {
++		return nil, errors.New("go-jose/go-jose: invalid RSA private key, p * q != n")
++	}
++
+@@ -633 +657 @@
+-			N: key.N.bigInt(),
++			N: n,
+@@ -636,5 +660,2 @@
+-		D: key.D.bigInt(),
+-		Primes: []*big.Int{
+-			key.P.bigInt(),
+-			key.Q.bigInt(),
+-		},
++		D:      key.D.bigInt(),
++		Primes: []*big.Int{p, q},
+--- upstream/shared.go
++++ reviewed/shared.go
+@@ -285,3 +285,2 @@
+-	var epk *JSONWebKey
+-	err := json.Unmarshal(*v, &epk)
+-	if err != nil {
++	epk := new(JSONWebKey)
++	if err := epk.unmarshalJSON(*v, false); err != nil {
+@@ -386,4 +385,4 @@
+-			var jwk *JSONWebKey
+-			err = json.Unmarshal(*v, &jwk)
+-			if err != nil {
+-				err = fmt.Errorf("failed to unmarshal JWK: %v: %#v", err, string(*v))
++			jwk := new(JSONWebKey)
++			err = jwk.unmarshalJSON(*v, false)
++			if err != nil {
++				err = fmt.Errorf("failed to unmarshal JWK: %w", err)

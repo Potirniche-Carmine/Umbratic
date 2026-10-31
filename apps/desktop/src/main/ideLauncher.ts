@@ -1,5 +1,5 @@
 import { taskUsesIsolatedWorktree } from "./worktreeOps";
-import { emit, getTask, recordProductTelemetry } from "./mainRuntime";
+import { emit, getTask } from "./mainRuntime";
 import { worktreeRootForRepo } from "./worktreeOps";
 import {
   shell,
@@ -135,7 +135,7 @@ export async function openTaskInIde(input: unknown): Promise<IdeOpenResult> {
   if (!fs.existsSync(targetPath)) {
     return { ok: false, message: relativeFilePath ? "Changed file no longer exists." : "Review folder no longer exists." };
   }
-  const withTelemetry = (result: IdeOpenResult): IdeOpenResult => {
+  const withTarget = (result: IdeOpenResult): IdeOpenResult => {
     emit({
       type: "ide.opened",
       taskId: task.id,
@@ -145,19 +145,9 @@ export async function openTaskInIde(input: unknown): Promise<IdeOpenResult> {
       result: result.ok ? "success" : "failed",
       message: result.ok ? undefined : result.message,
     });
-    recordProductTelemetry("ide.opened", {
-      taskId: task.id,
-      chatId: task.chatId,
-      repositoryId: task.repositoryId,
-      data: {
-        ideId,
-        target: relativeFilePath ? "file" : "workspace",
-        result: result.ok ? "success" : "failed",
-      },
-    });
     return result;
   };
-  return withTelemetry(await openPathInIde(ideId, targetPath, relativeFilePath ? "file" : "folder", task.worktreePath));
+  return withTarget(await openPathInIde(ideId, targetPath, relativeFilePath ? "file" : "folder", task.worktreePath));
 }
 
 export async function openRepositoryInIde(input: unknown): Promise<IdeOpenResult> {
@@ -174,10 +164,6 @@ export async function openRepositoryInIde(input: unknown): Promise<IdeOpenResult
     return { ok: false, message: "Selected folder no longer exists." };
   }
   const result = await openPathInIde(ideId, project.rootPath, "folder");
-  recordProductTelemetry("ide.opened", {
-    repositoryId: project.id,
-    data: { ideId, target: "workspace", result: result.ok ? "success" : "failed" },
-  });
   return result;
 }
 

@@ -13,6 +13,11 @@ fn workspace_command_environment_is_explicit_and_filters_credentials_case_insens
         ("Authorization".into(), "Bearer secret".into()),
         ("SSH_AUTH_SOCK".into(), "/tmp/agent".into()),
         ("UMBRATIC_RUNNER_CONFIG".into(), "secret config".into()),
+        ("PSModulePath".into(), "workspace-controlled-modules".into()),
+        (
+            "psmodulepath".into(),
+            "another-untrusted-module-path".into(),
+        ),
         ("UNRELATED".into(), "not forwarded".into()),
     ]);
     assert_eq!(filtered.get("PATH").map(String::as_str), Some("/bin"));
@@ -64,6 +69,20 @@ fn command_children_use_trusted_shell_and_minimal_path() {
         env.get("PATH").map(String::as_str),
         Some(trusted.as_str()),
         "command children must replace inherited PATH with the trusted minimal PATH"
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        env.get("PSModulePath").cloned(),
+        Some(format!(
+            "FileSystem::{}",
+            shell.parent().unwrap().join("Modules").display()
+        )),
+        "PowerShell must discover only the modules beside the trusted system shell"
+    );
+    #[cfg(not(windows))]
+    assert!(
+        !env.keys()
+            .any(|name| name.eq_ignore_ascii_case("PSModulePath"))
     );
 }
 #[test]

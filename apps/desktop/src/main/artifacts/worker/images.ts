@@ -10,7 +10,7 @@
  * does not get it past this.
  */
 
-import * as fs from "node:fs";
+import { readRegularFileSync } from "../../readFile.js";
 
 export type ImageFormat = "png" | "jpeg" | "gif";
 
@@ -30,12 +30,7 @@ export const maxImageBytes = 12 * 1024 * 1024;
 export function loadImage(absolutePath: string): LoadedImage {
   let bytes: Buffer;
   try {
-    const stats = fs.statSync(absolutePath);
-    if (!stats.isFile()) throw new ImageError("is not a file");
-    if (stats.size > maxImageBytes) {
-      throw new ImageError(`is ${stats.size} bytes; the limit for an embedded image is ${maxImageBytes}`);
-    }
-    bytes = fs.readFileSync(absolutePath);
+    bytes = readRegularFileSync(absolutePath, maxImageBytes);
   } catch (error) {
     if (error instanceof ImageError) throw error;
     throw new ImageError(`could not be read (${String(error instanceof Error ? error.message : error)})`);

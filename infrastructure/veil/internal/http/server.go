@@ -20,7 +20,6 @@ import (
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/prompts"
 	"umbratic-veil/internal/rag"
-	"umbratic-veil/internal/telemetry"
 	"umbratic-veil/internal/templates"
 	"umbratic-veil/internal/websearch"
 )
@@ -51,15 +50,17 @@ type WebSearchClient interface {
 }
 
 type Server struct {
+	image        imageGenerator
+	imageContext context.Context
+	imageCancel  context.CancelFunc
+	imageSlot    chan struct{}
 	cfg          config.Config
 	model        ModelClient
 	identity     *identity.Store
 	identityErr  error
 	identityRate *identityRateLimiter
-	// modelQuota and telemetryQuota bound how often one identity may ask for
 	// work, which is a different question from how much work runs at once.
-	modelQuota     *quotaLimiter
-	telemetryQuota *quotaLimiter
+	modelQuota *quotaLimiter
 	// webSearchQuota is separate from modelQuota on purpose: a lookup costs the
 	// company a search credit, not a generation, and research should not be able
 	// to spend the turn's chat budget.
@@ -96,13 +97,15 @@ const (
 // NewServer returns the API handler. It is a concrete type so the process can
 // drive readiness and draining around it.
 func NewServer(cfg config.Config, modelClient ModelClient) *Server {
+	imageContext, imageCancel := context.WithCancel(context.Background())
 	registry, err := templates.LoadFile(cfg.TemplateRegistryPath)
 	profile := cfg.Generation
 	server := &Server{
-		cfg: cfg, model: modelClient, templateData: registry, templateErr: err,
+		imageContext: imageContext, imageCancel: imageCancel,
+		imageSlot: make(chan struct{}, 1),
+		cfg:       cfg, model: modelClient, templateData: registry, templateErr: err,
 		identityRate:   &identityRateLimiter{entries: map[string]rateEntry{}},
 		modelQuota:     newQuotaLimiter(cfg.ModelRequestsPerMinute, time.Minute),
-		telemetryQuota: newQuotaLimiter(cfg.TelemetryBundlesPerHour, time.Hour),
 		webSearchQuota: newQuotaLimiter(cfg.WebSearchRequestsPerMinute, time.Minute),
 		lifecycle:      &lifecycle{},
 		stream:         newStreamMetrics(),
@@ -113,6 +116,9 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 		),
 		retriever: rag.New(cfg.RAG, modelClient),
 	}
+	if cfg.Image != nil {
+		server.image = cfg.Image
+	}
 	if cfg.SpeechEnabled() {
 		server.speech = model.NewSpeechClient(cfg.SpeechBaseURL, cfg.SpeechModel, cfg.SpeechAPIKey, cfg.ModelTimeout)
 	}
@@ -121,7 +127,7 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 		if usageErr != nil {
 			// A ledger Veil cannot read is a month it cannot count, so search
 			// stays absent rather than spending an unknown amount of the pool.
-			recordWebSearchFailure("usage", usageErr)
+			recordWebSearchFailure("usage")
 		} else {
 			server.webSearch = websearch.NewClient(key, webSearchTimeout)
 			server.webSearchUsage = usage
@@ -219,6 +225,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleModels(w, r)
 		return
 	}
+	if s.cfg.DefaultModel == "" && needsChatModel(r.URL.Path) {
+		writeCodedError(w, http.StatusServiceUnavailable, "model_not_configured", "Add and start a chat model in Console.")
+		return
+	}
 	if r.URL.Path == "/api/model/context" {
 		if r.Method != http.MethodGet {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -241,11 +251,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Model work is refused while starting or draining; telemetry and control
+	// Model work is refused while starting or draining; control
 	// routes stay available so a restart is still observable.
 	switch r.URL.Path {
 	case "/api/engineering/chat", "/api/marketing/chat", "/api/sales/chat",
-		"/api/internal/context/compact", "/api/internal/orient", "/api/transcribe":
+		"/api/internal/context/compact", "/api/internal/orient", "/api/transcribe", "/api/images/generate":
 		if !s.guardLifecycle(w) {
 			return
 		}
@@ -257,10 +267,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !s.allowQuota(w, r, s.webSearchQuota) {
-			return
-		}
-	case "/api/telemetry":
-		if !s.allowQuota(w, r, s.telemetryQuota) {
 			return
 		}
 	}
@@ -278,12 +284,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleContextCompact(w, r)
 	case "/api/internal/orient":
 		s.handleOrient(w, r)
+	case "/api/images/generate":
+		s.handleImage(w, r)
 	case "/api/transcribe":
 		s.handleTranscribe(w, r)
 	case "/api/web/search":
 		s.handleWebSearch(w, r)
-	case "/api/telemetry":
-		s.handleTelemetry(w, r)
 	default:
 		writeJSONError(w, http.StatusNotFound, "unknown route")
 	}
@@ -649,8 +655,8 @@ func writeIdentityError(w http.ResponseWriter, err error) {
 func isActivityProductRoute(path string) bool {
 	switch path {
 	case "/api/model/connect", "/api/model/context", "/api/models", "/api/engineering/chat", "/api/marketing/chat",
-		"/api/sales/chat", "/api/internal/context/compact", "/api/internal/orient", "/api/telemetry",
-		"/api/transcribe", "/api/web/search":
+		"/api/sales/chat", "/api/internal/context/compact", "/api/internal/orient",
+		"/api/transcribe", "/api/web/search", "/api/images/generate":
 		return true
 	default:
 		return false
@@ -711,6 +717,10 @@ func (s *Server) handleModelContext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.DefaultModel == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "state": "model_not_configured", "features": s.features(false, false)})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
 	defer cancel()
 
@@ -728,45 +738,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
 		"state":    string(s.lifecycle.state()),
-		"features": Features(s.cfg.RAG.Enabled, s.cfg.ModelSelectionEnabled, s.cfg.SpeechEnabled(), s.webSearchAvailable()),
+		"features": s.features(s.cfg.RAG.Enabled, s.cfg.ModelSelectionEnabled),
 		"capabilities": map[string]bool{
 			"parallel_tool_calls": s.cfg.ModelParallelToolCalls,
 			"vision":              s.cfg.ModelVision,
 			"reasoning":           s.defaultModelReasons(ctx),
 		},
-	})
-}
-
-func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
-	if !s.cfg.TelemetryEnabled {
-		writeJSONError(w, http.StatusForbidden, "telemetry disabled by admin policy")
-		return
-	}
-	maxBodyBytes := s.cfg.TelemetryMaxBodyBytes
-	if maxBodyBytes <= 0 {
-		maxBodyBytes = s.cfg.MaxBodyBytes
-	}
-	bundle, raw, drops, err := telemetry.DecodeBundle(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		if errors.Is(err, telemetry.ErrInvalidBundle) {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSONError(w, http.StatusBadRequest, "invalid telemetry request")
-		return
-	}
-	storedPath, err := telemetry.StoreBundle(s.cfg.TelemetryStorePath, raw, time.Now(), s.cfg.TelemetryRetentionDays)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "telemetry storage unavailable")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":             true,
-		"acceptedTasks":  len(bundle.Tasks),
-		"acceptedEvents": len(bundle.ProductEvents),
-		"droppedRecords": drops.Total(),
-		"retentionDays":  s.cfg.TelemetryRetentionDays,
-		"stored":         storedPath != "",
 	})
 }
 
@@ -805,26 +782,9 @@ type modelFailure struct {
 	// never model output), bounded for local diagnostics. It is recorded in the
 	// VEIL_DIAGNOSTIC event only and never sent to clients — "model service
 	// could not be reached" alone proved undebuggable in a live run.
-	Detail string
 }
 
 func classifyModelFailure(err error, upstreamStatus int) modelFailure {
-	failure := classifyModelFailureKind(err, upstreamStatus)
-	if err != nil {
-		failure.Detail = boundedFailureDetail(err)
-	}
-	return failure
-}
-
-func boundedFailureDetail(err error) string {
-	detail := strings.Join(strings.Fields(err.Error()), " ")
-	if runes := []rune(detail); len(runes) > 300 {
-		return string(runes[:300])
-	}
-	return detail
-}
-
-func classifyModelFailureKind(err error, upstreamStatus int) modelFailure {
 	if upstreamStatus > 0 {
 		if upstreamStatus == http.StatusRequestEntityTooLarge {
 			return modelFailure{Status: http.StatusRequestEntityTooLarge, Code: "context_overflow_upstream", Message: "model service rejected the assembled context", UpstreamStatus: upstreamStatus}
@@ -874,11 +834,8 @@ func recordModelFailure(route prompts.Route, phase string, failure modelFailure,
 	if failure.UpstreamStatus > 0 {
 		record["upstreamStatus"] = failure.UpstreamStatus
 	}
-	if failure.Detail != "" {
-		record["detail"] = failure.Detail
-	}
 	if encoded, err := json.Marshal(record); err == nil {
-		log.Printf("VEIL_DIAGNOSTIC %s", encoded)
+		log.Printf("VEIL_DIAGNOSTIC %s", strings.ReplaceAll(strings.ReplaceAll(string(encoded), "\r", "\\r"), "\n", "\\n"))
 	}
 }
 

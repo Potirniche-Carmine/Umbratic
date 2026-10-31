@@ -9,6 +9,9 @@ mod analysis;
 pub mod fixtures;
 mod tokens;
 
+#[cfg(panic = "abort")]
+compile_error!("umbratic-pdf requires panic=unwind to contain parser panics");
+
 use std::fs;
 use std::path::Path;
 

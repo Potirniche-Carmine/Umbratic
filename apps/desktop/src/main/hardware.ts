@@ -14,6 +14,7 @@
 import { spawn } from "node:child_process";
 import * as os from "node:os";
 
+import { recordLocalDiagnostic } from "./diagnostics";
 import { llamaServerBinaryPath } from "./llamaServer";
 import {
   catalogModels,
@@ -168,13 +169,7 @@ export function systemQuality(budget: MemoryBudget, accelerator: string | null):
   return fastMemoryGB(budget) >= 16 ? "optimal" : "good";
 }
 
-// Devices do not change while the app is open, and this spawns a process, so
-// it is resolved once per run. It is asynchronous and warmed at launch, so by
-// the time anyone opens settings the answer is already sitting in the cache
-// instead of being paid for on first look.
-let profilePromise: Promise<SystemProfile> | null = null;
-
-function listDevicesOutput(): Promise<string> {
+function listDevicesOutput(): Promise<{ output: string; note: string }> {
   return new Promise((resolve) => {
     let output = "";
     let child: ReturnType<typeof spawn>;
@@ -183,37 +178,81 @@ function listDevicesOutput(): Promise<string> {
     } catch {
       // No packaged runtime yet — running from source before a packaging build.
       // The machine is still worth reporting, just without its accelerator.
-      resolve("");
+      resolve({ output: "", note: "no packaged runtime" });
       return;
     }
     const timer = setTimeout(() => {
       child.kill();
-      resolve(output);
+      resolve({ output, note: "probe timed out after 10s" });
     }, 10_000);
     const collect = (chunk: Buffer | string) => { output += chunk.toString(); };
     child.stdout?.on("data", collect);
     child.stderr?.on("data", collect);
-    child.once("error", () => { clearTimeout(timer); resolve(output); });
-    child.once("exit", () => { clearTimeout(timer); resolve(output); });
+    child.once("error", (error) => { clearTimeout(timer); resolve({ output, note: `spawn failed: ${error.message}` }); });
+    // "close", not "exit": the device rows leave llama-server through a
+    // block-buffered pipe that flushes at process end, and exit can fire
+    // before that data has been read — a probe that then reports a GPU
+    // machine as CPU-only. close waits for the streams to drain.
+    child.once("close", (code) => { clearTimeout(timer); resolve({ output, note: `exit ${code}` }); });
   });
 }
 
+// Spawning a probe process per ask would be wasteful, so the answer is cached
+// and warmed at launch — but not unconditionally forever: a probe that found
+// no accelerator may be the machine, or may be a cold start (a driver still
+// initializing, antivirus scanning the freshly installed binary, the 10s
+// timeout). A GPU answer is trusted for the app's lifetime; a CPU-only answer
+// is re-probed on the next ask, at most every 30 seconds, so one bad launch
+// probe does not misreport the machine — and mis-size every model
+// recommendation — until the app restarts.
+let cachedProfile: SystemProfile | null = null;
+let probing: Promise<SystemProfile> | null = null;
+let lastProbeAt = 0;
+let lastRecordedProbe = "";
+const cpuOnlyReprobeMs = 30_000;
+
 export function systemProfile(): Promise<SystemProfile> {
-  if (!profilePromise) {
-    profilePromise = (async () => {
-      const devices = parseAcceleratorDevices(await listDevicesOutput());
+  if (cachedProfile && (cachedProfile.accelerator !== null || Date.now() - lastProbeAt < cpuOnlyReprobeMs)) {
+    return Promise.resolve(cachedProfile);
+  }
+  if (!probing) {
+    probing = (async () => {
+      const probe = await listDevicesOutput();
+      const devices = parseAcceleratorDevices(probe.output);
+      // The raw probe, kept where an exported diagnostics file shows it: "No
+      // GPU acceleration" on a machine with a GPU is otherwise undiagnosable
+      // from a report. Once per distinct outcome, not per probe — the
+      // CPU-only path re-probes on a timer.
+      const recorded = `${devices.map((device) => device.backend).join(",") || "none"}|${probe.note}`;
+      if (recorded !== lastRecordedProbe) {
+        lastRecordedProbe = recorded;
+        recordLocalDiagnostic({
+          level: "warn",
+          source: "desktop",
+          event: "hardware.device_probe",
+          message: devices.length === 0
+            ? "The runtime probe found no accelerator device."
+            : `The runtime probe found: ${devices.map((device) => `${device.backend} (${device.name})`).join(", ")}`,
+          data: { note: probe.note, output: probe.output.trim().slice(-2000) },
+        });
+      }
       const budget = { ramGB: totalRamGB(), vramGB: acceleratorMemoryGB(devices) };
       const first = devices[0] ?? null;
-      return {
+      const profile: SystemProfile = {
         totalRamGB: Math.round(budget.ramGB),
         vramGB: budget.vramGB === null ? null : Math.round(budget.vramGB),
         accelerator: first?.backend ?? null,
         acceleratorDevice: first?.name ?? null,
         quality: systemQuality(budget, first?.backend ?? null),
       };
-    })();
+      cachedProfile = profile;
+      lastProbeAt = Date.now();
+      return profile;
+    })().finally(() => {
+      probing = null;
+    });
   }
-  return profilePromise;
+  return probing;
 }
 
 /** This machine's budget, from the same cached answer the profile is built from. */

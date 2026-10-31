@@ -40,16 +40,17 @@ type RawSettings = {
   contextLength?: unknown;
   reasoningEffort?: unknown;
   showThinking?: unknown;
+  sendOnEnter?: unknown;
   localMtp?: unknown;
   permissionMode?: unknown;
   companyCredential?: unknown;
   dictation?: unknown;
+  imageModel?: unknown;
   keybindings?: unknown;
   remoteConnections?: unknown;
   customModels?: unknown;
   localQuants?: unknown;
   automaticAppUpdates?: unknown;
-  updateFeedToken?: unknown;
 };
 
 type SettingsRow = {
@@ -162,11 +163,15 @@ function modelEndpointSettings(
 
 export function readCompanyDeviceCredential(): CompanyDeviceCredential | null {
   const stored = readRawSettings().companyCredential;
-  const credential = decodeCompanyDeviceCredential(stored);
-  // A record that will not decode is corrupt or tampered with. Drop it so the
-  // device re-enrolls instead of carrying an unusable credential forward.
-  if (!credential && stored !== undefined) clearCompanyDeviceCredential();
-  return credential;
+  // Keychain can be locked or access can be declined. Neither condition is
+  // permission to erase a valid enrollment from disk.
+  return decodeCompanyDeviceCredential(stored);
+}
+
+export function readCompanyCertificate(): { baseUrl: string; caPem?: string } | null {
+  const value = readRawSettings().companyCredential;
+  if (!isRecord(value) || typeof value.baseUrl !== "string") return null;
+  return { baseUrl: value.baseUrl, caPem: typeof value.caPem === "string" ? value.caPem : undefined };
 }
 
 export function writeCompanyDeviceCredential(input: CompanyDeviceCredential): CompanyDeviceCredential {
@@ -401,14 +406,26 @@ export function writeLocalMtpSetting(value: unknown): boolean {
   return localMtp;
 }
 
+// On unless switched off: the model's live thinking is part of the account of
+// the work, and hiding it by default made the Working block a blank wait.
 export function readShowThinkingSetting(): boolean {
-  return readRawSettings().showThinking === true;
+  return readRawSettings().showThinking !== false;
 }
 
 export function writeShowThinkingSetting(value: unknown): boolean {
-  const showThinking = value === true;
+  const showThinking = value !== false;
   writeRawSettings({ ...readRawSettings(), showThinking });
   return showThinking;
+}
+
+export function readSendOnEnterSetting(): boolean {
+  return readRawSettings().sendOnEnter !== false;
+}
+
+export function writeSendOnEnterSetting(value: unknown): boolean {
+  const sendOnEnter = value !== false;
+  writeRawSettings({ ...readRawSettings(), sendOnEnter });
+  return sendOnEnter;
 }
 
 export function writeContextLengthSetting(value: unknown): number {
@@ -514,7 +531,7 @@ function normalizedKeyBindings(value: unknown): KeyBindingSettings {
 }
 
 /**
- * Whether the app checks downloads.umbratic.ai for a newer release on its own.
+ * Whether the app checks GitHub Releases for a newer release on its own.
  * On until turned off: an installed app that never learns about a fix is the
  * worse default. Only an explicit `false` is off, so an older settings file
  * with nothing stored reads as on rather than as a choice nobody made.
@@ -527,22 +544,6 @@ export function writeAutomaticAppUpdatesSetting(value: unknown): boolean {
   const automaticAppUpdates = value !== false;
   writeRawSettings({ ...readRawSettings(), automaticAppUpdates });
   return automaticAppUpdates;
-}
-
-/**
- * The token the company server minted for this device at its last session,
- * which the update feed accepts for thirty days. Stored so an app that is
- * checking for updates before it has reached Veil still has the last one, and
- * kept out of the renderer: nothing in the product shows or asks for it.
- */
-export function readUpdateFeedTokenSetting(): string {
-  const value = readRawSettings().updateFeedToken;
-  return typeof value === "string" ? value : "";
-}
-
-export function writeUpdateFeedTokenSetting(value: string): void {
-  if (!value || value === readUpdateFeedTokenSetting()) return;
-  writeRawSettings({ ...readRawSettings(), updateFeedToken: value });
 }
 
 /**
@@ -572,7 +573,8 @@ export function readStartupSettings(): DesktopStartupSettings {
     harnessProfile: isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId,
     contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),
     reasoningEffort: isReasoningEffort(settings.reasoningEffort) ? settings.reasoningEffort : DEFAULT_REASONING_EFFORT,
-    showThinking: settings.showThinking === true,
+    showThinking: settings.showThinking !== false,
+    sendOnEnter: settings.sendOnEnter !== false,
     webTools: webToolsEnabled(toolSettingsFromRaw(settings)),
   };
 }
@@ -658,4 +660,14 @@ export function writeNotes(content: string): UserNotes {
     db.prepare("INSERT OR REPLACE INTO notes (id, content, updated_at) VALUES (?, ?, ?)").run(userNotesId, notes.content, notes.updatedAt);
   });
   return notes;
+}
+
+export function readImageModelSetting(): string {
+  return readRawSettings().imageModel === "qwen-image-2.1" ? "qwen-image-2.1" : "off";
+}
+
+export function writeImageModelSetting(model: unknown): string {
+  if (model !== "off" && model !== "qwen-image-2.1") throw new Error("Choose an image model from the collection.");
+  writeRawSettings({ ...readRawSettings(), imageModel: model });
+  return model;
 }

@@ -2,6 +2,45 @@ use super::*;
 use crate::config::MtlsConfig;
 
 #[test]
+fn preparation_is_bounded_metadata_once_per_file_call() {
+    let directory = tempfile::tempdir().unwrap();
+    let session = crate::session::test_session(directory.path());
+    let sink = crate::session::test_sink(directory.path());
+    let mut events = sink.subscribe();
+    let partial = [
+        "write",
+        "edit",
+        "apply_patch",
+        "artifact",
+        "read",
+        "command",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| {
+        (
+            index,
+            (
+                format!("call-{index}"),
+                name.into(),
+                "private file contents".into(),
+            ),
+        )
+    })
+    .collect();
+    let mut preparing = std::collections::BTreeSet::new();
+    emit_tool_preparation(&sink, &session, &partial, &mut preparing);
+    emit_tool_preparation(&sink, &session, &partial, &mut preparing);
+    let observed: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert_eq!(observed.len(), 4);
+    for event in observed {
+        assert_eq!(event["type"], "tool.preparing");
+        assert_eq!(event.as_object().unwrap().len(), 5);
+        assert!(!event.to_string().contains("private file contents"));
+    }
+}
+
+#[test]
 fn live_text_is_the_answer() {
     let directory = tempfile::tempdir().unwrap();
     let session = crate::session::test_session(directory.path());
@@ -246,6 +285,7 @@ fn provider_with_mtls(mtls: MtlsConfig) -> ProviderConfig {
         send_reasoning_visible_field: false,
         reasoning_visible: false,
         veil_web_search: false,
+        image_generation: false,
         headers: BTreeMap::new(),
         mtls: Some(mtls),
     }

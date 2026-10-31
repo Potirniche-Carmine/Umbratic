@@ -126,7 +126,7 @@ test("capability guidance degrades Python, CMake, and artifact workflows when pr
   assert.match(promptGuidance, /local OCR digest generation is unavailable/);
 });
 
-test("capabilityTelemetrySnapshot keeps redacted facts and marks missing capabilities that affect a run", async () => {
+test("runCapabilitySnapshot keeps redacted facts and marks missing capabilities that affect a run", async () => {
   const report = await capabilities.probeLocalCapabilities({
     force: true,
     runnerPath: "/app/bin/umbratic-runner",
@@ -138,7 +138,7 @@ test("capabilityTelemetrySnapshot keeps redacted facts and marks missing capabil
     resolvePackage,
   });
 
-  const snapshot = capabilities.capabilityTelemetrySnapshot(report, { python: true, artifacts: true, ocr: true });
+  const snapshot = capabilities.runCapabilitySnapshot(report, { python: true, artifacts: true, ocr: true });
   const serialized = JSON.stringify(snapshot);
   assert.doesNotMatch(serialized, /executablePath/);
   assert.doesNotMatch(serialized, /\/private\/app\/node/);
@@ -211,7 +211,7 @@ test("pdf inspector probe follows the provided binary path and feeds OCR guidanc
   assert.equal(missingProbe.status, "missing");
   const guidance = capabilities.capabilityPromptGuidance(missing, { ocr: true });
   assert.match(guidance, /native PDF inspector \(classification \+ text extraction\): missing/);
-  const snapshot = capabilities.capabilityTelemetrySnapshot(missing, { ocr: true });
-  const pdfTelemetry = snapshot.find((probe) => probe.id === "umbratic-pdf");
-  assert.equal(pdfTelemetry.affectedCurrentRun, true);
+  const snapshot = capabilities.runCapabilitySnapshot(missing, { ocr: true });
+  const pdfProbe = snapshot.find((probe) => probe.id === "umbratic-pdf");
+  assert.equal(pdfProbe.affectedCurrentRun, true);
 });

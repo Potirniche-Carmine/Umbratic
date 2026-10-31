@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,30 @@ import (
 
 	"umbratic-veil/internal/model"
 )
+
+func TestAdmissionDoesNotReserveCapacityForCancelledRequests(t *testing.T) {
+	for _, user := range []string{"", "user-1"} {
+		t.Run(user, func(t *testing.T) {
+			controller := newAdmissionController(2, 1, time.Second)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			lease, err := controller.acquire(ctx, user)
+			if lease != nil {
+				lease.release()
+				t.Fatal("cancelled request acquired a model slot")
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected cancellation, got %v", err)
+			}
+			if len(controller.global) != 0 || controller.trackedUsers() != 0 || controller.activeRequests.Load() != 0 || controller.queueDepth.Load() != 0 {
+				t.Fatal("cancelled request retained capacity or a user bucket")
+			}
+			if controller.cancelCount.Load() != 1 {
+				t.Fatal("cancellation was not counted")
+			}
+		})
+	}
+}
 
 func TestAdmissionRejectsWhenGlobalCapacityIsSaturated(t *testing.T) {
 	cfg := testConfig()

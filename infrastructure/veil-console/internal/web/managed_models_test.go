@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +57,13 @@ func signedInConsole(t *testing.T) (*Server, http.Handler, []*http.Cookie, strin
 			sessionCSRF = cookie.Value
 		}
 	}
+	folder := filepath.Join(server.modelsDirectory(), "test-model")
+	if err := os.MkdirAll(folder, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "config.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	return server, handler, cookies, sessionCSRF, closeServer
 }
 
@@ -84,12 +93,11 @@ func authorizedPost(t *testing.T, handler http.Handler, cookies []*http.Cookie, 
 	return response
 }
 
-func modelFormValues(csrf string, overrides map[string]string) url.Values {
+func modelFormValues(server *Server, csrf string, overrides map[string]string) url.Values {
 	form := url.Values{
-		"csrf":         {csrf},
-		"id":           {"qwen3-32b"},
-		"display_name": {"Qwen 32B"},
-		"command":      {testCommand},
+		"csrf":    {csrf},
+		"id":      {"qwen3-32b"},
+		"command": {testCommand},
 	}
 	for key, value := range overrides {
 		if value == "" {
@@ -97,6 +105,11 @@ func modelFormValues(csrf string, overrides map[string]string) url.Values {
 			continue
 		}
 		form.Set(key, value)
+	}
+	folder := filepath.Join(server.modelsDirectory(), "test-model")
+	form.Set("folder", "test-model")
+	for _, repo := range []string{"Qwen/Qwen3-32B", "Qwen/Qwen3-ASR-1.7B", "openai/whisper-large-v3"} {
+		form.Set("command", strings.ReplaceAll(form.Get("command"), repo, `"`+folder+`"`))
 	}
 	return form
 }
@@ -117,9 +130,9 @@ func TestModelsPageRequiresASession(t *testing.T) {
 // deployment does not re-authenticate every click — but the session and the
 // CSRF token are still the gate on every write.
 func TestModelWritesRequireCSRF(t *testing.T) {
-	_, handler, cookies, _, closeServer := signedInConsole(t)
+	server, handler, cookies, _, closeServer := signedInConsole(t)
 	defer closeServer()
-	response := authorizedPost(t, handler, cookies, "/models/create", modelFormValues("", map[string]string{"csrf": ""}))
+	response := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(server, "", map[string]string{"csrf": ""}))
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("a missing CSRF token was accepted: %d", response.Code)
 	}
@@ -129,7 +142,7 @@ func TestModelLifecycleThroughTheWeb(t *testing.T) {
 	server, handler, cookies, csrf, closeServer := signedInConsole(t)
 	defer closeServer()
 
-	create := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, nil))
+	create := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(server, csrf, nil))
 	if create.Code != http.StatusSeeOther {
 		body, _ := io.ReadAll(create.Result().Body)
 		t.Fatalf("create failed: %d %s", create.Code, body)
@@ -140,7 +153,7 @@ func TestModelLifecycleThroughTheWeb(t *testing.T) {
 	}
 	// Saving lays the arguments out one per line, so a pasted one-liner comes
 	// back readable.
-	wantPrefix := strings.Join([]string{"serve Qwen/Qwen3-32B", "--host 127.0.0.1", "--port 8001", ""}, "\n")
+	wantPrefix := strings.Join([]string{config.FormatCommand([]string{"serve", filepath.Join(server.modelsDirectory(), "test-model")}), "--host 127.0.0.1", "--port 8001", ""}, "\n")
 	if !strings.HasPrefix(models[0].Command, wantPrefix) {
 		t.Fatalf("the command must be stored one flag per line: %q", models[0].Command)
 	}
@@ -155,14 +168,14 @@ func TestModelLifecycleThroughTheWeb(t *testing.T) {
 	// Editing the command is the point of the card: it is saved as typed.
 	edited := strings.Replace(models[0].Command, "--max-model-len 32768", "--max-model-len 98304", 1)
 	update := authorizedPost(t, handler, cookies, "/models/qwen3-32b/update", url.Values{
-		"csrf": {csrf}, "display_name": {"Qwen 32B long"}, "command": {edited},
+		"csrf": {csrf}, "command": {edited},
 	})
 	if update.Code != http.StatusSeeOther {
 		body, _ := io.ReadAll(update.Result().Body)
 		t.Fatalf("update failed: %d %s", update.Code, body)
 	}
 	stored, _, _ := server.store.ManagedModel(t.Context(), "qwen3-32b")
-	if stored.DisplayName != "Qwen 32B long" || stored.Command != edited {
+	if stored.ID != "qwen3-32b" || stored.Command != edited {
 		t.Fatalf("the update must persist: %#v", stored)
 	}
 	// The window Veil publishes follows the command it was read from.
@@ -204,7 +217,7 @@ func TestModelFormRefusesCommandsThatCannotRun(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := authorizedPost(t, handler, cookies, "/models/create",
-				modelFormValues(csrf, map[string]string{"command": command}))
+				modelFormValues(server, csrf, map[string]string{"command": command}))
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("expected 400, got %d", response.Code)
 			}
@@ -216,9 +229,9 @@ func TestModelFormRefusesCommandsThatCannotRun(t *testing.T) {
 }
 
 func TestModelsPageRendersTheCommandAndItsState(t *testing.T) {
-	_, handler, cookies, csrf, closeServer := signedInConsole(t)
+	server, handler, cookies, csrf, closeServer := signedInConsole(t)
 	defer closeServer()
-	create := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, nil))
+	create := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(server, csrf, nil))
 	if create.Code != http.StatusSeeOther {
 		t.Fatalf("create failed: %d", create.Code)
 	}
@@ -229,7 +242,7 @@ func TestModelsPageRendersTheCommandAndItsState(t *testing.T) {
 	}
 	body := page.Body.String()
 	for _, expected := range []string{
-		"Qwen 32B", "qwen3-32b",
+		"qwen3-32b",
 		// The command is editable on the card, shown exactly as stored.
 		"--kv-cache-dtype fp8",
 		`name="command"`,
@@ -280,7 +293,7 @@ func TestASavedCommandThatIsNotRunningYetIsCalledOut(t *testing.T) {
 }
 
 func managedTestModel() config.ManagedModel {
-	return config.ManagedModel{ID: "qwen3-32b", DisplayName: "Qwen 32B", Command: testCommand}
+	return config.ManagedModel{ID: "qwen3-32b", Command: testCommand}
 }
 
 const speechCommand = "serve Qwen/Qwen3-ASR-1.7B --host 127.0.0.1 --port 8010 --served-model-name qwen3-asr"
@@ -289,15 +302,15 @@ const speechCommand = "serve Qwen/Qwen3-ASR-1.7B --host 127.0.0.1 --port 8010 --
 // What differs is where it lands in Veil's configuration, so the page has to
 // let an administrator say which one a model is, and show the answer back.
 func TestModelsPageRegistersADictationRuntime(t *testing.T) {
-	_, handler, cookies, csrf, closeServer := signedInConsole(t)
+	server, handler, cookies, csrf, closeServer := signedInConsole(t)
 	defer closeServer()
 
-	chat := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, nil))
+	chat := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(server, csrf, nil))
 	if chat.Code != http.StatusSeeOther {
 		t.Fatalf("chat model create failed: %d", chat.Code)
 	}
-	speech := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, map[string]string{
-		"id": "qwen3-asr", "display_name": "Qwen3 ASR", "command": speechCommand, "role": "speech",
+	speech := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(server, csrf, map[string]string{
+		"kind": "dictation", "port": "8010",
 	}))
 	if speech.Code != http.StatusSeeOther {
 		t.Fatalf("speech model create failed: %d", speech.Code)
@@ -315,23 +328,23 @@ func TestModelsPageRegistersADictationRuntime(t *testing.T) {
 	}
 
 	dictationTab := authorizedGet(t, handler, cookies, "/models?kind=dictation").Body.String()
-	for _, expected := range []string{"Qwen3 ASR", "qwen3-asr", ">Dictation<"} {
+	for _, expected := range []string{"test-model-Dictation", ">Dictation<"} {
 		if !strings.Contains(dictationTab, expected) {
 			t.Fatalf("the dictation tab must show %q: %s", expected, dictationTab)
 		}
 	}
 	// One runtime at most, so the form says so rather than offering a
 	// submission that cannot succeed.
-	if !strings.Contains(dictationTab, "Veil takes one dictation runtime") {
+	if !strings.Contains(dictationTab, "One dictation model can be registered at a time") {
 		t.Fatalf("the dictation tab must explain the slot is taken: %s", dictationTab)
 	}
 
 	// Veil takes one speech endpoint, so a second must be refused rather than
 	// silently picked between.
-	second := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, map[string]string{
+	second := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(server, csrf, map[string]string{
 		"id": "whisper", "display_name": "Whisper",
 		"command": "serve openai/whisper-large-v3 --host 127.0.0.1 --port 8011 --served-model-name whisper",
-		"role":    "speech",
+		"kind":    "dictation", "port": "8011",
 	}))
 	if second.Code == http.StatusSeeOther {
 		t.Fatal("a second dictation runtime must be refused at save time")
@@ -347,7 +360,7 @@ func TestUnknownRoleFallsBackToChat(t *testing.T) {
 	server, handler, cookies, csrf, closeServer := signedInConsole(t)
 	defer closeServer()
 
-	created := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, map[string]string{
+	created := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(server, csrf, map[string]string{
 		"role": "speach",
 	}))
 	if created.Code != http.StatusSeeOther {

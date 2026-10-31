@@ -17,7 +17,6 @@ export const veilFeature = {
   toolsBoundsOnly: "tools.bounds_only",
   harnessBucketHint: "chat.harness_bucket_hint",
   tolerantBody: "chat.tolerant_body",
-  telemetryOpenVocabulary: "telemetry.open_vocabulary",
   orientPreviousResponse: "orient.previous_response",
   /**
    * The server retrieves company documents for the request's route and injects
@@ -41,6 +40,7 @@ export const veilFeature = {
    * something here, not so an unknown value can be refused.
    */
   thinkingToggle: "chat.thinking_toggle",
+  reasoningEffort: "chat.reasoning_effort",
   /**
    * Chat bodies may carry `reasoning_visible`. Security-semantic: the default
    * is still to strip reasoning tokens, so this name must be present before
@@ -52,6 +52,7 @@ export const veilFeature = {
    * Advertised only while both are true, so the composer hides its microphone
    * rather than offering a button that fails on first press.
    */
+  imageGenerate: "image.generate",
   speechTranscribe: "speech.transcribe",
   /**
    * `POST /api/web/search` exists and the server can actually serve it — a

@@ -339,7 +339,7 @@
             "type": "object"
           },
           "out": {
-            "description": "Workspace-relative destination. Defaults to .umbratic/artifacts/<format>/<name>. On edit, omit it to write the result back over path.",
+            "description": "Workspace-relative destination. Defaults to artifacts/<format>/<name>. On edit, omit it to write the result back over path.",
             "minLength": 1,
             "type": "string"
           },

@@ -21,6 +21,7 @@ import {
 } from "../shared/artifactReview";
 import type { DocumentReviewSnapshot } from "../shared/documentReview";
 import { runInWorker } from "./artifacts/service";
+import { isBlockedPath } from "./policy";
 import { hasSymlinkComponent, normalizeRelativePath, pathInside } from "./utils";
 
 export type ArtifactReviewResult =
@@ -65,7 +66,7 @@ export async function readArtifactPreview(
   const absolute = path.resolve(absoluteRoot, relative);
   // The same confinement the runner applies to a tool path: inside the
   // workspace, and reached without following a symlink out of it.
-  if (!pathInside(absoluteRoot, absolute) || hasSymlinkComponent(absoluteRoot, absolute)) {
+  if (isBlockedPath(relative) || !pathInside(absoluteRoot, absolute) || hasSymlinkComponent(absoluteRoot, absolute)) {
     return { ok: false, code: "unsafe", message: "The preview path is not trusted." };
   }
 
@@ -97,6 +98,7 @@ export async function readArtifactPreview(
       absolutePath: absolute,
       path: relative,
       workspaceRoot: absoluteRoot,
+      options: { includeContent: true },
     },
     previewTimeoutMs,
   );
@@ -124,4 +126,3 @@ function remember(key: string, preview: DocumentReviewSnapshot | null): void {
   }
   cache.set(key, { preview });
 }
-

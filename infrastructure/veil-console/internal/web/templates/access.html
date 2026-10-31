@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
-  <link rel="stylesheet" href="/assets/style.css?v=10">
-  <link rel="stylesheet" href="/assets/controls.css?v=1">
-  <link rel="stylesheet" href="/assets/access.css?v=13">
-  <script defer src="/assets/console.js?v=11"></script>
+  <link rel="stylesheet" href="/assets/style.css?v=17">
+  <link rel="stylesheet" href="/assets/controls.css?v=5">
+  <link rel="stylesheet" href="/assets/access.css?v=14">
+  <script defer src="/assets/console.js?v=17"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -28,7 +28,7 @@
     {{else if not .Configured}}
       <section class="panel unavailable-panel">
         <div><h2>Configure Veil first</h2><p>Apply a model configuration before you use Management.</p></div>
-        <a class="button secondary" href="/settings">Open Settings</a>
+        <a class="button secondary" href="/models">Open Models</a>
       </section>
     {{else if not .Running}}
       <section class="panel unavailable-panel">
@@ -58,7 +58,7 @@
       </section>
 
       <form class="panel add-user-form" method="post" action="/access/users">
-        <div class="tool-heading"><h2>Add user</h2><span>{{.Access.SeatsAvailable}} seats available</span></div>
+        <div class="tool-heading"><h2>Add user</h2></div>
         <input type="hidden" name="csrf" value="{{.CSRF}}">
         <div class="add-user-controls">
           <label class="field">

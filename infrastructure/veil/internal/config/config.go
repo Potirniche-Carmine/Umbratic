@@ -22,11 +22,13 @@ import (
 // synthesized from the single-model variables, so every code path downstream
 // reads the same shape whether or not an administrator configured a fleet.
 type ModelEntry struct {
-	ID              string `json:"id"`
-	ProviderBaseURL string `json:"provider_base_url"`
-	Display         string `json:"display"`
-	Reasoning       bool   `json:"reasoning"`
-	ContextLength   int    `json:"context_length"`
+	ID               string                  `json:"id"`
+	ProviderBaseURL  string                  `json:"provider_base_url"`
+	Display          string                  `json:"display"`
+	Reasoning        bool                    `json:"reasoning"`
+	ReasoningEfforts []string                `json:"reasoning_efforts"`
+	SamplingProfiles *model.SamplingProfiles `json:"sampling_profiles,omitempty"`
+	ContextLength    int                     `json:"context_length"`
 }
 
 // MaxModelIDBytes bounds a registry id. Ids travel in chat bodies and in
@@ -34,6 +36,7 @@ type ModelEntry struct {
 const MaxModelIDBytes = 256
 
 type Config struct {
+	Image               *model.ImageRuntime
 	Addr                string
 	AuthToken           string
 	ControlToken        string
@@ -60,19 +63,13 @@ type Config struct {
 	ModelVision            bool
 	ModelReasoning         bool
 	TemplateRegistryPath   string
-	TelemetryEnabled       bool
-	TelemetryStorePath     string
-	TelemetryRetentionDays int
-	TelemetryMaxBodyBytes  int64
-	// ModelRequestsPerMinute and TelemetryBundlesPerHour bound request rate per
 	// identity, which admission control does not: concurrency limits how much
 	// work runs at once, not how often one client may ask. Zero disables.
-	ModelRequestsPerMinute  int
-	TelemetryBundlesPerHour int
-	ModelTimeout            time.Duration
-	RequestTimeout          time.Duration
-	StreamIdleTimeout       time.Duration
-	MaxBodyBytes            int64
+	ModelRequestsPerMinute int
+	ModelTimeout           time.Duration
+	RequestTimeout         time.Duration
+	StreamIdleTimeout      time.Duration
+	MaxBodyBytes           int64
 	// SpeechBaseURL and SpeechModel address the transcription runtime that backs
 	// dictation. Both empty is the normal case: a deployment without them has no
 	// /api/transcribe route and withholds the feature name, rather than
@@ -149,15 +146,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	telemetryMaxBodyBytes, err := envInt64("VEIL_TELEMETRY_MAX_BODY_BYTES", 16<<20)
-	if err != nil {
-		return Config{}, err
-	}
 	modelRequestsPerMinute, err := envInt("VEIL_MODEL_REQUESTS_PER_MINUTE", 120)
-	if err != nil {
-		return Config{}, err
-	}
-	telemetryBundlesPerHour, err := envInt("VEIL_TELEMETRY_BUNDLES_PER_HOUR", 120)
 	if err != nil {
 		return Config{}, err
 	}
@@ -170,10 +159,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	maxOutputTokens, err := envInt("VEIL_MAX_OUTPUT_TOKENS", 8192)
-	if err != nil {
-		return Config{}, err
-	}
-	telemetryEnabled, err := envBool("VEIL_TELEMETRY_ENABLED", true)
 	if err != nil {
 		return Config{}, err
 	}
@@ -190,11 +175,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("VEIL_TRUSTED_PROXY_CIDRS"))
-	if err != nil {
-		return Config{}, err
-	}
-
-	telemetryRetentionDays, err := envInt("VEIL_TELEMETRY_RETENTION_DAYS", 30)
 	if err != nil {
 		return Config{}, err
 	}
@@ -238,12 +218,7 @@ func Load() (Config, error) {
 		ModelVision:                modelVision,
 		ModelReasoning:             modelReasoning,
 		TemplateRegistryPath:       strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
-		TelemetryEnabled:           telemetryEnabled,
-		TelemetryStorePath:         strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
-		TelemetryRetentionDays:     telemetryRetentionDays,
-		TelemetryMaxBodyBytes:      telemetryMaxBodyBytes,
 		ModelRequestsPerMinute:     modelRequestsPerMinute,
-		TelemetryBundlesPerHour:    telemetryBundlesPerHour,
 		SpeechBaseURL:              strings.TrimRight(strings.TrimSpace(os.Getenv("VEIL_SPEECH_BASE_URL")), "/"),
 		SpeechModel:                strings.TrimSpace(os.Getenv("VEIL_SPEECH_MODEL")),
 		SpeechAPIKey:               strings.TrimSpace(os.Getenv("VEIL_SPEECH_API_KEY")),
@@ -279,7 +254,7 @@ func Load() (Config, error) {
 	if cfg.ProviderBaseURL == "" {
 		return Config{}, errors.New("VEIL_PROVIDER_BASE_URL is required")
 	}
-	if cfg.DefaultModel == "" {
+	if cfg.DefaultModel == "" && cfg.Mode != model.ModeServer {
 		return Config{}, errors.New("VEIL_MODEL is required")
 	}
 	if cfg.ModelTimeout <= 0 {
@@ -297,17 +272,8 @@ func Load() (Config, error) {
 	if cfg.ContextLength < 0 {
 		return Config{}, errors.New("VEIL_CONTEXT_LENGTH must be positive when set")
 	}
-	if cfg.TelemetryRetentionDays <= 0 {
-		return Config{}, errors.New("VEIL_TELEMETRY_RETENTION_DAYS must be positive")
-	}
-	if cfg.TelemetryMaxBodyBytes <= 0 {
-		return Config{}, errors.New("VEIL_TELEMETRY_MAX_BODY_BYTES must be positive")
-	}
 	if cfg.ModelRequestsPerMinute < 0 {
 		return Config{}, errors.New("VEIL_MODEL_REQUESTS_PER_MINUTE must not be negative")
-	}
-	if cfg.TelemetryBundlesPerHour < 0 {
-		return Config{}, errors.New("VEIL_TELEMETRY_BUNDLES_PER_HOUR must not be negative")
 	}
 	if cfg.WebSearchRequestsPerMinute < 0 {
 		return Config{}, errors.New("VEIL_WEB_SEARCH_REQUESTS_PER_MINUTE must not be negative")
@@ -316,6 +282,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := loadModelRegistry(&cfg); err != nil {
+		return Config{}, err
+	}
+	cfg.Image, err = loadImageRuntime()
+	if err != nil {
 		return Config{}, err
 	}
 	if err := validateSpeech(&cfg); err != nil {
@@ -401,6 +371,18 @@ func loadModelRegistry(cfg *Config) error {
 	seen := make(map[string]bool, len(entries))
 	for index := range entries {
 		entry := &entries[index]
+		if entry.SamplingProfiles != nil {
+			if err := entry.SamplingProfiles.Validate(); err != nil {
+				return err
+			}
+		}
+		seenEfforts := map[string]bool{}
+		for _, effort := range entry.ReasoningEfforts {
+			if !model.ValidReasoningLevel(effort) || effort == "none" || seenEfforts[effort] || len(entry.ReasoningEfforts) > 16 {
+				return errors.New("VEIL_MODELS has invalid reasoning options")
+			}
+			seenEfforts[effort] = true
+		}
 		entry.ID = strings.TrimSpace(entry.ID)
 		entry.Display = strings.TrimSpace(entry.Display)
 		entry.ProviderBaseURL = strings.TrimSpace(entry.ProviderBaseURL)
@@ -608,8 +590,15 @@ func envInt64(name string, fallback int64) (int64, error) {
 }
 
 func envInt(name string, fallback int) (int, error) {
-	value, err := envInt64(name, int64(fallback))
-	return int(value), err
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer in the platform range", name)
+	}
+	return parsed, nil
 }
 
 func envOptionalNonNegInt(name string) (*int, error) {

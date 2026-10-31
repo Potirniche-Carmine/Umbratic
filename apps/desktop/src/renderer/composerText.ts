@@ -169,9 +169,8 @@ export function continueNumberedList(
   };
 }
 
-export function promptHighlightSegments(value: string, files: ComposerAttachmentReference[]): PromptHighlightSegment[] {
-  const tokens = files
-    .map((file) => attachmentMention(file))
+export function promptHighlightSegments(value: string, mentions: readonly string[]): PromptHighlightSegment[] {
+  const tokens = mentions
     .filter(Boolean)
     .sort((left, right) => right.length - left.length);
   if (!tokens.length) return [{ text: value || "\u200b", mention: false }];

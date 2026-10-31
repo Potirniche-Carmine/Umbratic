@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 
-import { createGitCheckpoint, materializeCheckpointWorktree, restoreGitCheckpointPath } from "../src/main/checkpoints/gitAdapter.ts";
+import { createGitCheckpoint, materializeCheckpointWorktree, restoreGitCheckpointPaths } from "../src/main/checkpoints/gitAdapter.ts";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -56,6 +56,30 @@ test("checkpoint captures tracked, deleted, and untracked state without changing
   }
 });
 
+test("checkpoint identity follows filesystem canonical paths and still rejects a nested workspace", async () => {
+  const root = fixtureRepository();
+  const alias = path.join(path.dirname(root), path.basename(root).toUpperCase());
+  const needsLink = !fs.existsSync(alias);
+  if (needsLink) fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+  try {
+    fs.writeFileSync(path.join(root, "tracked.txt"), "alias checkpoint\n");
+    const checkpoint = await createGitCheckpoint({
+      workspacePath: alias, taskId: "task-alias", checkpointId: "alias", seedCommit: "HEAD",
+    });
+    fs.writeFileSync(path.join(root, "tracked.txt"), "later edit\n");
+    await restoreGitCheckpointPaths({ workspacePath: alias, checkpointCommit: checkpoint.commitOid, relativePaths: ["tracked.txt"] });
+    assert.equal(fs.readFileSync(path.join(root, "tracked.txt"), "utf8"), "alias checkpoint\n");
+    const nested = path.join(root, "nested");
+    fs.mkdirSync(nested);
+    await assert.rejects(createGitCheckpoint({
+      workspacePath: nested, taskId: "task-alias", checkpointId: "nested", seedCommit: "HEAD",
+    }), /must be the Git worktree root/);
+  } finally {
+    if (needsLink) fs.rmSync(alias, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("checkpoint rejects blocked secrets and materializes a contained fork", async () => {
   const root = fixtureRepository();
   const managedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-worktrees-test-"));
@@ -77,7 +101,7 @@ test("checkpoint rejects blocked secrets and materializes a contained fork", asy
       managedRoot,
     });
     assert.equal(fs.readFileSync(path.join(target, "new.txt"), "utf8"), "fork content\n");
-    assert.equal(git(target, ["rev-parse", "HEAD"]), checkpoint.commitOid);
+    assert.equal(git(target, ["rev-parse", "HEAD"]), git(root, ["rev-parse", "HEAD"]));
     await assert.rejects(materializeCheckpointWorktree({
       repositoryPath: root,
       checkpointCommit: checkpoint.commitOid,
@@ -146,10 +170,10 @@ test("per-file restore returns one file and leaves the rest of the turn alone", 
     fs.writeFileSync(path.join(root, "turn-start.txt"), "also changed by turn\n");
     fs.writeFileSync(path.join(root, "turn-only.txt"), "created by turn\n");
 
-    await restoreGitCheckpointPath({
+    await restoreGitCheckpointPaths({
       workspacePath: root,
       checkpointCommit: checkpoint.commitOid,
-      relativePath: "tracked.txt",
+      relativePaths: ["tracked.txt"],
     });
 
     assert.equal(fs.readFileSync(path.join(root, "tracked.txt"), "utf8"), "turn start\n");
@@ -158,10 +182,10 @@ test("per-file restore returns one file and leaves the rest of the turn alone", 
     assert.equal(fs.readFileSync(path.join(root, "turn-only.txt"), "utf8"), "created by turn\n");
 
     // A file the checkpoint never had is undone by going away again.
-    await restoreGitCheckpointPath({
+    await restoreGitCheckpointPaths({
       workspacePath: root,
       checkpointCommit: checkpoint.commitOid,
-      relativePath: "turn-only.txt",
+      relativePaths: ["turn-only.txt"],
     });
     assert.equal(fs.existsSync(path.join(root, "turn-only.txt")), false);
   } finally {
@@ -180,10 +204,10 @@ test("per-file restore refuses paths outside the worktree and blocked paths", as
     });
     for (const relativePath of ["../escape.txt", ".git/config", ".env"]) {
       await assert.rejects(
-        () => restoreGitCheckpointPath({
+        () => restoreGitCheckpointPaths({
           workspacePath: root,
           checkpointCommit: checkpoint.commitOid,
-          relativePath,
+          relativePaths: [relativePath],
         }),
         /Invalid path to restore|Refusing to restore/,
       );
@@ -229,12 +253,73 @@ test("restore materialization reproduces the checkpoint exactly and leaves the p
     assert.equal(fs.readFileSync(path.join(restoredPath, "tracked.txt"), "utf8"), "checkpoint state\n");
     assert.equal(fs.readFileSync(path.join(restoredPath, "checkpoint-only.txt"), "utf8"), "preserved\n");
     assert.equal(fs.existsSync(path.join(restoredPath, "deleted.txt")), false);
-    assert.equal(git(restoredPath, ["rev-parse", "HEAD"]), requested.commitOid);
+    assert.equal(git(restoredPath, ["rev-parse", "HEAD"]), git(root, ["rev-parse", "HEAD"]));
     assert.equal(git(root, ["show", `${recovery.commitOid}:tracked.txt`]), "pre-restore recovery state");
     assert.equal(git(root, ["show", `${recovery.commitOid}:recovery-only.txt`]), "recoverable");
     assert.equal(fs.readFileSync(path.join(root, "tracked.txt"), "utf8"), "pre-restore recovery state\n");
   } finally {
     try { git(root, ["worktree", "remove", "--force", restoredPath]); } catch { /* absent */ }
+    fs.rmSync(managedRoot, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("restore preserves HEAD, staged and unstaged versions, deletions, binary and untracked files", async () => {
+  const root = fixtureRepository();
+  const managedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-checkpoint-index-"));
+  try {
+    fs.writeFileSync(path.join(root, "tracked.txt"), "staged\n");
+    git(root, ["add", "tracked.txt"]);
+    fs.writeFileSync(path.join(root, "tracked.txt"), "unstaged\n");
+    fs.rmSync(path.join(root, "deleted.txt"));
+    fs.writeFileSync(path.join(root, "new.bin"), Buffer.from([0, 255, 7]));
+    const expectedStatus = git(root, ["status", "--porcelain=v1"]);
+    const checkpoint = await createGitCheckpoint({ workspacePath: root, taskId: "staging", checkpointId: "before", seedCommit: "HEAD" });
+    // Both the index and working tree must survive collection of unreachable objects.
+    git(root, ["gc", "--prune=now"]);
+    const target = path.join(managedRoot, "restored");
+    await materializeCheckpointWorktree({ repositoryPath: root, checkpointCommit: checkpoint.commitOid,
+      branch: "umbratic/staging", targetPath: target, managedRoot });
+    assert.equal(git(target, ["status", "--porcelain=v1"]), expectedStatus);
+    assert.equal(git(target, ["show", ":tracked.txt"]), "staged");
+    assert.equal(fs.readFileSync(path.join(target, "tracked.txt"), "utf8"), "unstaged\n");
+    assert.deepEqual(fs.readFileSync(path.join(target, "new.bin")), Buffer.from([0, 255, 7]));
+    fs.writeFileSync(path.join(root, "tracked.txt"), "agent changed\n");
+    git(root, ["add", "tracked.txt", "new.bin"]);
+    await restoreGitCheckpointPaths({ workspacePath: root, checkpointCommit: checkpoint.commitOid, relativePaths: ["tracked.txt"] });
+    await restoreGitCheckpointPaths({ workspacePath: root, checkpointCommit: checkpoint.commitOid, relativePaths: ["new.bin"] });
+    assert.equal(git(root, ["status", "--porcelain=v1"]), expectedStatus);
+    assert.equal(git(root, ["show", ":tracked.txt"]), "staged");
+  } finally {
+    fs.rmSync(managedRoot, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent agents in separate worktrees retain independent snapshots and literal paths", async () => {
+  const root = fixtureRepository();
+  const managedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-checkpoint-concurrent-"));
+  try {
+    const a = path.join(managedRoot, "a");
+    const b = path.join(managedRoot, "b");
+    for (const [name, directory] of [["a", a], ["b", b]]) {
+      git(root, ["worktree", "add", "-b", `umbratic/${name}`, directory, "HEAD"]);
+      fs.writeFileSync(path.join(directory, "tracked.txt"), `${name} before\n`);
+      fs.writeFileSync(path.join(directory, "file[1].txt"), `${name} literal\n`);
+    }
+    const [first, second] = await Promise.all([a, b].map((workspacePath, index) => createGitCheckpoint({
+      workspacePath, taskId: `agent-${index}`, checkpointId: "before", seedCommit: "HEAD",
+    })));
+    fs.writeFileSync(path.join(a, "file[1].txt"), "changed\n");
+    fs.writeFileSync(path.join(a, "file1.txt"), "must stay\n");
+    fs.writeFileSync(path.join(b, "tracked.txt"), "b still running\n");
+    await restoreGitCheckpointPaths({ workspacePath: a, checkpointCommit: first.commitOid, relativePaths: ["file[1].txt"] });
+    assert.equal(fs.readFileSync(path.join(a, "file[1].txt"), "utf8"), "a literal\n");
+    assert.equal(fs.readFileSync(path.join(a, "file1.txt"), "utf8"), "must stay\n");
+    assert.equal(fs.readFileSync(path.join(b, "tracked.txt"), "utf8"), "b still running\n");
+    assert.equal(git(root, ["show", `${second.commitOid}:tracked.txt`]), "b before");
+    assert.equal(git(root, ["status", "--porcelain=v1"]), "");
+  } finally {
     fs.rmSync(managedRoot, { recursive: true, force: true });
     fs.rmSync(root, { recursive: true, force: true });
   }

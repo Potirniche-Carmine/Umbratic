@@ -1,0 +1,25 @@
+{
+  "release": "master-1030-0a06712",
+  "commit": "0a067120b388bfefb9a87b96960cb548b97e9157",
+  "targets": [
+    "darwin-arm64",
+    "darwin-x64",
+    "win32-x64",
+    "linux-x64"
+  ],
+  "source": {
+    "deploymentTarget": "12.0",
+    "runtime": {
+      "repository": "leejet/stable-diffusion.cpp",
+      "commit": "0a067120b388bfefb9a87b96960cb548b97e9157",
+      "sha256": "91750d45a06637383cc227c2f5f82c6e71186eceb40051e7c80416cae364dfd4",
+      "bytes": 129378424
+    },
+    "ggml": {
+      "repository": "leejet/ggml",
+      "commit": "6a89493756a18bd9cd8875bc4db17e329818b13f",
+      "sha256": "992ce737ae7d4cb78228c78b9c1120a4924b36380df64c5e3e739b6542f045f7",
+      "bytes": 5661853
+    }
+  }
+}

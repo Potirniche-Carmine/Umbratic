@@ -452,14 +452,20 @@ pub fn compress_tool_result(
 }
 
 fn encoded_json_string_len(value: &str) -> usize {
-    2 + value
-        .chars()
-        .map(|character| match character {
-            '"' | '\\' | '\u{0008}' | '\u{000c}' | '\n' | '\r' | '\t' => 2,
-            '\u{0000}'..='\u{001f}' => 6,
-            _ => character.len_utf8(),
-        })
-        .sum::<usize>()
+    // JSON preserves UTF-8 bytes; only ASCII quotes, backslashes and controls
+    // add escape bytes. Avoid decoding every character in the active view.
+    let mut length = 2 + value.len();
+    for &byte in value.as_bytes() {
+        if byte < 0x20 {
+            length += match byte {
+                b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 1,
+                _ => 5,
+            };
+        } else if byte == b'"' || byte == b'\\' {
+            length += 1;
+        }
+    }
+    length
 }
 
 fn encoded_json_len(value: &Value) -> usize {
@@ -689,21 +695,55 @@ impl ContextBreakdown {
     }
 }
 
-fn row_tokens<'a>(messages: impl Iterator<Item = &'a Value>) -> u64 {
-    let mut count = 0u64;
-    let mut bytes = 0usize;
+fn context_counts(
+    messages: &[Value],
+    tools: &[Value],
+    skills: &[Value],
+    system_prompt: SystemPromptSize,
+) -> (u64, ContextBreakdown) {
+    let mut message_bytes = 2 + messages.len().saturating_sub(1);
+    let mut row_bytes = [0usize; 2];
+    let mut row_counts = [0u64; 2];
+    let mut images = 0u64;
     for message in messages {
-        count += 1;
-        bytes = bytes.saturating_add(encoded_json_len_excluding_images(message));
+        let encoded_bytes = encoded_json_len(message);
+        let image_count = count_images(message);
+        message_bytes += encoded_bytes;
+        images += image_count;
+        let row = usize::from(message.get("role").and_then(Value::as_str) == Some("tool"));
+        // Image-free rows have identical JSON bytes in the headline and the
+        // breakdown. Reuse this count instead of rescanning every text byte.
+        let displayed_bytes = if image_count == 0 {
+            encoded_bytes
+        } else {
+            encoded_json_len_excluding_images(message)
+        };
+        row_bytes[row] = row_bytes[row].saturating_add(displayed_bytes);
+        row_counts[row] += 1;
     }
-    if count == 0 {
-        return 0;
-    }
-    (bytes.div_ceil(3) as u64).saturating_add(count * MESSAGE_OVERHEAD_TOKENS)
-}
-
-fn is_tool_result(message: &Value) -> bool {
-    message.get("role").and_then(Value::as_str) == Some("tool")
+    let row_tokens = |row: usize| {
+        if row_counts[row] == 0 {
+            0
+        } else {
+            (row_bytes[row].div_ceil(3) as u64)
+                .saturating_add(row_counts[row] * MESSAGE_OVERHEAD_TOKENS)
+        }
+    };
+    let tool_tokens = estimate_json_array_tokens(tools);
+    let skill_tokens = array_tokens(skills);
+    let value_tokens = message_bytes.div_ceil(3) as u64 + tool_tokens + skill_tokens;
+    (
+        value_tokens,
+        ContextBreakdown {
+            system_prompt_tokens: system_prompt.tokens,
+            system_prompt_exact: system_prompt.exact,
+            tool_definition_tokens: if tools.is_empty() { 0 } else { tool_tokens },
+            skill_tokens,
+            conversation_tokens: row_tokens(0),
+            tool_result_tokens: row_tokens(1),
+            image_tokens: images * IMAGE_TOKENS,
+        },
+    )
 }
 
 pub fn context_breakdown(
@@ -712,15 +752,7 @@ pub fn context_breakdown(
     skills: &[Value],
     system_prompt: SystemPromptSize,
 ) -> ContextBreakdown {
-    ContextBreakdown {
-        system_prompt_tokens: system_prompt.tokens,
-        system_prompt_exact: system_prompt.exact,
-        tool_definition_tokens: array_tokens(tools),
-        skill_tokens: array_tokens(skills),
-        conversation_tokens: row_tokens(messages.iter().filter(|message| !is_tool_result(message))),
-        tool_result_tokens: row_tokens(messages.iter().filter(|message| is_tool_result(message))),
-        image_tokens: messages.iter().map(count_images).sum::<u64>() * IMAGE_TOKENS,
-    }
+    context_counts(messages, tools, skills, system_prompt).1
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -886,11 +918,9 @@ pub fn estimate_context_usage(input: ContextEstimateInput<'_>) -> ContextUsageEs
         exact: false,
     });
     let protected_tokens = system_prompt.tokens;
-    let value_tokens = estimate_json_array_tokens(messages)
-        + estimate_json_array_tokens(tools)
-        + array_tokens(skills);
+    let (value_tokens, breakdown) = context_counts(messages, tools, skills, system_prompt);
     let message_overhead = messages.len() as u64 * MESSAGE_OVERHEAD_TOKENS;
-    let image_tokens = messages.iter().map(count_images).sum::<u64>() * IMAGE_TOKENS;
+    let image_tokens = breakdown.image_tokens;
     let heuristic_prompt_tokens = value_tokens + message_overhead + image_tokens + protected_tokens;
     // A live anchor makes the settled prefix a measurement, so only the tail
     // appended since that response is guessed at.
@@ -912,7 +942,7 @@ pub fn estimate_context_usage(input: ContextEstimateInput<'_>) -> ContextUsageEs
         reserve_tokens,
         protected_tokens,
         anchored,
-        breakdown: context_breakdown(messages, tools, skills, system_prompt),
+        breakdown,
     }
 }
 #[cfg(test)]

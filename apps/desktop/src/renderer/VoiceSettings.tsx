@@ -81,7 +81,7 @@ export function VoiceSettings({
         <h3>Voice</h3>
       </div>
 
-      <div className="settingsGroup">
+      <div className={`settingsGroup${serverMode ? " voiceServerStatus" : ""}`}>
         {serverMode ? (
           <p className="settingsMessage">
             {speechAdvertised
@@ -116,9 +116,11 @@ export function VoiceSettings({
             download notice lived here too and flashed on every pick: the status
             it read from is a round trip behind the choice, so it announced a
             problem that had already stopped being true. */}
-        <div className="connectionFeedback" aria-live="polite">
-          {message ? <p className="settingsMessage">{message}</p> : null}
-        </div>
+        {!serverMode && (
+          <div className="connectionFeedback" aria-live="polite">
+            {message ? <p className="settingsMessage">{message}</p> : null}
+          </div>
+        )}
       </div>
     </div>
   );

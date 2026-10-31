@@ -24,8 +24,6 @@ func TestSettingsKeepsDeploymentFieldsAndDropsModelFields(t *testing.T) {
 	body := response.Body.String()
 	for _, expected := range []string{
 		"Ornith 1.5 35B A3B",
-		// The default model's context is printed, not offered.
-		"256K context",
 		`name="max_concurrent_requests"`, `name="queue_timeout"`, `name="request_timeout"`,
 		`name="max_output_tokens"`, `name="max_body_bytes"`,
 	} {
@@ -40,6 +38,9 @@ func TestSettingsKeepsDeploymentFieldsAndDropsModelFields(t *testing.T) {
 		// Context moved to the model, so the slider that set one number for
 		// every model at once must not come back.
 		`name="context_length"`, "context-slider", "range-ends", "<select",
+		// The context readout and the registered count were decoration here:
+		// both live on Models, where they can be acted on.
+		"256K context", "registered</a></span>",
 	} {
 		if strings.Contains(body, gone) {
 			t.Fatalf("Settings still carries the retired control %q: %s", gone, body)

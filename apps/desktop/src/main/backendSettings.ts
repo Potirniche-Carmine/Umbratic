@@ -1,7 +1,7 @@
+import { activeRunnerProcesses } from "./runnerLifecycle";
 import { getMainWindow, getPermissionMode } from "./mainRuntime";
-let telemetrySyncTimer: NodeJS.Timeout | null = null;
 
-import { RunnerPromptPart, activeRunnerProcesses, recordProductTelemetry } from "./mainRuntime";
+import { RunnerPromptPart } from "./mainRuntime";
 import {
   app,
   dialog,
@@ -23,16 +23,7 @@ import {
   runnerBinaryPath,
   runnerDiagnosticsDirectory,
 } from "./runnerAdapter";
-import {
-  umbraticPolicyVersion,
-  umbraticRunnerContractVersion,
-  umbraticRunnerName,
-  umbraticRunnerVersion,
-  companyEndpointProviderId,
-  isLocalhostUrl,
-  runtimeDiagnostics,
-  telemetryPolicyForMode,
-} from "./policy";
+import { umbraticPolicyVersion, umbraticRunnerContractVersion, umbraticRunnerName, umbraticRunnerVersion, companyEndpointProviderId, isLocalhostUrl, runtimeDiagnostics } from "./policy";
 import {
   connectCompanySession,
   companyConnectionStatus,
@@ -53,42 +44,12 @@ import {
   selectedLocalChatModel,
   selectedLocalDictationModel,
 } from "./localModels";
-import {
-  hasStoredModelEndpointSettings,
-  readContextLengthSetting,
-  readLocalMtpSetting,
-  readDictationSettings,
-  readLocalDiagnosticInfo,
-  readLocalDiagnostics,
-  readModelEndpointSettings,
-  readReasoningEffortSetting,
-  readToolSettings,
-  publicModelEndpointSettings,
-  readProjects,
-  readProductTelemetryEvents,
-  readTask,
-  readTasks,
-  clearLocalDiagnostics,
-  writeHarnessProfileSetting,
-  writeContextLengthSetting,
-  writeLocalMtpSetting,
-  writeReasoningEffortSetting,
-  writeShowThinkingSetting,
-  writeDictationSettings,
-  writeModelEndpointSettings,
-  writeSkillSettings,
-} from "./storage";
+import { hasStoredModelEndpointSettings, readContextLengthSetting, readLocalMtpSetting, readDictationSettings, readLocalDiagnosticInfo, readLocalDiagnostics, readModelEndpointSettings, readReasoningEffortSetting, readToolSettings, publicModelEndpointSettings, clearLocalDiagnostics, writeHarnessProfileSetting, writeContextLengthSetting, writeLocalMtpSetting, writeReasoningEffortSetting, writeSendOnEnterSetting, writeShowThinkingSetting, writeDictationSettings, writeModelEndpointSettings, writeSkillSettings } from "./storage";
 import { webToolsEnabled } from "./toolSettings";
 import { modelsDirectory } from "./appPaths";
 import { systemProfile } from "./hardware";
 import { recordLocalDiagnostic } from "./diagnostics";
-import { buildRedactedTelemetryBundle } from "./telemetry";
-import {
-  syncTelemetryBundle,
-  telemetrySpoolDirectory,
-  uploadTelemetrySpool,
-} from "./telemetrySync";
-import { checkEndpointHealth, telemetryUploadEndpoint } from "./modelEndpointRuntime";
+import { checkEndpointHealth } from "./modelEndpointRuntime";
 import { connectedVeilFeatures, connectedVeilSupports, recordVeilFeatures, veilFeature } from "./veilFeatures";
 import {
   getSkillDocument as getSkillDocumentService,
@@ -105,9 +66,8 @@ import type {
   LocalModelProvider,
   LocalDiagnosticInfo,
   RunnerProcess,
-  TelemetrySyncResult,
 } from "./types";
-import { isRecord, pathInside, requiredString } from "./utils";
+import { isRecord, pathInside } from "./utils";
 
 export async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readModelEndpointSettings>>) {
   if (activeRunnerProcesses.size > 0) {
@@ -179,14 +139,19 @@ export async function submitSteeredRunnerTurn(
 /**
  * The models the connected server-mode Veil publishes.
  *
- * Empty in local mode and on a server that does not advertise `models.list` —
+ * Empty before enrollment, in local mode, and without `models.list` —
  * the renderer reads an empty list as "no picker here", which is the honest
  * answer in both cases.
  */
 export async function listServerModels(): Promise<ServerModelInfo[]> {
   if (readModelEndpointSettings().mode !== "server") return [];
+  if (companyConnectionStatus().state !== "enrolled") return [];
+  await ensureCompanySession(companyTransportOptions());
+  const provider = endpointProvider();
+  const health = await checkEndpointHealth(provider);
+  recordVeilFeatures(health.features);
   if (!connectedVeilSupports(veilFeature.modelsList)) return [];
-  return fetchServerModels(endpointProvider());
+  return fetchServerModels(provider);
 }
 
 export async function enrollCompanyConnection(input: unknown) {
@@ -209,7 +174,7 @@ export async function enrollCompanyConnection(input: unknown) {
     throw new Error("Remote Veil servers must use HTTPS.");
   }
   stopLocalVeil();
-  await enrollCompanyDevice({ baseUrl, enrollmentCode, deviceLabel: label }, companyTransportOptions());
+  await enrollCompanyDevice({ baseUrl, enrollmentCode, deviceLabel: label }, companyTransportOptions(baseUrl));
   const settings = writeModelEndpointSettings({
     mode: "server", baseUrl, modelId: "veil-managed", secret: "",
   });
@@ -234,23 +199,8 @@ export async function connectCompanyConnection() {
     }, 5000);
   });
   try {
-    return await Promise.race([
-      (async () => {
-        await connectCompanySession({ ...companyTransportOptions(), signal: controller.signal });
-        // Nothing routes to the local Veil once this succeeds.
-        stopLocalVeil();
-        const settings = writeModelEndpointSettings({
-          mode: "server",
-          baseUrl: connection.baseUrl,
-          modelId: "veil-managed",
-          secret: "",
-        });
-        const status = await getBackendStatus();
-        if (status.endpoint !== "ready") {
-          throw new Error(status.providers[0]?.message ?? "The company server is unavailable.");
-        }
-        return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
-      })(),
+    await Promise.race([
+      connectCompanySession({ ...companyTransportOptions(), signal: controller.signal }),
       timedOut,
     ]);
   } catch (cause) {
@@ -261,6 +211,14 @@ export async function connectCompanyConnection() {
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+  // Authentication succeeds independently of model readiness. The status read
+  // may report no model, but must not turn a valid login into a failure.
+  stopLocalVeil();
+  const settings = writeModelEndpointSettings({
+    mode: "server", baseUrl: connection.baseUrl, modelId: "veil-managed", secret: "",
+  });
+  const status = await getBackendStatus();
+  return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
 }
 
 export async function disconnectCompanyServerSession() {
@@ -319,7 +277,28 @@ export async function saveReasoningEffortSetting(input: unknown) {
 }
 
 export function saveShowThinkingSetting(input: unknown) {
-  return writeShowThinkingSetting(input === true);
+  return writeShowThinkingSetting(input !== false);
+}
+
+export function saveSendOnEnterSetting(input: unknown) {
+  return writeSendOnEnterSetting(input !== false);
+}
+
+/**
+ * Whether the app starts with the OS session. Read from the OS rather than
+ * stored: the login-items list is the truth and can be edited outside the app.
+ */
+export function launchAtLoginStatus(): { enabled: boolean; available: boolean } {
+  const available = process.platform === "darwin" || process.platform === "win32";
+  if (!available) return { enabled: false, available };
+  return { enabled: app.getLoginItemSettings().openAtLogin, available };
+}
+
+export function saveLaunchAtLoginSetting(input: unknown): { enabled: boolean; available: boolean } {
+  const status = launchAtLoginStatus();
+  if (!status.available) return status;
+  app.setLoginItemSettings({ openAtLogin: input === true });
+  return launchAtLoginStatus();
 }
 
 export async function saveContextLengthSetting(input: unknown) {
@@ -465,7 +444,7 @@ export async function resolveSelectedModel(
         displayName: entry.display,
         ...(entry.contextLength === undefined ? {} : { contextLength: entry.contextLength }),
         capabilities: health.capabilities
-          ? { ...health.capabilities, reasoning: entry.reasoning }
+          ? { ...health.capabilities, reasoning: entry.reasoning, reasoningEfforts: connectedVeilSupports(veilFeature.reasoningEffort) ? entry.reasoningEfforts : [] }
           : undefined,
       }));
       const chosen =
@@ -479,12 +458,14 @@ export async function resolveSelectedModel(
     providerId: configured.providerId,
     providerName: configured.providerName,
     baseUrl: configured.baseUrl,
-    status: health.status,
+    status: settings.mode === "server" && health.status === "unavailable" ? "degraded" : health.status,
     models,
     message:
       health.status === "ready" && settings.mode === "local"
-        ? `Local Veil is running with ${settings.modelId}. Telemetry is off.`
-        : health.message,
+        ? `Local Veil is running with ${settings.modelId}.`
+        : settings.mode === "server" && health.status === "unavailable"
+          ? "Connected. No model is available yet."
+          : health.message,
   };
   return { providers: [provider], models, selected };
 }
@@ -573,7 +554,6 @@ export async function getBackendStatus(startLocal: LocalRuntimeStart = "never"):
       commandClassifier: "enabled",
       runnerDiagnosticsDirectory: runnerDiagnosticsDirectory(app.getPath("userData")),
       localLogs: readLocalDiagnosticInfo(),
-      telemetry: telemetryPolicyForMode(endpointSettings.mode),
       runtimes: runtimeDiagnostics(),
       capabilities: capabilityReport,
     },
@@ -658,29 +638,6 @@ export async function importSkillFromDialog(_input?: unknown) {
   return importSkillService({ sourcePath: result.filePaths[0] });
 }
 
-export async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dialogWindow = getMainWindow();
-  const result = dialogWindow
-    ? await dialog.showSaveDialog(dialogWindow, {
-        title: "Export Umbratic Telemetry",
-        defaultPath: `umbratic-telemetry-${timestamp}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      })
-    : await dialog.showSaveDialog({
-        title: "Export Umbratic Telemetry",
-        defaultPath: `umbratic-telemetry-${timestamp}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-  if (result.canceled || !result.filePath) {
-    return { ok: false, message: "Export canceled." };
-  }
-  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects(), readProductTelemetryEvents(), readLocalDiagnostics());
-  fs.mkdirSync(path.dirname(result.filePath), { recursive: true });
-  fs.writeFileSync(result.filePath, `${JSON.stringify(bundle)}\n`, "utf8");
-  return { ok: true, path: result.filePath };
-}
-
 export async function exportLocalDiagnostics(): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const dialogWindow = getMainWindow();
@@ -709,73 +666,4 @@ export function clearLocalDiagnosticLogs(): LocalDiagnosticInfo {
     fs.rmSync(logsDirectory, { recursive: true, force: true });
   }
   return info;
-}
-
-export function recordRendererProductEvent(input: unknown): void {
-  if (!isRecord(input) || (input.type !== "review.opened" && input.type !== "ide.selected")) {
-    throw new Error("Invalid product event input.");
-  }
-  const taskId = typeof input.taskId === "string" && /^task-[A-Za-z0-9_-]+$/.test(input.taskId) ? input.taskId : undefined;
-  const task = taskId ? readTask(taskId) : null;
-  const repositoryId = typeof input.repositoryId === "string" && input.repositoryId.length <= 128
-    ? input.repositoryId
-    : task?.repositoryId;
-  if (input.type === "review.opened") {
-    const scope = input.scope === "worktree" ? "worktree" : "task";
-    const target = input.target === "project" ? "project" : "task";
-    recordProductTelemetry("review.opened", {
-      taskId,
-      chatId: task?.chatId,
-      repositoryId,
-      data: { scope, target },
-    });
-    return;
-  }
-  const ideId = requiredString(input.ideId, "ideId");
-  if (!/^[A-Za-z0-9_-]{1,40}$/.test(ideId)) throw new Error("Invalid IDE selection.");
-  const surface = input.surface === "review" ? "review" : "composer";
-  recordProductTelemetry("ide.selected", {
-    taskId,
-    chatId: task?.chatId,
-    repositoryId,
-    data: { ideId, surface },
-  });
-}
-
-export async function retryTelemetrySpoolQueue(): Promise<void> {
-  if (!telemetryPolicyForMode(readModelEndpointSettings().mode).syncEnabled) return;
-  const provider = endpointProvider();
-  await uploadTelemetrySpool({
-    directory: telemetrySpoolDirectory(app.getPath("userData")),
-    endpoint: telemetryUploadEndpoint(provider),
-  });
-}
-
-export async function syncTelemetryNow(): Promise<TelemetrySyncResult> {
-  if (!telemetryPolicyForMode(readModelEndpointSettings().mode).syncEnabled) {
-    throw new Error("Telemetry sync is disabled by policy.");
-  }
-  const provider = endpointProvider();
-  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects(), readProductTelemetryEvents(), readLocalDiagnostics());
-  return syncTelemetryBundle({
-    directory: telemetrySpoolDirectory(app.getPath("userData")),
-    bundle,
-    endpoint: telemetryUploadEndpoint(provider),
-  });
-}
-
-export function scheduleManagedTelemetrySync() {
-  if (!telemetryPolicyForMode(readModelEndpointSettings().mode).syncEnabled || telemetrySyncTimer) return;
-  telemetrySyncTimer = setTimeout(() => {
-    telemetrySyncTimer = null;
-    void syncTelemetryNow().catch((cause) => {
-      recordLocalDiagnostic({
-        level: "warn",
-        source: "telemetry",
-        event: "sync.failed",
-        message: String(cause instanceof Error ? cause.message : cause),
-      });
-    });
-  }, 5000);
-  telemetrySyncTimer.unref?.();
 }

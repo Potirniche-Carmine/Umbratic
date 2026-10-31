@@ -42,6 +42,10 @@ pub fn is_generated_runtime_path(value: &str) -> bool {
         ".umbratic/index/",
         ".venv/",
         "venv/",
+        // Root-level only: a top-level `env/` is almost always a virtualenv
+        // from `python -m venv env`, while a nested `env/` may hold real
+        // configuration, so the name is not matched at any depth.
+        "env/",
         "node_modules/",
         ".git/",
         ".pytest_cache/",
@@ -78,8 +82,21 @@ pub fn is_generated_runtime_path(value: &str) -> bool {
         ".pytest_cache",
         ".mypy_cache",
         ".ruff_cache",
+        ".tox",
+        ".nox",
+        ".eggs",
+        ".conda",
+        "site-packages",
+        ".gradle",
+        ".terraform",
         ".next",
+        ".nuxt",
+        ".svelte-kit",
         ".vite",
+        ".turbo",
+        ".parcel-cache",
+        ".cache",
+        ".idea",
         "vendor",
         // `.umbratic` is not here. It used to be, which hid the whole directory
         // from ls, find, and search — including `.umbratic/artifacts/`, the
@@ -95,6 +112,7 @@ pub fn is_generated_runtime_path(value: &str) -> bool {
     let extension = basename.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
     prefixes.iter().any(|prefix| normalized.starts_with(prefix))
         || parts.iter().any(|part| names.contains(&part.as_str()))
+        || parts.iter().any(|part| part.ends_with(".egg-info"))
         || matches!(basename, "cmakecache.txt" | "compile_commands.json")
         || extensions.contains(&extension)
 }

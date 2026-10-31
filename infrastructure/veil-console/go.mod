@@ -1,9 +1,9 @@
 module umbratic-veil-console
 
-go 1.26.6
+go 1.26.10
 
 require (
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.54.0
 )

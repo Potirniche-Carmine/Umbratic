@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import * as fs from "node:fs";
 
 import {
   deleteTaskCheckpoint,
@@ -12,12 +13,13 @@ import {
   writeTaskWorkspace,
 } from "../storage";
 import type { TaskCheckpoint, TaskRecord, TaskWorkspace } from "../types";
-import { createGitCheckpoint, deleteGitCheckpointRef, materializeCheckpointWorktree, removeManagedWorktree, restoreGitCheckpointPath } from "./gitAdapter";
+import { createGitCheckpoint, deleteGitCheckpointRef, materializeCheckpointWorktree, removeManagedWorktree, restoreGitCheckpointPaths } from "./gitAdapter";
 import * as path from "node:path";
 
 const taskLocks = new Map<string, Promise<void>>();
 
-async function serialized<T>(taskId: string, action: () => Promise<T>): Promise<T> {
+async function serialized<T>(task: TaskRecord, action: () => Promise<T>): Promise<T> {
+  const taskId = fs.existsSync(task.worktreePath) ? fs.realpathSync(task.worktreePath) : path.resolve(task.worktreePath);
   const prior = taskLocks.get(taskId) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });
@@ -39,84 +41,102 @@ export async function createTaskCheckpoint(
   source: TaskCheckpoint["source"] = "manual",
   label?: string,
 ): Promise<TaskCheckpoint> {
-  return serialized(task.id, async () => {
-    if (task.workspaceMode !== "worktree" || !task.agentBranch) {
-      throw new Error("Checkpoints require an Umbratic-owned Git task worktree.");
-    }
-    const workspaces = readTaskWorkspaces(task.id);
-    if (!workspaces.some((workspace) => workspace.id === task.activeWorkspaceId)) {
-      const activeWorkspace: TaskWorkspace = {
-        id: task.activeWorkspaceId ?? `workspace-${task.id}-1`,
-        taskId: task.id,
-        number: 1,
-        branch: task.agentBranch,
-        path: task.worktreePath,
-        createdAt: task.createdAt,
-        state: "active",
-      };
-      task.activeWorkspaceId = activeWorkspace.id;
-      writeTaskWorkspace(activeWorkspace);
-      writeTask(task, false);
-    }
-    const id = `checkpoint-${crypto.randomBytes(10).toString("hex")}`;
-    const prior = readTaskCheckpoints(task.id).find((checkpoint) => checkpoint.state === "ready");
-    const checkpoint: TaskCheckpoint = {
-      id,
-      taskId: task.id,
-      workspaceId: task.activeWorkspaceId ?? `workspace-${task.id}-1`,
-      ...(prior ? { parentCheckpointId: prior.id } : {}),
-      source,
-      ...(label?.trim() ? { label: label.trim().slice(0, 160) } : {}),
-      commitOid: "",
-      treeOid: "",
-      createdAt: new Date().toISOString(),
-      state: "preparing",
-      pinned: source === "pre_restore" || source === "pre_cleanup",
-    };
-    writeTaskCheckpoint(checkpoint);
-    try {
-      const result = await createGitCheckpoint({
-        workspacePath: task.worktreePath,
-        taskId: task.id,
-        checkpointId: id,
-        seedCommit: prior?.commitOid || task.baseCommit,
-      });
-      if (source !== "pre_turn" && prior?.treeOid === result.treeOid) {
-        await deleteGitCheckpointRef(task.originalRepoPath, result.ref);
-        deleteTaskCheckpoint(id);
-        return prior;
-      }
-      const ready: TaskCheckpoint = {
-        ...checkpoint,
-        commitOid: result.commitOid,
-        treeOid: result.treeOid,
-        indexTreeOid: result.indexTreeOid,
-        logicalBytes: result.logicalBytes,
-        state: "ready",
-      };
-      task.latestCheckpointId = ready.id;
-      completeTaskCheckpoint(task, ready);
+  return serialized(task, () => createCheckpointUnlocked(task, source, label));
+}
 
-      const removable = readTaskCheckpoints(task.id)
-        .filter((candidate) => candidate.state === "ready" && !candidate.pinned && candidate.id !== ready.id)
-        .slice(9);
-      for (const candidate of removable) {
+async function createCheckpointUnlocked(task: TaskRecord, source: TaskCheckpoint["source"], label?: string): Promise<TaskCheckpoint> {
+  if (task.remote || task.workspaceKind !== "git") {
+    throw new Error("Checkpoints require a local Git folder.");
+  }
+  const workspaces = readTaskWorkspaces(task.id);
+  const previousWorkspace = workspaces.find((workspace) => workspace.id === task.activeWorkspaceId);
+  if (!previousWorkspace || path.resolve(previousWorkspace.path) !== path.resolve(task.worktreePath)) {
+    const number = Math.max(0, ...workspaces.map((workspace) => workspace.number)) + 1;
+    const activeWorkspace: TaskWorkspace = {
+      id: `workspace-${task.id}-${number}`,
+      taskId: task.id,
+      number,
+      branch: task.agentBranch,
+      path: task.worktreePath,
+      createdAt: task.createdAt,
+      state: "active",
+    };
+    task.activeWorkspaceId = activeWorkspace.id;
+    activateTaskWorkspace(task, activeWorkspace, previousWorkspace ? {
+      ...previousWorkspace, state: "recovery", sourceCheckpointId: task.latestCheckpointId,
+    } : undefined);
+  }
+  const id = `checkpoint-${crypto.randomBytes(10).toString("hex")}`;
+  const prior = readTaskCheckpoints(task.id).find((checkpoint) => checkpoint.id === task.latestCheckpointId && checkpoint.state === "ready");
+  const checkpoint: TaskCheckpoint = {
+    id,
+    taskId: task.id,
+    workspaceId: task.activeWorkspaceId ?? `workspace-${task.id}-1`,
+    ...(prior ? { parentCheckpointId: prior.id } : {}),
+    source,
+    ...(label?.trim() ? { label: label.trim().slice(0, 160) } : {}),
+    commitOid: "",
+    treeOid: "",
+    createdAt: new Date().toISOString(),
+    state: "preparing",
+    pinned: source === "pre_restore" || source === "pre_cleanup",
+  };
+  writeTaskCheckpoint(checkpoint);
+  const previousLatest = task.latestCheckpointId;
+  const previousTurn = task.turnCheckpointId;
+  let ready: TaskCheckpoint;
+  try {
+    const result = await createGitCheckpoint({
+      workspacePath: task.worktreePath,
+      taskId: task.id,
+      checkpointId: id,
+      seedCommit: prior?.commitOid || task.baseCommit,
+    });
+    ready = {
+      ...checkpoint,
+      commitOid: result.commitOid,
+      treeOid: result.treeOid,
+      indexTreeOid: result.indexTreeOid,
+      logicalBytes: result.logicalBytes,
+      state: "ready",
+    };
+    task.latestCheckpointId = ready.id;
+    if (source === "pre_turn") task.turnCheckpointId = ready.id;
+    completeTaskCheckpoint(task, ready);
+  } catch (error) {
+    task.latestCheckpointId = previousLatest;
+    task.turnCheckpointId = previousTurn;
+    writeTaskCheckpoint({ ...checkpoint, state: "failed" });
+    throw error;
+  }
+  // The requested restore target becomes referenced at activation below.
+  // Do not prune it while publishing the recovery snapshot before that switch.
+  if (source === "pre_restore") return ready;
+  try {
+    const referenced = referencedCheckpoints();
+    const removable = readTaskCheckpoints(task.id)
+      .filter((candidate) => candidate.state === "ready" && !candidate.pinned && !referenced.has(candidate.id))
+      .slice(9);
+    for (const candidate of removable) {
+      try {
         await deleteGitCheckpointRef(task.originalRepoPath, checkpointRef(candidate));
         deleteTaskCheckpoint(candidate.id);
-      }
-      return ready;
-    } catch (error) {
-      writeTaskCheckpoint({ ...checkpoint, state: "failed" });
-      throw error;
+      } catch { /* A retention failure must not invalidate a published checkpoint. */ }
     }
-  });
+  } catch { /* Retention is best effort after atomic publication. */ }
+  return ready;
+}
+
+function referencedCheckpoints(): Set<string | undefined> {
+  return new Set(readTasks().flatMap((task) => [
+    task.latestCheckpointId, task.turnCheckpointId, task.sourceCheckpointId,
+    ...readTaskWorkspaces(task.id).filter((workspace) => workspace.state !== "retired" && workspace.state !== "failed")
+      .map((workspace) => workspace.sourceCheckpointId),
+  ]));
 }
 
 export async function createTurnCheckpoint(task: TaskRecord): Promise<TaskCheckpoint> {
-  const checkpoint = await createTaskCheckpoint(task, "pre_turn", "Before turn");
-  task.turnCheckpointId = checkpoint.id;
-  writeTask(task, false);
-  return checkpoint;
+  return createTaskCheckpoint(task, "pre_turn", "Before turn");
 }
 
 export const UNDO_UNSAFE_NO_CHECKPOINT =
@@ -124,25 +144,20 @@ export const UNDO_UNSAFE_NO_CHECKPOINT =
 export const UNDO_UNSAFE_NO_BASELINE =
   "Undo is unsafe: no verified undo baseline.";
 
-/**
- * Fail-closed restore of one file to its pre-turn state, for isolated git
- * worktrees. Never resets to task.baseCommit, and never touches a file other
- * than the one named: undo is per file, so a turn is only ever given back the
- * work somebody asked for by name.
- */
-export async function restoreTurnCheckpointFile(task: TaskRecord, relativePath: string): Promise<void> {
+/** Restore only the requested files from the automatic pre-turn snapshot. */
+export async function restoreTurnCheckpointFiles(task: TaskRecord, relativePaths: string[]): Promise<void> {
   if (!task.turnCheckpointId) {
     throw new Error(UNDO_UNSAFE_NO_CHECKPOINT);
   }
-  const checkpoint = readyCheckpoint(task.id, task.turnCheckpointId);
-  if (checkpoint.source !== "pre_turn") {
-    throw new Error("The automatic turn checkpoint is not restorable.");
-  }
-  await serialized(task.id, async () => {
-    await restoreGitCheckpointPath({
+  await serialized(task, async () => {
+    const checkpoint = readyCheckpoint(task.id, task.turnCheckpointId!);
+    if (checkpoint.source !== "pre_turn" || checkpoint.workspaceId !== task.activeWorkspaceId) {
+      throw new Error("The automatic turn checkpoint does not belong to this workspace.");
+    }
+    await restoreGitCheckpointPaths({
       workspacePath: task.worktreePath,
       checkpointCommit: checkpoint.commitOid,
-      relativePath,
+      relativePaths,
     });
   });
 }
@@ -165,7 +180,7 @@ export function setTaskCheckpointPinned(taskId: string, checkpointId: string, pi
 }
 
 export async function removeTaskCheckpoint(task: TaskRecord, checkpointId: string): Promise<void> {
-  await serialized(task.id, async () => {
+  await serialized(task, async () => {
     const checkpoint = readyCheckpoint(task.id, checkpointId);
     if (checkpoint.pinned || checkpoint.source !== "manual") {
       throw new Error("Unpin this manual checkpoint before deleting it.");
@@ -204,8 +219,8 @@ export async function forkTaskFromCheckpoint(input: {
   checkpointId: string;
   managedRoot: string;
 }): Promise<TaskRecord> {
-  const checkpoint = readyCheckpoint(input.sourceTask.id, input.checkpointId);
-  return serialized(input.sourceTask.id, async () => {
+  return serialized(input.sourceTask, async () => {
+    const checkpoint = readyCheckpoint(input.sourceTask.id, input.checkpointId);
     const workspace: TaskWorkspace = {
       id: `workspace-${input.targetTask.id}-1`, taskId: input.targetTask.id, number: 1,
       branch: input.targetTask.agentBranch, path: input.targetTask.worktreePath,
@@ -244,11 +259,11 @@ export async function restoreTaskCheckpoint(input: {
   managedRoot: string;
   skipRecoveryCheckpoint?: boolean;
 }): Promise<TaskRecord> {
-  const checkpoint = readyCheckpoint(input.task.id, input.checkpointId);
-  const recoveryCheckpoint = input.skipRecoveryCheckpoint
-    ? undefined
-    : await createTaskCheckpoint(input.task, "pre_restore", "Recovery before restore");
-  return serialized(input.task.id, async () => {
+  return serialized(input.task, async () => {
+    const checkpoint = readyCheckpoint(input.task.id, input.checkpointId);
+    const recoveryCheckpoint = input.skipRecoveryCheckpoint
+      ? undefined
+      : await createCheckpointUnlocked(input.task, "pre_restore", "Recovery before restore");
     const existing = readTaskWorkspaces(input.task.id);
     const number = Math.max(0, ...existing.map((workspace) => workspace.number)) + 1;
     const targetPath = path.join(path.resolve(input.managedRoot), `${input.task.id}-restore-${number}`);
@@ -258,6 +273,7 @@ export async function restoreTaskCheckpoint(input: {
       path: targetPath, sourceCheckpointId: checkpoint.id, createdAt: new Date().toISOString(), state: "preparing",
     };
     writeTaskWorkspace(preparing);
+    let materialized = false;
     try {
       await materializeCheckpointWorktree({
         repositoryPath: input.task.originalRepoPath,
@@ -266,6 +282,7 @@ export async function restoreTaskCheckpoint(input: {
         targetPath,
         managedRoot: input.managedRoot,
       });
+      materialized = true;
       const old = existing.find((workspace) => workspace.id === input.task.activeWorkspaceId) ?? {
         id: input.task.activeWorkspaceId ?? `workspace-${input.task.id}-1`, taskId: input.task.id,
         number: 1, branch: input.task.agentBranch, path: input.task.worktreePath,
@@ -274,6 +291,22 @@ export async function restoreTaskCheckpoint(input: {
       const active = { ...preparing, state: "active" as const };
       const restored: TaskRecord = {
         ...input.task,
+        state: "completed",
+        workspaceMode: "worktree",
+        worktreeRootTaskId: input.task.id,
+        latestCheckpointId: checkpoint.id,
+        turnCheckpointId: undefined,
+        baselineFiles: undefined,
+        undoFileHashes: undefined,
+        latestTest: undefined,
+        error: undefined,
+        metadataPath: undefined,
+        approvedAt: undefined,
+        mergedAt: undefined,
+        rejectedAt: undefined,
+        reviewScope: "task",
+        reviewBaselineLabel: "Restored checkpoint",
+        reviewBaselineOid: checkpoint.commitOid.slice(0, 10),
         worktreePath: targetPath,
         agentBranch: branch,
         baseCommit: checkpoint.commitOid,
@@ -292,37 +325,11 @@ export async function restoreTaskCheckpoint(input: {
         ...(recoveryCheckpoint ? { sourceCheckpointId: recoveryCheckpoint.id } : {}),
         state: input.skipRecoveryCheckpoint ? "failed" : "recovery",
       });
-      for (const recovery of existing.filter((workspace) => workspace.state === "recovery" && workspace.id !== old.id)) {
-        try {
-          await removeManagedWorktree(input.task.originalRepoPath, recovery.path, input.managedRoot);
-          writeTaskWorkspace({ ...recovery, state: "retired" });
-        } catch {
-          // Keep an older recovery workspace recorded when ownership or Git validation prevents safe cleanup.
-        }
-      }
-      const referencedRecoveryCheckpoints = new Set(
-        readTasks().flatMap((candidate) => [
-          candidate.sourceCheckpointId,
-          ...readTaskWorkspaces(candidate.id)
-            .filter((workspace) => workspace.state !== "retired" && workspace.state !== "failed")
-            .map((workspace) => workspace.sourceCheckpointId),
-        ]).filter((value): value is string => Boolean(value)),
-      );
-      for (const priorRecovery of readTaskCheckpoints(input.task.id).filter((candidate) =>
-        candidate.source === "pre_restore"
-        && candidate.id !== recoveryCheckpoint?.id
-        && !referencedRecoveryCheckpoints.has(candidate.id)
-      )) {
-        try {
-          await deleteGitCheckpointRef(input.task.originalRepoPath, checkpointRef(priorRecovery));
-          deleteTaskCheckpoint(priorRecovery.id);
-        } catch {
-          // Retention cleanup is best-effort after the atomic workspace switch succeeds.
-        }
-      }
+      // Recovery workspaces may contain ignored files or still belong to
+      // another chat. Never automatically force-remove somebody else's data.
       return restored;
     } catch (error) {
-      await removeManagedWorktree(input.task.originalRepoPath, targetPath, input.managedRoot).catch(() => undefined);
+      if (materialized) await removeManagedWorktree(input.task.originalRepoPath, targetPath, input.managedRoot).catch(() => undefined);
       writeTaskWorkspace({ ...preparing, state: "failed" });
       throw error;
     }

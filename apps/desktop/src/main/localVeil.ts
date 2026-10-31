@@ -1,3 +1,4 @@
+import type { LocalImageRuntime } from "./localImage";
 import { spawn, type ChildProcess } from "node:child_process";
 import { stopChild, stopRequested } from "./childShutdown";
 import * as crypto from "node:crypto";
@@ -5,7 +6,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
 
-import { isLocalhostUrl } from "./policy";
+import { isLocalhostUrl } from "./utils";
 import type { SamplingProfile } from "./modelCatalog";
 import type { ReasoningEffort } from "../shared/desktopApi";
 import type { ActiveModelEndpointSettings } from "./types";
@@ -34,6 +35,8 @@ export type LocalRuntimeConnection = {
    * fact, and Veil drops a thinking directive for a model that lacks it.
    */
   reasoning: boolean;
+  /** True only when the chat runtime has loaded a vision projector. */
+  vision: boolean;
   /**
    * How hard to ask this model to think, or null to say nothing about it.
    * Null is the honest value for a model whose chat template does not read an
@@ -53,6 +56,7 @@ export type LocalRuntimeConnection = {
    * which is configured with the model id.
    */
   speech?: { baseUrl: string; apiKey: string; model: string };
+  image?: LocalImageRuntime;
 };
 
 export type LocalVeilDiagnostic = {
@@ -106,11 +110,13 @@ function localVeilKey(
     runtimeBaseUrl: runtime.baseUrl,
     runtimeApiKey: runtime.apiKey,
     reasoning: runtime.reasoning,
+    vision: runtime.vision,
     // Both join the key: Veil reads them from its environment once at startup,
     // so a changed effort or a changed sampling set has to bring it back up.
     reasoningEffort: runtime.reasoningEffort ?? null,
     sampling: runtime.sampling ?? null,
     speech: runtime.speech ?? null,
+    image: runtime.image ?? null,
   });
 }
 
@@ -291,14 +297,18 @@ export function localVeilEnvironment(input: {
     VEIL_PROVIDER_BASE_URL: runtime.baseUrl,
     VEIL_PROVIDER_API_KEY: runtime.apiKey,
     VEIL_MODEL_REASONING: runtime.reasoning ? "true" : "false",
+    VEIL_MODEL_VISION: runtime.vision ? "true" : "false",
     VEIL_CONTEXT_LENGTH: String(normalizeContextLength(contextLength)),
     VEIL_TEMPLATE_REGISTRY_PATH: "",
-    VEIL_TELEMETRY_ENABLED: "false",
-    VEIL_TELEMETRY_RETENTION_DAYS: "30",
-    VEIL_TELEMETRY_STORE_PATH: "",
     ...sampling,
     ...reasoningEffort,
     ...speech,
+    ...(runtime.image ? {
+      VEIL_IMAGE_BINARY: runtime.image.binary,
+      VEIL_IMAGE_WEIGHTS: runtime.image.weights,
+      VEIL_IMAGE_ENCODER: runtime.image.encoder,
+      VEIL_IMAGE_VAE: runtime.image.vae,
+    } : {}),
   };
 }
 

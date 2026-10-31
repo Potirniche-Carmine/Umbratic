@@ -1,5 +1,5 @@
+import { activeRunnerProcesses } from "./runnerLifecycle";
 import { pathKey } from "./utils";
-import { activeRunnerProcesses } from "./mainRuntime";
 import {
   app,
 } from "electron";

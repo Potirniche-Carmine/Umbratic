@@ -22,13 +22,13 @@ function taskIn(root) {
   return { worktreePath: root, originalRepoPath: root };
 }
 
-maybe("artifact preview refuses paths the artifact tool does not write", async () => {
+maybe("artifact preview refuses unsupported and escaping paths", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-artifact-preview-"));
   try {
     for (const requested of [
-      "notes/report.docx",
+      "notes/report.txt",
       ".umbratic/artifacts/docx/../../../etc/passwd",
-      ".umbratic/artifacts/pptx/report.docx",
+      "C:\\private\\report.docx",
       path.join(root, documentPath),
     ]) {
       const result = await service.readArtifactPreview(taskIn(root), requested);
@@ -38,6 +38,27 @@ maybe("artifact preview refuses paths the artifact tool does not write", async (
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("preview accepts a workspace DOCX and requests its complete content", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-artifact-preview-"));
+  const requests: any[] = [];
+  const previewService = loadTypeScriptModule(new URL("../src/main/artifactReview.ts", import.meta.url), {
+    mocks: { "./artifacts/service": { runInWorker: async (request) => {
+      requests.push(request);
+      return { ok: true, outline: { blocks: [{ id: "b1", kind: "paragraph", text: "A readable PRD." }] } };
+    } } },
+  });
+  try {
+    fs.writeFileSync(path.join(root, "PRD.docx"), "test");
+    const result = await previewService.readArtifactPreview(taskIn(root), "PRD.docx");
+    assert.equal(result.ok, true);
+    assert.equal(result.preview.blocks[0].text, "A readable PRD.");
+    assert.equal(requests[0].options.includeContent, true);
+    const blocked = await previewService.readArtifactPreview(taskIn(root), ".env.docx");
+    assert.equal(blocked.code, "unsafe");
+    assert.equal(requests.length, 1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 maybe("artifact preview reports a missing file rather than throwing", async () => {
@@ -51,9 +72,12 @@ maybe("artifact preview reports a missing file rather than throwing", async () =
   }
 });
 
-maybe("artifact preview rejects symlinked and oversized documents", async () => {
+maybe("artifact preview rejects symlinked and oversized documents", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-artifact-preview-"));
-  const outside = path.join(os.tmpdir(), `umbratic-artifact-preview-outside-${process.pid}.docx`);
+  const outsideDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-artifact-preview-outside-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(outsideDirectory, { recursive: true, force: true }));
+  const outside = path.join(outsideDirectory, "outside.docx");
   const absoluteDocument = path.join(root, documentPath);
   fs.mkdirSync(path.dirname(absoluteDocument), { recursive: true });
   fs.writeFileSync(outside, "docx", "utf8");

@@ -294,4 +294,3 @@ func xmlParameterArguments(body string) string {
 	}
 	return string(encoded)
 }
-

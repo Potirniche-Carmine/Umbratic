@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"umbratic-veil/internal/entitlement"
-	"umbratic-veil/internal/updatefeed"
 )
 
 const (
@@ -123,9 +122,6 @@ type SessionResult struct {
 	Token     string    `json:"session_token"`
 	ExpiresAt time.Time `json:"expires_at"`
 	OrgName   string    `json:"org_name"`
-	// UpdateToken lets this device download app releases from the update feed
-	// until it opens its next session. Empty on a build with no customer key.
-	UpdateToken string `json:"update_token,omitempty"`
 }
 
 type CodeResult struct {
@@ -503,10 +499,9 @@ func (s *Store) NewSession(challengeUID, signatureText string) (SessionResult, e
 	session := Session{Hash: hashSecret(plain), DeviceUID: device.UID, CreatedAt: now, ExpiresAt: now.Add(SessionTTL)}
 	s.sessions[session.Hash] = session
 	return SessionResult{
-		Token:       plain,
-		ExpiresAt:   session.ExpiresAt,
-		OrgName:     s.data.OrgName,
-		UpdateToken: updatefeed.Token(s.entitlement.OrgUID, now),
+		Token:     plain,
+		ExpiresAt: session.ExpiresAt,
+		OrgName:   s.data.OrgName,
 	}, nil
 }
 

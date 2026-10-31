@@ -76,16 +76,21 @@ function loadRuntime() {
         readTasks: () => [...tasks.values()],
         writeTasks: () => {},
         writeChat: () => {},
-        writeProductTelemetryEvent: () => {},
         readPermissionModeSetting: () => "normal",
       },
       "./chatStore": { updateChatFromTask: () => {} },
-      "./backendSettings": { scheduleManagedTelemetrySync: () => {} },
       "./diagnostics": { recordBackendEventDiagnostic: () => {}, recordLocalDiagnostic: () => {} },
     },
   });
   return { runtime, tasks };
 }
+
+test("completed and stopped folder tasks retain their undo baseline", () => {
+  const { runtime } = loadRuntime();
+  const task = { id: "stopped", state: "completed", baselineFiles: { "note.txt": "before" } };
+  assert.equal(runtime.pruneClosedTaskInternalSnapshots(task).baselineFiles, task.baselineFiles);
+  assert.equal(runtime.pruneClosedTaskInternalSnapshots({ ...task, state: "merged" }).baselineFiles, undefined);
+});
 
 test("a queued follow-up's message is stored after the answer it followed", () => {
   const { runtime, tasks } = loadRuntime();

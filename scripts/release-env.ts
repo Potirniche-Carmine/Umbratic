@@ -1,18 +1,18 @@
-// The release machine's identity, kept outside the repository.
-//
-// Signing a build and publishing it need credentials — an Apple notarization
-// key, an Azure sign-in, R2 access keys — and every one of them belongs to
-// the machine that releases, not to the source tree. They live in one file in
-// the user's home directory; both `desktop:release` and `publish:release` read
-// it, so a release machine is set up exactly once and the repository never
-// carries a secret. `docs/release.env.example` documents every key.
+// Release-machine identity. Mac release work lives in the repository's ignored
+// artifacts/release-work directory; credentials must never be committed.
+// docs/release.env.example documents every key.
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-export const releaseEnvPath = path.join(os.homedir(), ".umbratic", "release.env");
+export const releaseDirectory = process.platform === "darwin"
+  ? path.resolve(import.meta.dirname, "../artifacts/release-work")
+  : path.join(os.homedir(), "umbratic-release");
+export const releaseEnvPath = process.platform === "darwin"
+  ? path.join(releaseDirectory, "release.env")
+  : path.join(os.homedir(), ".umbratic", "release.env");
 
 /**
  * Reads the release env file into `process.env`, without overriding anything
@@ -27,11 +27,11 @@ export function loadReleaseEnv(): boolean {
   } catch {
     return false;
   }
-  for (const raw of text.split(/\r?\n/)) {
+  for (const [index, raw] of text.split(/\r?\n/).entries()) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
     const separator = line.indexOf("=");
-    if (separator <= 0) throw new Error(`${releaseEnvPath}: expected KEY=value, got: ${line}`);
+    if (separator <= 0) throw new Error(`${releaseEnvPath}:${index + 1}: expected KEY=value`);
     const key = line.slice(0, separator).trim();
     let value = line.slice(separator + 1).trim();
     // Quotes are allowed around a value, and stripped, so a path with spaces
@@ -78,4 +78,19 @@ export function windowsSigningConfig(): {
     );
   }
   return { endpoint: endpoint!, codeSigningAccountName: codeSigningAccountName!, certificateProfileName: certificateProfileName!, publisherName: publisherName! };
+}
+
+/** Signed builds must never silently fall back to an unsigned or unnotarized app. */
+export function requireSigningEnvironment(platform = process.platform): void {
+  if (process.env.UMBRATIC_LLAMA_CPU_ONLY === "1") {
+    throw new Error("CPU-only development packages cannot be released.");
+  }
+  if (platform === "win32") {
+    if (!windowsSigningConfig()) throw new Error("Windows release signing is required. Configure UMBRATIC_WIN_SIGN_* or use --unsigned for local testing.");
+    return;
+  }
+  if (platform !== "darwin") throw new Error("Desktop releases support macOS and Windows only.");
+  const apiKey = ["APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"].every((key) => process.env[key]?.trim());
+  const appleId = ["APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"].every((key) => process.env[key]?.trim());
+  if (!apiKey && !appleId) throw new Error("macOS releases require complete Apple notarization credentials. Use --unsigned for local testing.");
 }

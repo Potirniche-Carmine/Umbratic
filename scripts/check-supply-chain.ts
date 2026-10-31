@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
+import { llamaCpuBuildFlags } from "../apps/desktop/scripts/llama-build-config.ts";
 
 const root = process.cwd();
 const manifestPaths = [
@@ -162,6 +164,51 @@ compareExactSet(
   supplyChainPolicy.allowedNpmPlatformPackages,
 );
 
+// A reviewed local patch is pinned by its complete file manifest, so neither
+// source edits nor additional executable files can silently bypass registry pins.
+for (const vendored of [...supplyChainPolicy.reviewedVendoredCargoPackages ?? [], ...supplyChainPolicy.reviewedVendoredGoPackages ?? []]) {
+  const directory = path.resolve(root, vendored.path);
+  const sums = fs.readFileSync(path.join(directory, "SHA256SUMS.json"));
+  if (crypto.createHash("sha256").update(sums).digest("hex") !== vendored.manifestSha256) {
+    fail(`Vendored package ${vendored.name} checksum manifest changed without review.`);
+  }
+  const checksums = JSON.parse(sums.toString("utf8"));
+  const entries = fs.readdirSync(directory, { recursive: true, withFileTypes: true });
+  if (entries.some((entry) => entry.isSymbolicLink())) fail(`Vendored ${vendored.name} contains an unreviewed symbolic link.`);
+  const files = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.relative(directory, path.join(entry.parentPath, entry.name)).replaceAll("\\", "/"))
+    .filter((name) => name !== "SHA256SUMS.json");
+  compareExactSet(`Vendored ${vendored.name} file`, files, Object.keys(checksums));
+  for (const file of files) {
+    const digest = crypto.createHash("sha256").update(fs.readFileSync(path.join(directory, file))).digest("hex");
+    if (digest !== checksums[file]) fail(`Vendored ${vendored.name} file ${file} changed without review.`);
+  }
+}
+const caddyModule = fs.readFileSync(path.join(root, "infrastructure/veil-console/deploy/caddy/go.mod"), "utf8");
+const caddyReplacements = caddyModule.split(/\r?\n/).map((line) => line.trim()).filter((line) => /^replace\s/.test(line));
+compareExactSet("Caddy module replacement", caddyReplacements, ["replace github.com/go-jose/go-jose/v3 => ../../../../third_party/go-jose-v3"]);
+if (!/^go 1\.26\.10$/m.test(caddyModule)) fail("The Caddy source build must use the reviewed patched Go toolchain.");
+
+// The sole omitted peer is a backend we do not ship. Pin the exception to
+// the actual locked peer and require NSIS-only Windows packaging.
+for (const omitted of supplyChainPolicy.omittedNpmPeerPackages ?? []) {
+  const separator = omitted.lastIndexOf("@");
+  const name = omitted.slice(0, separator);
+  const version = omitted.slice(separator + 1);
+  const entry = lock.packages[`node_modules/${name}`];
+  if (name !== "electron-builder-squirrel-windows" || entry?.version !== version || entry.peer !== true) {
+    fail(`Omitted npm peer ${omitted} does not match the reviewed unused Squirrel backend.`);
+  }
+  const builder = fs.readFileSync(path.join(root, "apps/desktop/electron-builder.yml"), "utf8");
+  const windows = builder.match(/^win:\n([\s\S]*?)(?=^[a-zA-Z][^\n]*:|$(?![\s\S]))/m)?.[1] ?? "";
+  const targets = (windows.match(/^  target:\n((?: {4}.*(?:\n|$))*)/m)?.[1] ?? "")
+    .split("\n").map((line) => line.trim()).filter(Boolean);
+  if (targets.length !== 1 || targets[0] !== "- nsis" || /squirrel/i.test(windows)) {
+    fail("Omitting the Squirrel peer requires NSIS-only Windows packaging.");
+  }
+}
+
 const cargoLock = fs.readFileSync(path.join(root, "Cargo.lock"), "utf8");
 for (const source of cargoLock.matchAll(/^source = "([^"]+)"$/gm)) {
   if (source[1] !== "registry+https://github.com/rust-lang/crates.io-index") {
@@ -189,6 +236,14 @@ if (cargoMetadata.error || cargoMetadata.status !== 0) {
   fail(`Unable to validate locked Cargo metadata: ${cargoMetadata.error?.message ?? cargoMetadata.stderr.trim()}`);
 } else {
   const metadata = JSON.parse(cargoMetadata.stdout);
+  const workspacePackages = new Set(metadata.workspace_members);
+  for (const entry of metadata.packages.filter((value) => !value.source && !workspacePackages.has(value.id))) {
+    const reviewed = (supplyChainPolicy.reviewedVendoredCargoPackages ?? []).some((value) => (
+      value.name === entry.name && value.version === entry.version
+      && path.resolve(root, value.path, "Cargo.toml") === entry.manifest_path
+    ));
+    if (!reviewed) fail(`Cargo local package ${entry.name}@${entry.version} is not a reviewed source patch.`);
+  }
   const allowedLicenses = new Set(supplyChainPolicy.allowedCargoLicenseExpressions ?? []);
   for (const packageMetadata of metadata.packages ?? []) {
     if (!packageMetadata.source) continue;
@@ -295,24 +350,59 @@ const llamaFields = new Map(
 if (llamaFields.get("repository") !== "https://github.com/ggml-org/llama.cpp.git") {
   fail("third_party/llama.cpp.pin must clone llama.cpp from its upstream GitHub repository.");
 }
-if (!/^b\d+$/.test(llamaFields.get("tag") ?? "")) {
-  fail("third_party/llama.cpp.pin must pin a llama.cpp build tag such as b10419.");
+if (!/^v\d+\.\d+\.\d+$/.test(llamaFields.get("tag") ?? "")) {
+  fail("third_party/llama.cpp.pin must pin an upstream stable semantic-version release.");
 }
 if (!/^[0-9a-f]{40}$/.test(llamaFields.get("commit") ?? "")) {
   fail("third_party/llama.cpp.pin must pin a full 40-character commit SHA.");
 }
 const preparePackageScript = fs.readFileSync(path.join(root, "apps/desktop/scripts/prepare-package.ts"), "utf8");
 for (const requiredFlag of [
-  "-DLLAMA_CURL=OFF",
-  // Never -march=native in a build somebody else runs.
-  "-DGGML_NATIVE=OFF",
+  "-DLLAMA_OPENSSL=OFF",
+  "-DLLAMA_BUILD_BORINGSSL=OFF",
+  "-DLLAMA_BUILD_LIBRESSL=OFF",
+  "-DGGML_RPC=OFF",
+  "-DLLAMA_SUBPROCESS=OFF",
+  "-DLLAMA_BUILD_UI=OFF",
+  "-DLLAMA_USE_PREBUILT_UI=OFF",
+  "-DLLAMA_CONNECT=OFF",
+  "-DLLAMA_LLGUIDANCE=OFF",
   // Backends are selected on the user's machine, not on the build machine.
   "-DGGML_BACKEND_DL=ON",
-  "-DGGML_CPU_ALL_VARIANTS=ON",
 ]) {
   if (!preparePackageScript.includes(requiredFlag)) {
     fail(`Packaged llama-server must be configured with ${requiredFlag}.`);
   }
+}
+const downloadPatchName = "llama.cpp-disable-remote-downloads.patch";
+const downloadPatch = fs.readFileSync(path.join(root, "third_party", downloadPatchName), "utf8");
+const downloadDenial = "Remote downloads are disabled in the Umbratic runtime.";
+if (!preparePackageScript.includes(downloadPatchName) || !downloadPatch.includes(`+    throw std::runtime_error("${downloadDenial}");`)) {
+  fail("Packaged llama-server must apply the reviewed central model/media download rejection patch.");
+}
+const verifyPackageScript = fs.readFileSync(path.join(root, "apps/desktop/scripts/verify-package.ts"), "utf8");
+const verifyDownloadsScript = fs.readFileSync(path.join(root, "apps/desktop/scripts/verify-llama-downloads.ts"), "utf8");
+if (!verifyPackageScript.includes('import { verifyLlamaDownloads } from "./verify-llama-downloads.ts"')
+    || !verifyPackageScript.includes('await verifyLlamaDownloads(path.join(resources, "llama-server", executable("llama-server")))')) {
+  fail("Package verification must import and invoke the compiled llama-server download rejection probe.");
+}
+if (!verifyDownloadsScript.includes(downloadDenial) || !verifyDownloadsScript.includes('for (const scheme of ["http", "https"])')) {
+  fail("Package verification must exercise the compiled HTTP and HTTPS download rejection.");
+}
+if (!preparePackageScript.includes("...llamaCpuBuildFlags(process.platform, process.arch)")) {
+  fail("Packaged llama-server must use the reviewed per-platform CPU build flags.");
+}
+for (const [platform, arch] of [
+  ["darwin", "arm64"], ["darwin", "x64"], ["win32", "x64"], ["win32", "arm64"],
+] as const) {
+  const expected = platform === "win32" && arch === "arm64"
+    ? [
+      "-DGGML_NATIVE=OFF", "-DGGML_CPU_ALL_VARIANTS=OFF", "-DGGML_CPU_ARM_ARCH=armv8-a",
+      "-DGGML_OPENMP=OFF", "-DCMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc",
+      "-DCMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc",
+    ]
+    : ["-DGGML_NATIVE=OFF", "-DGGML_CPU_ALL_VARIANTS=ON"];
+  compareExactSet(`llama-server ${platform}/${arch} CPU flag`, llamaCpuBuildFlags(platform, arch), expected);
 }
 if (!preparePackageScript.includes("pin.commit")) {
   fail("Packaged llama-server must verify the cloned checkout against the pinned commit SHA.");
@@ -328,6 +418,19 @@ if (/require\(["']electron["']\)/.test(desktopDevScript)) {
 const electronBuilderConfig = fs.readFileSync(path.join(root, "apps/desktop/electron-builder.yml"), "utf8");
 if (!/^electronDist:\s+\.\.\/\.\.\/node_modules\/electron\/dist\s*$/m.test(electronBuilderConfig)) {
   fail("Electron Builder must use the explicitly provisioned local Electron distribution.");
+}
+
+// Every supported image runtime is built from the same reviewed fixed sources.
+const imagePin = JSON.parse(fs.readFileSync(path.join(root, "third_party/stable-diffusion.cpp.json"), "utf8"));
+const imageSource = imagePin.source;
+if (imagePin.assets || imagePin.macSource) fail("Image runtimes must not fall back to unreviewed prebuilt archives.");
+compareExactSet("Image runtime target", imagePin.targets ?? [], ["darwin-arm64", "darwin-x64", "win32-x64", "linux-x64"]);
+if (imageSource?.deploymentTarget !== "12.0") fail("The macOS image runtime must preserve the macOS 12 deployment target.");
+for (const [name, repository] of [["runtime", "leejet/stable-diffusion.cpp"], ["ggml", "leejet/ggml"]]) {
+  const source = imageSource?.[name];
+  if (source?.repository !== repository || !/^[0-9a-f]{40}$/.test(source?.commit ?? "")
+      || !/^[0-9a-f]{64}$/.test(source?.sha256 ?? "") || !Number.isSafeInteger(source?.bytes)
+      || source.bytes < 1 || source.bytes > 150 * 1024 * 1024) fail(`The image runtime ${name} must pin its official source archive and SHA-256.`);
 }
 
 if (failures.length) {

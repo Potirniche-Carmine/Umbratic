@@ -272,3 +272,11 @@ test("buildTextDiff produces a patience unified patch for local snapshots", () =
 });
 
 
+
+test("quoted diff paths handle escapes without ambiguous backtracking", () => {
+  const file = review.parseReviewPatch('diff --git "a/old\\\\name.txt" "b/new\\\\name.txt"');
+  assert.equal(file.path, "b/new\\name.txt");
+  assert.equal(file.oldPath, "a/old\\name.txt");
+  const malformed = `diff --git "${"\\!".repeat(20_000)}`;
+  assert.doesNotThrow(() => review.parseReviewPatch(malformed));
+});

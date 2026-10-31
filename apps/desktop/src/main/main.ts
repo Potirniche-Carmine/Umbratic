@@ -1,13 +1,17 @@
+import { readGeneratedImage } from "./generatedImage";
+import { imageRuntimeBinary } from "./localImage";
+import { readImageModelSetting, writeImageModelSetting } from "./settingsStorage";
+import { activeRunnerProcesses, stopRunnerProcess } from "./runnerLifecycle";
 import { getMainWindow } from "./mainRuntime";
 import { setMainWindow, setPermissionModeValue } from "./mainRuntime";
 import { onWorkspaceIndexProgress } from "./indexerService";
-import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveLocalMtpSetting, saveReasoningEffortSetting, saveShowThinkingSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
+import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, getBackendStatus, getCapabilityProbes, importSkillFromDialog, launchAtLoginStatus, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, saveContextLengthSetting, saveDictationSettings, saveLaunchAtLoginSetting, saveLocalMtpSetting, saveReasoningEffortSetting, saveSendOnEnterSetting, saveShowThinkingSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
 import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
 import { clearUnsavedDraft, readUnsavedDraft, writeUnsavedDraft } from "./unsavedDrafts";
-import { createCheckpoint, deleteCheckpoint, forkCheckpoint, listTaskCheckpoints, restoreCheckpoint, setCheckpointPinned } from "./checkpointActions";
+import { undoTaskChanges } from "./reviewUndo";
 import { cancelDictation, sendDictationAudio, startDictation, stopDictation } from "./dictation";
 import { listAvailableIdes, openRepositoryInIde, openTaskInIde } from "./ideLauncher";
-import { activeRunnerProcesses, appIcon, compactClosedTaskStorage, flushPendingTaskEvents, flushRendererEvents, getTask, pendingPermissions, publicTask, recordProductTelemetry, windowChromeDark, windowChromeHeight, windowChromeLight, windowChromeSymbolDark, windowChromeSymbolLight } from "./mainRuntime";
+import { appIcon, compactClosedTaskStorage, flushPendingTaskEvents, flushRendererEvents, getTask, pendingPermissions, publicTask, windowChromeDark, windowChromeHeight, windowChromeLight, windowChromeSymbolDark, windowChromeSymbolLight } from "./mainRuntime";
 import { checkoutRepositoryBranch, getRepository, listRepositoryBranches, openChatAttachment, pickAttachmentFiles, pickRepository, savePastedAttachments } from "./repositoryOps";
 import { refreshTaskReview, refreshWorkspaceReview } from "./reviewFiles";
 import {
@@ -20,9 +24,8 @@ import {
   saveRemoteConnection,
   setRemoteDefaultDirectory,
 } from "./remoteService";
-import { approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, revertReviewFile, setResponseFeedback, startTask, steerTask } from "./taskActions";
+import { approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, startTask, steerTask } from "./taskActions";
 import { respondToToolPermission } from "./taskCommands";
-import { worktreeRootForRepo } from "./worktreeOps";
 import {
   app,
   BrowserWindow,
@@ -40,7 +43,6 @@ import { trustedRendererUrl } from "./rendererTrust";
 
 
 import {
-  stopRunnerProcess,
 } from "./runnerAdapter";
 import {
   companyConnectionStatus,
@@ -187,7 +189,6 @@ async function readReviewArtifactPreview(input: unknown) {
 function setPermissionMode(input: unknown): PermissionMode {
   const mode = writePermissionModeSetting(input);
   setPermissionModeValue(mode);
-  recordProductTelemetry("permission.mode_changed", { data: { mode } });
   return mode;
 }
 
@@ -371,12 +372,6 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     getNotes: () => getNotes(),
     updateNotes: (input) => updateNotes(input),
     getTask: (input) => publicTaskById(input),
-    listTaskCheckpoints: (input) => listTaskCheckpoints(input),
-    createTaskCheckpoint: (input) => createCheckpoint(input),
-    setTaskCheckpointPinned: (input) => setCheckpointPinned(input),
-    deleteTaskCheckpoint: (input) => deleteCheckpoint(input),
-    forkTaskCheckpoint: (input) => forkCheckpoint(input),
-    restoreTaskCheckpoint: (input) => restoreCheckpoint(input),
     refreshTaskReview: (input) => refreshTaskReview(input),
     refreshWorkspaceReview: (input) => refreshWorkspaceReview(input),
     readArtifactPreview: (input) => readReviewArtifactPreview(input),
@@ -409,8 +404,11 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     saveDictationSettings: (input) => saveDictationSettings(input),
     getKeyBindings: async () => readKeyBindings(),
     saveKeyBindings: async (input) => writeKeyBindings(input),
+    readGeneratedImage: async (input) => readGeneratedImage(getTask(requiredString(input?.taskId, "taskId")), input?.path),
+    getImageSettings: async () => ({ model: readImageModelSetting(), runtimeAvailable: !!imageRuntimeBinary() }),
+    saveImageSettings: async (input) => ({ model: writeImageModelSetting(input?.model), runtimeAvailable: !!imageRuntimeBinary() }),
     listLocalModels: async (input) =>
-      listLocalModels(app.getPath("userData"), input?.kind === "dictation" ? "dictation" : "chat"),
+      listLocalModels(app.getPath("userData"), input?.kind === "image" ? "image" : input?.kind === "dictation" ? "dictation" : "chat"),
     downloadLocalModel: async (input) => {
       try {
         const model = resolveLocalModel(String(input?.id ?? ""), app.getPath("userData"));
@@ -487,10 +485,11 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     getReasoningEffort: () => readReasoningEffortSetting(),
     saveReasoningEffort: (input) => saveReasoningEffortSetting(input),
     saveShowThinking: (input) => saveShowThinkingSetting(input),
-    exportTelemetry: () => exportTelemetryBundle(),
+    saveSendOnEnter: (input) => saveSendOnEnterSetting(input),
+    getLaunchAtLogin: () => launchAtLoginStatus(),
+    saveLaunchAtLogin: (input) => saveLaunchAtLoginSetting(input),
     exportLocalDiagnostics: () => exportLocalDiagnostics(),
     clearLocalDiagnostics: () => clearLocalDiagnosticLogs(),
-    recordProductEvent: (input) => recordRendererProductEvent(input),
     listSkills: () => listSkillsService(),
     saveSkillSettings: (input) => saveSkillSettingsService(input),
     openSkillsFolder: () => openSkillsFolder(),
@@ -513,10 +512,9 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     approveWorktreeCreation: (input) => approveWorktreeCreation(input),
     respondToToolPermission: (input) => respondToToolPermission(input),
     openTaskInIde: (input) => openTaskInIde(input),
-    revertReviewFile: (input) => revertReviewFile(input),
+    undoTaskChanges: (input) => undoTaskChanges(input),
     keepWorktree: (input) => keepWorktree(input),
     cancelTask: (input) => cancelTask(input),
-    setResponseFeedback: (input) => setResponseFeedback(input),
     setWindowChromeTheme: (input) =>
       setWindowChromeTheme(input === "light" ? "light" : "dark"),
     openExternal: (input) => openExternalLink(input?.url),
@@ -597,14 +595,6 @@ app.whenReady().then(async () => {
   void systemProfile();
   await createWindow();
   startAppUpdates();
-  void retryTelemetrySpoolQueue().catch((cause) => {
-    recordLocalDiagnostic({
-      level: "warn",
-      source: "telemetry",
-      event: "spool.retry.failed",
-      message: String(cause instanceof Error ? cause.message : cause),
-    });
-  });
   // Heavy repair runs after the window is up so startup stays responsive.
   setImmediate(() => {
     try {
@@ -618,7 +608,7 @@ app.whenReady().then(async () => {
         message: String(error instanceof Error ? error.message : error),
       });
     }
-    void reconcileCheckpointLifecycle((task) => worktreeRootForRepo(task.originalRepoPath))
+    void reconcileCheckpointLifecycle()
       .then((checkpointRecovery) => {
         if (checkpointRecovery.inspectedTasks > 0) {
           recordLocalDiagnostic({

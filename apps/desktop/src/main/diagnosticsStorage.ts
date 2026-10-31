@@ -1,12 +1,6 @@
 import { parsePayload, withAppDatabase } from "./storageDatabase";
-import { isRecord } from "./utils";
-import type { DiagnosticRow, DiagnosticStatsRow, ProductTelemetryRow } from "./storageDatabase";
-import type {
-  LocalDiagnosticInfo,
-  LocalDiagnosticLevel,
-  LocalDiagnosticRecord,
-  ProductTelemetryEvent,
-} from "./types";
+import type { DiagnosticRow, DiagnosticStatsRow } from "./storageDatabase";
+import type { LocalDiagnosticInfo, LocalDiagnosticLevel, LocalDiagnosticRecord } from "./types";
 
 export type LocalDiagnosticInput = {
   at?: string;
@@ -129,28 +123,4 @@ export function clearLocalDiagnostics(): LocalDiagnosticInfo {
     db.exec("DELETE FROM diagnostic_logs; VACUUM;");
     return { bytes: 0, entries: 0 };
   });
-}
-
-export function writeProductTelemetryEvent(event: ProductTelemetryEvent): void {
-  withAppDatabase((db) => {
-    db.prepare(`
-      INSERT OR REPLACE INTO product_telemetry_events (id, type, at, task_id, repository_id, payload)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      event.id,
-      event.type,
-      event.at,
-      event.taskId ?? null,
-      event.repositoryId ?? null,
-      JSON.stringify(event),
-    );
-  });
-}
-
-export function readProductTelemetryEvents(): ProductTelemetryEvent[] {
-  return withAppDatabase((db) => (
-    db.prepare("SELECT payload FROM product_telemetry_events ORDER BY at ASC, id ASC").all() as ProductTelemetryRow[]
-  ).map((row) => parsePayload(row.payload)).filter((event): event is ProductTelemetryEvent => (
-    isRecord(event) && typeof event.id === "string" && typeof event.type === "string" && typeof event.at === "string"
-  )));
 }

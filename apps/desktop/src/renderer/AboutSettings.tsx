@@ -100,11 +100,6 @@ function describe(status: AppUpdateStatus): string {
   switch (state.phase) {
     case "unsupported":
       return "Development build";
-    case "unlicensed":
-      // What is true, to someone who cannot act on it and should not have to:
-      // their company's server is what keeps this app current, and it is not
-      // doing so. No token, no licence, nothing to press.
-      return "Updates are managed by your company";
     case "checking":
       return "Checking for updates";
     case "ready":

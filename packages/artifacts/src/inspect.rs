@@ -287,7 +287,12 @@ fn scan_package(bytes: &[u8]) -> Result<Vec<Unsupported>, String> {
         let entry = archive
             .by_index(index)
             .map_err(|error| format!("the package could not be read: {error}"))?;
-        names.push(entry.name().to_owned());
+        names.push(
+            entry
+                .name()
+                .map_err(|error| format!("the package entry name is invalid: {error}"))?
+                .into_owned(),
+        );
     }
 
     let mark = |kind: &str, location: String, found: &mut Vec<Unsupported>| {
@@ -427,7 +432,7 @@ mod tests {
             let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut output));
             for index in 0..archive.len() {
                 let mut entry = archive.by_index(index).expect("entry");
-                let name = entry.name().to_owned();
+                let name = entry.name().expect("valid name").into_owned();
                 if name == "docProps/custom.xml" {
                     continue;
                 }

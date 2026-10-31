@@ -270,14 +270,16 @@ func normalizeThinkingDirective(value any) string {
 	if !ok {
 		return ""
 	}
-	switch strings.ToLower(strings.TrimSpace(text)) {
-	case "on":
-		return "on"
-	case "off":
-		return "off"
-	default:
+	text = strings.ToLower(strings.TrimSpace(text))
+	if len(text) == 0 || len(text) > 32 || text == "none" {
 		return ""
 	}
+	for i, c := range text {
+		if !(c >= 'a' && c <= 'z') && !(i > 0 && (c >= '0' && c <= '9' || c == '_' || c == '-')) {
+			return ""
+		}
+	}
+	return text
 }
 
 // DecodeChatInput validates a chat request for a specific route. Validation is

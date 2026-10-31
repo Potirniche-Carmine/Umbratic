@@ -1,27 +1,26 @@
-import { getPermissionMode } from "./mainRuntime";
+import { activeRunnerProcesses, stopRunnerProcess } from "./runnerLifecycle";
+import { cancelledTaskRuns, getPermissionMode } from "./mainRuntime";
+import { assertTaskWorkspaceIdle } from "./workspaceActivity";
 import { assertReusableWorktreeForRepository, chatWorktreeTaskId, findReusableWorktreeTask, taskUsesIsolatedWorktree, worktreeRootTaskId } from "./worktreeOps";
 import { chatId, createChat, hiddenChatRepository, hiddenChatWorkspacePath, taskId } from "./chatStore";
-import { activeRunnerProcesses, activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, getTask, missingSnapshotValue, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
+import { activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, getTask, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
 import { capabilityNeedsForPrompt, runnerPromptForTask } from "./taskPromptContext";
 import { inspectRepository } from "./repositoryOps";
-import { refreshReview } from "./reviewFiles";
 import { createWorktreeAndRunRunner, runRunnerTask } from "./taskRunner";
-import { isBinarySnapshotValue, sanitizeAttachments, snapshotFolder } from "./workspaceSnapshot";
+import { sanitizeAttachments } from "./workspaceSnapshot";
 import { worktreeRootForRepo } from "./worktreeOps";
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { chatTitleFromFirstMessage } from "../shared/chatTitle";
 
 import {
-  capabilityTelemetrySnapshot,
+  runCapabilitySnapshot,
   probeLocalCapabilities,
 } from "./capabilities";
 import {
   runnerRequest,
   runnerBinaryPath,
-  stopRunnerProcess,
 } from "./runnerAdapter";
 import { remoteCapabilityReport } from "./remoteHost";
 import { validatedRemoteDirectory } from "./remoteConnections";
@@ -30,7 +29,6 @@ import {
   umbraticPolicyVersion,
   umbraticRunnerName,
   umbraticRunnerVersion,
-  isGeneratedRuntimePath,
 } from "./policy";
 import {
   readChats,
@@ -44,19 +42,12 @@ import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings"
 import type {
   ChatAttachment,
   ChatRecord,
-  RepositoryInfo,
   TaskInfo,
   TaskRecord,
   TaskRemote,
   WorkspaceMode,
 } from "./types";
-import { hasSymlinkComponent, isRecord, pathInside, requiredString, slugify } from "./utils";
-import { isResponseFeedbackReason, removeResponseFeedback } from "../shared/taskEvents";
-import {
-  assertFolderUndoBaseline,
-  restoreTurnCheckpointFile,
-  UNDO_UNSAFE_NO_CHECKPOINT,
-} from "./checkpoints/service";
+import { isRecord, requiredString, slugify } from "./utils";
 
 export function closedTaskMessage(task: TaskRecord): string | undefined {
   if (task.state === "merged") {
@@ -72,31 +63,6 @@ export function taskUsesHiddenChatWorkspace(task: TaskRecord, chat: ChatRecord):
     task.hiddenWorkspace === true ||
     (task.repositoryId === `hidden-${chat.id}` && path.resolve(task.originalRepoPath) === hiddenChatWorkspacePath(chat.id))
   );
-}
-
-export function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryInfo) {
-  task.repositoryId = repository.id;
-  task.workspaceKind = repository.kind;
-  task.workspaceMode = "local";
-  task.hiddenWorkspace = false;
-  task.originalBranch = repository.originalBranch;
-  task.baseCommit = repository.baseCommit;
-  task.agentBranch = "";
-  task.worktreePath = repository.rootPath;
-  task.originalRepoPath = repository.rootPath;
-  task.originalWasDirty = repository.dirty;
-  task.baselineFiles = snapshotFolder(repository.rootPath);
-  task.runnerName = umbraticRunnerName;
-  task.runnerVersion = umbraticRunnerVersion;
-  task.policyVersion = umbraticPolicyVersion;
-  task.runnerSessionId = undefined;
-  task.diagnosticLogPath = undefined;
-  task.pendingPrompt = undefined;
-  task.changedFiles = [];
-  task.reviewFiles = [];
-  task.latestTest = undefined;
-  task.patchHash = undefined;
-  task.metadataPath = undefined;
 }
 
 export function startTaskRequestKey(input: Record<string, unknown>): string {
@@ -234,23 +200,27 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
   const capabilityReport = remote
     ? await remoteCapabilityReport(remote.connectionId)
     : await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
-  const taskCapabilityProbes = capabilityTelemetrySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt, attachments));
+  const taskCapabilityProbes = runCapabilitySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt, attachments));
   const modelEndpointMode = readModelEndpointSettings().mode;
   if (existingTask) {
     const closedMessage = closedTaskMessage(existingTask);
     if (closedMessage) {
       throw new Error(closedMessage);
     }
-    if (activeRunnerProcesses.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
+    if (activeRunnerProcesses.has(existingTask.id) || existingTask.state === "running" || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
       throw new Error("This chat already has a task in progress.");
     }
     if (existingTask.repositoryId !== repositoryId) {
+      // A chat that ran without a folder is refused a folder rather than
+      // re-pointed at one: attaching would present the hidden workspace's
+      // history as work done in the chosen folder, and silently discard its
+      // review state and checkpoints.
       if (!hiddenWorkspace && taskUsesHiddenChatWorkspace(existingTask, chat)) {
-        attachHiddenTaskToRepository(existingTask, refreshed);
-      } else {
-        throw new Error("This chat belongs to a different folder. Start a new chat for this folder.");
+        throw new Error("This chat started without a folder. Start a new chat to work in a folder.");
       }
+      throw new Error("This chat belongs to a different folder. Start a new chat for this folder.");
     }
+    assertTaskWorkspaceIdle(existingTask);
     existingTask.permissionMode = getPermissionMode();
     existingTask.prompt = prompt;
     existingTask.runnerName = umbraticRunnerName;
@@ -334,6 +304,7 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
       enabledTools: requestedEnabledTools,
       capabilityProbes: taskCapabilityProbes,
     };
+    assertTaskWorkspaceIdle(task);
     saveTask(task);
     appendUserMessage(task, prompt, attachments);
     void runRunnerTask(task.id, undefined, prompt, attachments);
@@ -374,14 +345,10 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
     enabledTools: requestedEnabledTools,
     capabilityProbes: taskCapabilityProbes,
   };
+  assertTaskWorkspaceIdle(task);
   saveTask(task);
   appendUserMessage(task, prompt, attachments);
   if (shouldCreateWorktree) {
-    recordProductTelemetry("worktree.requested", {
-      taskId: task.id,
-      chatId: task.chatId,
-      repositoryId: task.repositoryId,
-    });
     await createWorktreeAndRunRunner(task, undefined, attachments, prompt);
   } else {
     void runRunnerTask(task.id, undefined, prompt, attachments);
@@ -398,12 +365,8 @@ export async function approveWorktreeCreation(input: unknown): Promise<void> {
   if (task.state !== "awaiting_worktree_approval") {
     throw new Error("Task is not waiting for worktree approval.");
   }
+  if (approved) assertTaskWorkspaceIdle(task, true);
   if (!approved) {
-    recordProductTelemetry("worktree.denied", {
-      taskId: task.id,
-      chatId: task.chatId,
-      repositoryId: task.repositoryId,
-    });
     task.state = "rejected";
     task.pendingPrompt = undefined;
     pendingRunnerPrompts.delete(task.id);
@@ -412,11 +375,6 @@ export async function approveWorktreeCreation(input: unknown): Promise<void> {
     emit({ type: "task.error", taskId: task.id, message: "Worktree creation was declined." });
     return;
   }
-  recordProductTelemetry("worktree.approved", {
-    taskId: task.id,
-    chatId: task.chatId,
-    repositoryId: task.repositoryId,
-  });
   const promptForRun = pendingRunnerPrompts.get(task.id) ?? task.pendingPrompt ?? task.prompt;
   task.pendingPrompt = undefined;
   pendingRunnerPrompts.delete(task.id);
@@ -424,78 +382,11 @@ export async function approveWorktreeCreation(input: unknown): Promise<void> {
   await createWorktreeAndRunRunner(task, promptForRun);
 }
 
-/** One file back to its pre-turn content, from the folder snapshot. */
-export function restoreFolderTaskFile(task: TaskRecord, filePath: string) {
-  const baseline = task.baselineFiles ?? {};
-  if (isBinarySnapshotValue(baseline[filePath])) {
-    throw new Error(`Undo cannot safely restore the earlier binary content of ${filePath}.`);
-  }
-  const absolute = path.resolve(task.worktreePath, filePath);
-  if (!pathInside(task.worktreePath, absolute) || hasSymlinkComponent(task.worktreePath, absolute)) {
-    throw new Error(`Refusing to restore a path outside the task folder: ${filePath}`);
-  }
-  if (fs.existsSync(absolute) && fs.lstatSync(absolute).isSymbolicLink()) {
-    throw new Error(`Refusing to restore through a symbolic link: ${filePath}`);
-  }
-  // Absent from the baseline means the turn created it, and putting it back
-  // means it goes away again.
-  if (!Object.prototype.hasOwnProperty.call(baseline, filePath) || baseline[filePath] === missingSnapshotValue) {
-    if (fs.existsSync(absolute)) fs.rmSync(absolute, { force: true });
-    return;
-  }
-  fs.mkdirSync(path.dirname(absolute), { recursive: true });
-  fs.writeFileSync(absolute, baseline[filePath]);
-}
-
-/**
- * Undo one reviewed file, and only that file.
- *
- * There is deliberately no whole-turn counterpart: a single mis-click should
- * never be able to take back more than the file somebody was looking at, and
- * anything broader is a thing to ask the model for, where it is visible and
- * reversible.
- */
-export async function revertReviewFile(input: unknown): Promise<TaskInfo | null> {
-  if (!isRecord(input)) {
-    throw new Error("Invalid revert input.");
-  }
-  const task = getTask(requiredString(input.taskId, "taskId"));
-  const filePath = requiredString(input.path, "path").replace(/\\/g, "/");
-  if (isGeneratedRuntimePath(filePath)) {
-    throw new Error(`${filePath} is generated at runtime and is not restored by undo.`);
-  }
-  if (!task.reviewFiles.some((file) => file.path === filePath)) {
-    throw new Error(`${filePath} is not part of this review.`);
-  }
-  if (taskUsesIsolatedWorktree(task)) {
-    if (!fs.existsSync(task.worktreePath)) {
-      throw new Error(UNDO_UNSAFE_NO_CHECKPOINT);
-    }
-    await restoreTurnCheckpointFile(task, filePath);
-  } else {
-    assertFolderUndoBaseline(task);
-    restoreFolderTaskFile(task, filePath);
-  }
-  recordProductTelemetry("task.undone", {
-    taskId: task.id,
-    chatId: task.chatId,
-    repositoryId: task.repositoryId,
-  });
-  await refreshReview(task, task.reviewScope === "worktree" ? "worktree" : "task");
-  saveTask(task);
-  return publicTask(task);
-}
-
 export async function keepWorktree(input: unknown): Promise<void> {
   if (!isRecord(input)) {
     throw new Error("Invalid keep-worktree input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  recordProductTelemetry("worktree.kept", {
-    taskId: task.id,
-    chatId: task.chatId,
-    repositoryId: task.repositoryId,
-  });
   emit({
     type: "task.error",
     taskId: task.id,
@@ -509,6 +400,18 @@ export async function cancelTask(input: unknown): Promise<void> {
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
   const run = activeRunnerProcesses.get(task.id);
+  if (!["running", "awaiting_worktree_approval"].includes(task.state) && !run) return;
+  cancelledTaskRuns.add(task.id);
+  pendingRunnerPrompts.delete(task.id);
+  pendingTaskSteers.delete(task.id);
+  pendingTaskFollowUps.delete(task.id);
+  clearPendingPermissionsForTask(task.id);
+  // Publish the stop before awaiting the runner. A delayed cancellation must
+  // never write an old workspace or turn record over a subsequent restore.
+  task.state = "completed";
+  task.error = undefined;
+  saveTask(task);
+  emit({ type: "assistant.done", taskId: task.id });
   if (run) {
     activeRunnerProcesses.delete(task.id);
     if (run.sessionId) {
@@ -531,16 +434,6 @@ export async function cancelTask(input: unknown): Promise<void> {
     }
     stopRunnerProcess(run);
   }
-  pendingRunnerPrompts.delete(task.id);
-  pendingTaskSteers.delete(task.id);
-  pendingTaskFollowUps.delete(task.id);
-  clearPendingPermissionsForTask(task.id);
-  // Stopping a turn is a user decision, not a failure: the transcript keeps
-  // whatever streamed and ends quietly with no error message.
-  task.state = "completed";
-  task.error = undefined;
-  saveTask(task);
-  emit({ type: "assistant.done", taskId: task.id });
 }
 
 export async function steerTask(input: unknown): Promise<void> {
@@ -567,7 +460,7 @@ export async function steerTask(input: unknown): Promise<void> {
     task.model.contextLength ?? readContextLengthSetting(),
     { useDurableContext: true },
   );
-  pendingTaskSteers.set(task.id, { actionId, prompt, attachments });
+  pendingTaskSteers.set(task.id, { actionId, prompt, attachments, alreadyInTranscript: true });
   try {
     await runnerRequest<{ disposition?: string; reasonCode?: string | null }>(
       run,
@@ -643,22 +536,4 @@ export async function dropQueuedTaskPrompt(input: unknown): Promise<void> {
     method: "POST",
     body: { action: "drop", actionId },
   }).catch(() => undefined);
-}
-
-export async function setResponseFeedback(input: unknown): Promise<void> {
-  if (!isRecord(input)) throw new Error("Invalid response feedback input.");
-  const task = getTask(requiredString(input.taskId, "taskId"));
-  const messageId = requiredString(input.messageId, "messageId").slice(0, 80);
-  const rating = input.rating === null || input.rating === "good" || input.rating === "bad"
-    ? input.rating
-    : undefined;
-  if (rating === undefined) throw new Error("Invalid response feedback rating.");
-  const reason = rating && isResponseFeedbackReason(rating, input.reason) ? input.reason : undefined;
-  if (input.reason !== undefined && !reason) throw new Error("Invalid response feedback reason.");
-  const comment = typeof input.comment === "string" ? input.comment.trim().slice(0, 1000) : "";
-  if (!/^assistant-\d+$/.test(messageId)) throw new Error("Invalid response message id.");
-  task.events = removeResponseFeedback(task.events, task.id, messageId);
-  saveTask(task);
-  if (rating === null) return;
-  emit({ type: "response.feedback", taskId: task.id, messageId, rating, ...(reason ? { reason } : {}), ...(comment ? { comment } : {}) });
 }

@@ -11,7 +11,7 @@ Help the user turn repeatable work into a compact, dependable Umbratic skill. Ad
 
 Umbratic exposes enabled skills to the model as an index containing each skill's id, name, description, and source. When a skill is relevant, the harness makes its instructions available through `read_skill`; the full body is not injected into every task.
 
-Personal skills live under `~/.umbratic/skills/<skill-id>/SKILL.md`. Bundled system skills live under `~/.umbratic/skills/system/<skill-id>/SKILL.md`, are reserved by Umbratic, and can be edited or reset in Skills settings. Create user-requested skills as personal skills; do not place them in the `system` directory or reuse an `umbratic-*` system id.
+Personal skills live under `skills/<skill-id>/SKILL.md` in the app's data directory (`~/Library/Application Support/Umbratic/` on Mac). Bundled system skills live under `skills/system/<skill-id>/SKILL.md`, are reserved by Umbratic, and can be edited or reset in Skills settings. Create user-requested skills as personal skills; do not place them in the `system` directory or reuse an `umbratic-*` system id.
 
 The runner normally writes only inside the current task workspace. Unless the user gives an accessible destination, build a complete importable skill folder in the workspace and tell the user to import it from Umbratic's Skills settings. Do not claim an installed skill was changed unless that write actually succeeded.
 

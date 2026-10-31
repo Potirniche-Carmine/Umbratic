@@ -61,12 +61,17 @@ export function modelFilePath(dataRoot: string, model: CatalogModel, file: Catal
   return path.join(modelDirectory(dataRoot, model), file.name);
 }
 
-/** A quantization counts as downloaded only when every file is present at its exact size. */
+/** Chat can run without its optional vision encoder; speech and image need every component. */
 export function modelDownloaded(dataRoot: string, model: CatalogModel, quant: CatalogQuant): boolean {
-  return quant.files.every((file) => {
+  return quant.files.filter((file) => model.kind !== "chat" || !/^mmproj-/i.test(file.name)).every((file) => {
     const stat = fs.statSync(modelFilePath(dataRoot, model, file), { throwIfNoEntry: false });
     return stat?.isFile() === true && stat.size === file.bytes;
   });
+}
+
+export function modelFileDownloaded(dataRoot: string, model: CatalogModel, file: CatalogFile): boolean {
+  const stat = fs.statSync(modelFilePath(dataRoot, model, file), { throwIfNoEntry: false });
+  return stat?.isFile() === true && stat.size === file.bytes;
 }
 
 export function downloadingModelId(): string | null {
@@ -125,10 +130,12 @@ function get(url: string, headers: Record<string, string>, signal: AbortSignal, 
   });
 }
 
-// Four ranges in flight cut a large transfer to a fraction of one stream's
-// time without soaking the machine's connection; 48 MB per range keeps the
+// Eight ranges in flight — what hf_transfer and aria2 settle on — cut a large
+// transfer to a fraction of one stream's time: the CDN caps each connection
+// well below what a home link carries, so the download scales with the
+// connection count until the link itself is full. 48 MB per range keeps the
 // resume sidecar coarse enough to stay tiny.
-const rangeConnections = 4;
+const rangeConnections = 8;
 const rangeBytes = 48 * 1024 * 1024;
 
 type ChunkLedger = { bytes: number; rangeBytes: number; done: number[] };
@@ -187,12 +194,16 @@ async function downloadFile(
   const url = catalogFileUrl(model, file);
   const chunkCount = Math.max(1, Math.ceil(file.bytes / rangeBytes));
   const chunkSize = (index: number) => Math.min(file.bytes, (index + 1) * rangeBytes) - index * rangeBytes;
-  const ledger = fs.existsSync(partialPath) ? readChunkLedger(ledgerPath, file) : null;
-  const done = new Set<number>(ledger?.done.filter((index) => index < chunkCount) ?? []);
-  if (!ledger) fs.rmSync(partialPath, { force: true });
-
-  const fd = fs.openSync(partialPath, fs.existsSync(partialPath) ? "r+" : "w+");
+  const fd = fs.openSync(partialPath, fs.constants.O_RDWR | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
   try {
+    const stat = fs.fstatSync(fd);
+    const entry = fs.lstatSync(partialPath);
+    if (!stat.isFile() || entry.isSymbolicLink() || stat.dev !== entry.dev || stat.ino !== entry.ino) {
+      throw new Error("The partial model download must be a regular file.");
+    }
+    const ledger = stat.size > 0 ? readChunkLedger(ledgerPath, file) : null;
+    const done = new Set<number>(ledger?.done.filter((index) => index < chunkCount) ?? []);
+    if (!ledger) fs.ftruncateSync(fd, 0);
     let landedBytes = [...done].reduce((total, index) => total + chunkSize(index), 0);
     const inFlight = new Map<number, number>();
     const report = () =>
@@ -292,7 +303,7 @@ export async function downloadLocalModel(dataRoot: string, model: CatalogModel, 
   const abort = new AbortController();
   active = { id, abort };
   let completedBytes = 0;
-  // Four connections report often enough to flood the channel; a progress
+  // Eight connections report often enough to flood the channel; a progress
   // reading every ~100ms is as smooth as any bar can show.
   let lastProgressAt = 0;
   const publishProgress = (received: number) => {

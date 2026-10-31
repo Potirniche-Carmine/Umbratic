@@ -83,6 +83,7 @@ func (s *Server) Warm(ctx context.Context) error {
 // BeginDrain refuses new model work so a restart does not accept requests it
 // cannot finish. Call it before the HTTP server's graceful shutdown.
 func (s *Server) BeginDrain() {
+	s.imageCancel()
 	s.lifecycle.beginDrain()
 }
 

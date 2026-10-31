@@ -1,9 +1,15 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { extractFile } from "@electron/asar";
+import { verifyPeArchitecture } from "./verify-pe.ts";
+import { resolveInstalledElectron } from "./electron-runtime.ts";
+import { verifyImageRuntimeGgufBounds } from "./build-image-runtime.ts";
+import { verifyWindowsDependencies } from "./windows-dependencies.ts";
+import { verifyLlamaDownloads } from "./verify-llama-downloads.ts";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const releaseRoot = path.resolve(desktopRoot, "../../target/release/desktop");
@@ -35,6 +41,7 @@ function requireFile(file: string) {
 
 function verifyBinary(file: string, expected: RegExp, env = process.env) {
   requireFile(file);
+  if (process.platform === "win32") verifyPeArchitecture(file, process.arch);
   if (process.platform !== "win32" && (fs.statSync(file).mode & 0o111) === 0) {
     throw new Error(`Packaged binary is not executable: ${file}`);
   }
@@ -57,6 +64,7 @@ function verifyBinary(file: string, expected: RegExp, env = process.env) {
 function verifyLlamaServer(directory: string) {
   const file = path.join(directory, executable("llama-server"));
   requireFile(file);
+  if (process.platform === "win32") verifyPeArchitecture(file, process.arch);
   if (process.platform !== "win32" && (fs.statSync(file).mode & 0o111) === 0) {
     throw new Error(`Packaged binary is not executable: ${file}`);
   }
@@ -82,6 +90,13 @@ function verifyLlamaServer(directory: string) {
   }
 
   const shipped = fs.readdirSync(directory);
+  for (const notice of ["LICENSE", "APACHE-2.0.txt", "vendor/cpp-httplib/LICENSE", "vendor/nlohmann/json.hpp",
+    "vendor/miniaudio/miniaudio.h", "vendor/stb/stb_image.h", "vendor/sheredom/subprocess.h"]) {
+    requireFile(path.join(directory, "licenses", notice));
+  }
+  if (process.platform === "win32") {
+    for (const name of shipped.filter((name) => /\.(exe|dll)$/i.test(name))) verifyPeArchitecture(path.join(directory, name), process.arch);
+  }
   const backends = shipped.filter((name) => /ggml-(?:cpu|vulkan|metal|blas)/i.test(name));
   if (backends.length === 0) {
     throw new Error(`Packaged llama-server has no loadable ggml backend: ${shipped.join(", ")}`);
@@ -105,6 +120,58 @@ function verifyLlamaServer(directory: string) {
     }
     console.warn(`UMBRATIC_LLAMA_CPU_ONLY=1: accepting a build with no ${expectedGpuBackend} backend. Do not release it.`);
   }
+  if (process.platform === "darwin") {
+    for (const name of shipped) {
+      const file = path.join(directory, name);
+      if (fs.statSync(file).isFile()) verifyMachOResolvesBesideItself(file, new Set(shipped));
+    }
+  }
+}
+
+
+/**
+ * Proves a packaged Mach-O file resolves every library from the package
+ * itself, with no reach back into the machine that built it.
+ *
+ * Running the binary cannot prove this here: the build tree the binaries came
+ * from still exists on the release machine, so an LC_RPATH pointing into
+ * .llama-cache resolves during verification and then fails as "Library not
+ * loaded" on every other Mac, at first model load. The load commands are the
+ * ground truth, so they are what is checked: every rpath must be relative to
+ * the binary, and every @rpath dependency must name a file that shipped.
+ */
+function verifyMachOResolvesBesideItself(file: string, shipped: Set<string>) {
+  const name = path.basename(file);
+  const loadCommands = spawnSync("otool", ["-l", file], { encoding: "utf8" });
+  if (loadCommands.error || loadCommands.status !== 0) {
+    throw new Error(`Unable to read load commands of packaged ${name}: ${loadCommands.error?.message || loadCommands.stderr}`);
+  }
+  const lines = loadCommands.stdout.split(/\r?\n/);
+  lines.forEach((line, index) => {
+    if (!/\bcmd LC_RPATH\b/.test(line)) return;
+    const recorded = lines.slice(index + 1, index + 4)
+      .map((candidate) => candidate.match(/^\s*path (.+) \(offset \d+\)$/)?.[1])
+      .find((value) => value !== undefined);
+    if (recorded && !recorded.startsWith("@loader_path") && !recorded.startsWith("@executable_path")) {
+      throw new Error(
+        `Packaged ${name} records the rpath ${recorded}, which only exists on the build machine.\n`
+        + "  prepare-package rewrites rpaths to @loader_path; delete apps/desktop/.package and repackage.",
+      );
+    }
+  });
+  const dependencies = spawnSync("otool", ["-L", file], { encoding: "utf8" });
+  if (dependencies.error || dependencies.status !== 0) {
+    throw new Error(`Unable to read dependencies of packaged ${name}: ${dependencies.error?.message || dependencies.stderr}`);
+  }
+  for (const line of dependencies.stdout.split(/\r?\n/)) {
+    const dependency = line.match(/^\s+@rpath\/(\S+)/)?.[1];
+    if (dependency && !shipped.has(dependency)) {
+      throw new Error(
+        `Packaged ${name} needs @rpath/${dependency}, which is not in the package.\n`
+        + "  The build tree covers that name with a symlink; the package must carry the file under it.",
+      );
+    }
+  }
 }
 
 function normalizeText(value: string) {
@@ -124,6 +191,20 @@ function verifyDocumentsSkill(appArchive: string) {
   }
 }
 
+function verifyArtifactWorker(appArchive: string) {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-package-artifact-"));
+  try {
+    const result = spawnSync(resolveInstalledElectron(), [
+      path.join(desktopRoot, "scripts", "verify-artifact-worker.cjs"), appArchive, workspace,
+    ], { encoding: "utf8", timeout: 25_000 });
+    if (result.error || result.status !== 0) {
+      throw new Error(`Packaged document worker failed: ${result.error?.message || result.stderr || result.stdout || `exit ${result.status}`}`);
+    }
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+}
+
 function verifyMacCodeSignature(appBundle: string) {
   if (process.platform !== "darwin") return;
   const result = spawnSync("codesign", ["--verify", "--deep", appBundle], { encoding: "utf8" });
@@ -139,8 +220,19 @@ function verifyMacCodeSignature(appBundle: string) {
 const resources = packagedResources();
 const executable = (name: string) => process.platform === "win32" ? `${name}.exe` : name;
 const appArchive = requireFile(path.join(resources, "app.asar"));
+if (process.platform === "win32") {
+  verifyWindowsDependencies(path.resolve(resources, ".."));
+  verifyPeArchitecture(path.resolve(resources, "../Umbratic.exe"), process.arch);
+  verifyPeArchitecture(requireFile(path.join(resources, "code-index", "umbratic-code-index.exe")), process.arch);
+}
+const updateConfiguration = JSON.parse(fs.readFileSync(requireFile(path.join(resources, "app-update.yml")), "utf8"));
+if (updateConfiguration.provider !== "github" || updateConfiguration.owner !== "Potirniche-Carmine"
+    || updateConfiguration.repo !== "Umbratic" || updateConfiguration.private || updateConfiguration.token) {
+  throw new Error("Packaged updater must use the public Umbratic GitHub release feed without credentials.");
+}
 verifyMacCodeSignature(path.resolve(resources, "../.."));
 verifyDocumentsSkill(appArchive);
+verifyArtifactWorker(appArchive);
 verifyBinary(path.join(resources, "runner", executable("umbratic-runner")), /UmbraticRunner/);
 verifyBinary(path.join(resources, "desktop-core", executable("umbratic-desktop-core")), /usage: umbratic-desktop-core/);
 verifyBinary(path.join(resources, "pdf", executable("umbratic-pdf")), /umbratic-pdf inspect/);
@@ -154,4 +246,24 @@ verifyBinary(
   { ...process.env, VEIL_MODE: "local", VEIL_AUTH_TOKEN: "" },
 );
 verifyLlamaServer(path.join(resources, "llama-server"));
+await verifyLlamaDownloads(path.join(resources, "llama-server", executable("llama-server")));
+const imagePin = JSON.parse(fs.readFileSync(path.resolve(desktopRoot, "../../third_party/stable-diffusion.cpp.json"), "utf8"));
+if (imagePin.targets.includes(`${process.platform}-${process.arch}`)) {
+  requireFile(path.join(resources, "image-runtime", "third-party-notices.txt"));
+  for (const notice of ["APACHE-2.0.txt", "LICENSE.darts_clone.txt", "json.hpp", "stb_image.h", "miniz.h"]) {
+    requireFile(path.join(resources, "image-runtime", "licenses", notice));
+  }
+  if (process.platform === "win32") {
+    for (const name of fs.readdirSync(path.join(resources, "image-runtime")).filter((name) => /\.(?:exe|dll)$/i.test(name))) {
+      verifyPeArchitecture(path.join(resources, "image-runtime", name), process.arch);
+    }
+  }
+  const imageProbe = spawnSync(path.join(resources, "image-runtime", executable("sd-cli")), ["--help"], { encoding: "utf8", timeout: 15000 });
+  if (imageProbe.status !== 0 || !`${imageProbe.stdout}${imageProbe.stderr}`.includes(imagePin.commit)) throw new Error("Packaged image runtime is missing or has the wrong revision.");
+  const devices = spawnSync(path.join(resources, "image-runtime", executable("sd-cli")), ["--list-devices"], {
+    encoding: "utf8", timeout: 30_000, env: { ...process.env, GGML_BACKEND_PATH: path.join(resources, "image-runtime") },
+  });
+  if (devices.error || devices.status !== 0 || !/^CPU\t.+$/m.test(devices.stdout ?? "")) throw new Error("Packaged image runtime has no usable CPU backend.");
+  await verifyImageRuntimeGgufBounds(path.join(resources, "image-runtime", executable("sd-cli")));
+}
 console.log(`Verified packaged desktop resources in ${path.relative(path.resolve(desktopRoot, "../.."), resources)}.`);

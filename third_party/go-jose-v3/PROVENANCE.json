@@ -1,0 +1,34 @@
+{
+  "upstream": {
+    "module": "github.com/go-jose/go-jose/v3",
+    "version": "v3.0.5",
+    "module_sum": "h1:BLLJWbC4nMZOfuPVxoZIxeYsn6Nl2r1fITaJ78UQlVQ=",
+    "zip_url": "https://proxy.golang.org/github.com/go-jose/go-jose/v3/@v/v3.0.5.zip",
+    "zip_sha256": "4e7e6b60541ab03bd402e573fc2c1264297e661726c5f53529ca14ae58625a27"
+  },
+  "included": "Production Go source, original Apache-2.0/BSD licenses, and four targeted security regressions; upstream test fixtures and examples omitted.",
+  "changes": [
+    {
+      "advisory": "GHSA-4w3g-jfj2-cw2q",
+      "upstream_fix": "https://github.com/go-jose/go-jose/commit/74114c2fa22669a2b2a296746eaa82e15566fd54",
+      "backport": "Reject empty padded CBC buffers before indexing."
+    },
+    {
+      "advisory": "GHSA-vvm8-gf78-28g4",
+      "upstream_fix": "https://github.com/go-jose/go-jose/commit/a31af25836222f4c45d366d6e8f9b1049dd9935a",
+      "backport": "Enforce the upstream 10000-level scanner bound before recursive JSON decoding."
+    },
+    {
+      "advisory": "GHSA-mgcc-cww5-fp2q",
+      "upstream_fix": "https://github.com/go-jose/go-jose/commit/a0111f82742fa92bceec9ede40845e73319e6230",
+      "backport": "Use the upstream 4096-bit RSA bound and cheap prime-product checks before RSA validation; reject private JWK/EPK header parameters. The bound is fixed because Caddy exposes no reason to raise it."
+    },
+    {
+      "files": [
+        "go.mod"
+      ],
+      "backport": "Require patched Go1.26.10 and x/crypto0.58.0; remove upstream test-only dependencies."
+    }
+  ],
+  "text_normalization": "CRLF to LF; scoped .gitattributes enforces identical checkout bytes."
+}

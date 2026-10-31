@@ -9,6 +9,7 @@
  * exists to catch a future change, not to compensate for this one.
  */
 
+import { inlineRuns, type InlineRun } from "../inlineText.js";
 import { element, type XmlNode } from "../xml.js";
 import type { Box } from "./geometry.js";
 import { textInset } from "./geometry.js";
@@ -33,40 +34,9 @@ export type TextStyle = {
   lineSpacing?: number;
 };
 
-export type InlineRun = {
-  text: string;
-  bold?: boolean;
-  italic?: boolean;
-  code?: boolean;
-};
-
-/**
- * Splits `**bold**`, `*italic*`, and `` `code` `` into runs.
- *
- * The three markers are the entire formatting vocabulary the model has. Writing
- * them as literal characters is the fallback when a marker is unbalanced —
- * dropping the text or emitting the marker as formatting would both change what
- * the user asked to say.
- */
-export function parseInline(value: string): InlineRun[] {
-  const runs: InlineRun[] = [];
-  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
-  let cursor = 0;
-  for (let match = pattern.exec(value); match; match = pattern.exec(value)) {
-    if (match.index > cursor) runs.push({ text: value.slice(cursor, match.index) });
-    const token = match[0];
-    if (token.startsWith("**")) runs.push({ text: token.slice(2, -2), bold: true });
-    else if (token.startsWith("`")) runs.push({ text: token.slice(1, -1), code: true });
-    else runs.push({ text: token.slice(1, -1), italic: true });
-    cursor = match.index + token.length;
-  }
-  if (cursor < value.length) runs.push({ text: value.slice(cursor) });
-  return runs.length > 0 ? runs : [{ text: value }];
-}
-
 /** The text of a marked-up string as the reader will see it. */
 export function plainText(value: string): string {
-  return parseInline(value)
+  return inlineRuns(value)
     .map((run) => run.text)
     .join("");
 }
@@ -126,7 +96,7 @@ export function paragraph(
   } else {
     paragraphChildren.push(element("a:buNone"));
   }
-  const runs = parseInline(value).map((run) =>
+  const runs = inlineRuns(value).map((run) =>
     element("a:r", {}, [runProperties(style, run), element("a:t", {}, [run.text])]),
   );
   return element("a:p", {}, [

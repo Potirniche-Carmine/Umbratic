@@ -1,4 +1,3 @@
-import { taskUsesIsolatedWorktree } from "./worktreeOps";
 import { emit, pendingPermissions, saveTask } from "./mainRuntime";
 import { getChangedFiles } from "./reviewFiles";
 import { snapshotFolder, snapshotSelectedFiles } from "./workspaceSnapshot";
@@ -79,7 +78,8 @@ export async function prepareTaskTurnCheckpoint(task: TaskRecord): Promise<void>
     ? snapshotSelectedFiles(rootPath, await getChangedFiles(rootPath, task.baseCommit))
     : snapshotFolder(rootPath);
   task.turnCheckpointId = undefined;
-  if (taskUsesIsolatedWorktree(task)) {
+  task.undoFileHashes = undefined;
+  if (task.workspaceKind === "git") {
     await createTurnCheckpoint(task);
   }
   saveTask(task);

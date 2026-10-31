@@ -1,15 +1,16 @@
 import React from "react";
-import { File, Folder, Sparkles } from "lucide-react";
+import { File, Folder, Image, Sparkles } from "lucide-react";
 import type { ChatAttachment, SkillInfo } from "../shared/desktopApi";
-import { attachmentMention, matchHighlightSegments } from "./composerText";
+import { attachmentMention, matchHighlightSegments, promptHighlightSegments } from "./composerText";
 import { normalizeAttachment } from "./attachmentPreview";
 import type { PromptMention } from "./rendererTypes";
 
-export type MentionCategoryId = "file" | "folder" | "skill";
+export type MentionCategoryId = "file" | "folder" | "skill" | "image";
 
 export type MentionCategory = { id: MentionCategoryId; label: string; hint: string };
 
 export const mentionCategories: MentionCategory[] = [
+  { id: "image", label: "Image", hint: "Create an image with your chat model" },
   { id: "file", label: "Files", hint: "Attach a file from the project" },
   { id: "folder", label: "Folders", hint: "Reference a folder and everything in it" },
   { id: "skill", label: "Skills", hint: "Use a skill for this turn" },
@@ -29,6 +30,8 @@ export function skillMention(skill: SkillInfo): string {
 
 export function mentionCategoryIcon(id: MentionCategoryId): React.ReactNode {
   switch (id) {
+    case "image":
+      return <Image size={14} />;
     case "folder":
       return <Folder size={14} />;
     case "skill":
@@ -53,36 +56,11 @@ export function MentionMatchText({ text, query }: { text: string; query: string 
 }
 
 export function renderPromptHighlights(value: string, files: ChatAttachment[], skills: SkillInfo[]): React.ReactNode[] {
-  const tokens = [
+  const segments = promptHighlightSegments(value, [
+    "@image",
     ...files.map(normalizeAttachment).map(attachmentMention),
     ...skills.map(skillMention),
-  ]
-    .filter(Boolean)
-    .sort((left, right) => right.length - left.length);
-  if (!tokens.length) return [value || "\u200b"];
-  const segments: Array<{ text: string; mention: boolean }> = [];
-  let index = 0;
-  while (index < value.length) {
-    const token = tokens.find(
-      (candidate) =>
-        value.startsWith(candidate, index) &&
-        (index === 0 || /\s/.test(value[index - 1])) &&
-        (index + candidate.length === value.length || /\s|[.,;:!?)]/.test(value[index + candidate.length])),
-    );
-    if (token) {
-      segments.push({ text: token, mention: true });
-      index += token.length;
-      continue;
-    }
-    const nextMention = tokens
-      .map((candidate) => value.indexOf(candidate, index + 1))
-      .filter((position) => position >= 0)
-      .sort((left, right) => left - right)[0];
-    const end = nextMention ?? value.length;
-    segments.push({ text: value.slice(index, end), mention: false });
-    index = end;
-  }
-  if (value.endsWith("\n")) segments.push({ text: "\u200b", mention: false });
+  ]);
   return segments.map((segment, highlightIndex) =>
     segment.mention ? (
       <span className="promptMentionToken" key={`${highlightIndex}-${segment.text}`}>

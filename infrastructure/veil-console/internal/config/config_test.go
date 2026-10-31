@@ -19,7 +19,7 @@ func TestVeilEnvironmentIsAllowlisted(t *testing.T) {
 	cfg := DefaultVeil()
 	cfg.ProviderBaseURL, cfg.Model = "http://127.0.0.1:8000/v1", "model"
 	env := strings.Join(cfg.Environment("127.0.0.1:8080", "token"), "\n")
-	if strings.Contains(env, "SHOULD_NOT_LEAK") || !strings.Contains(env, "VEIL_ENV_FILE=-") || !strings.Contains(env, "VEIL_TELEMETRY_ENABLED=false") {
+	if strings.Contains(env, "SHOULD_NOT_LEAK") || !strings.Contains(env, "VEIL_ENV_FILE=-") {
 		t.Fatalf("unsafe environment: %s", env)
 	}
 	if !strings.Contains(env, "VEIL_MODE=server") {

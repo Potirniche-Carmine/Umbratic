@@ -546,8 +546,7 @@
   min-width: 0;
 }
 
-.chatWorktreeToggle strong,
-.chatWorktreeToggle em {
+.chatWorktreeToggle strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -558,12 +557,6 @@
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
-}
-
-.chatWorktreeToggle em {
-  color: var(--faint);
-  font-style: normal;
-  font-size: 9.5px;
 }
 
 .chatWorktreeNewButton {

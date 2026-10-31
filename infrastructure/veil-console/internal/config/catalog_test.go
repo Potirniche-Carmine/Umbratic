@@ -13,9 +13,8 @@ func TestEveryCatalogRowProducesAStartableCommand(t *testing.T) {
 		}
 		for _, variant := range entry.Variants {
 			model := ManagedModel{
-				ID:          entry.ServedID,
-				DisplayName: entry.DisplayName,
-				Command:     CatalogCommand(entry, variant, SuggestedPortStart, entry.DefaultContext),
+				ID:      entry.ServedID,
+				Command: CatalogCommand(entry, variant, SuggestedPortStart, entry.DefaultContext),
 			}
 			if err := model.Validate(); err != nil {
 				t.Fatalf("%s/%s does not validate: %v", entry.Key, variant.Key, err)
@@ -110,15 +109,19 @@ func TestEveryCatalogRowHasAKindAndAServableContext(t *testing.T) {
 	}
 }
 
-func TestEmbeddingDefaultsAreOnAndKnownWidth(t *testing.T) {
+func TestEmbeddingDefaultsWaitForLocalModel(t *testing.T) {
 	settings := DefaultRAG()
-	if !settings.Enabled {
-		t.Fatal("retrieval must be on out of the box")
-	}
-	if settings.Dimension != EmbeddingDimension(settings.EmbeddingModel) || settings.Dimension == 0 {
-		t.Fatalf("the default embedding model has no recorded width: %+v", settings)
+	if settings.Enabled || settings.EmbeddingModel != "" || settings.Dimension != 0 {
+		t.Fatalf("retrieval needs a local model first: %+v", settings)
 	}
 	if err := settings.Validate(); err != nil {
-		t.Fatalf("the defaults do not validate: %v", err)
+		t.Fatal(err)
+	}
+	settings.EmbeddingModel = "local-embedding"
+	settings.EmbeddingBaseURL = "http://127.0.0.1:8009/v1"
+	settings.Dimension = 1536
+	got := settings.WithDefaults()
+	if got.EmbeddingBaseURL != settings.EmbeddingBaseURL || got.Dimension != 1536 {
+		t.Fatalf("local runtime settings lost: %+v", got)
 	}
 }

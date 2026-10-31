@@ -229,6 +229,10 @@ pub async fn veil_web_search(
         })
 }
 
+#[path = "veil_image.rs"]
+mod image;
+pub use image::generate_image;
+
 fn shared_client(provider: &ProviderConfig) -> Result<Client, String> {
     if let Some(client) = SHARED_HTTP_CLIENT.get() {
         return Ok(client.clone());
@@ -487,6 +491,37 @@ fn append_veil_delta(
             index: *index,
         })
         .collect();
+}
+
+// File bodies can take most of a turn to stream. Announce their preparation
+// before execution without exposing partial arguments or claiming a write has
+// succeeded. The normal requested/finished lifecycle still runs exactly once.
+fn emit_tool_preparation(
+    sink: &EventSink,
+    session: &Session,
+    partial: &BTreeMap<usize, (String, String, String)>,
+    preparing: &mut std::collections::BTreeSet<String>,
+) {
+    if session.is_aborted() {
+        return;
+    }
+    for (id, name, _) in partial.values() {
+        let id = id.trim();
+        // Wait for an actual id so a later id delta cannot strand a UI row.
+        if id.is_empty()
+            || !matches!(name.as_str(), "write" | "edit" | "apply_patch" | "artifact")
+            || !preparing.insert(id.to_owned())
+        {
+            continue;
+        }
+        sink.emit(json!({
+            "type": "tool.preparing",
+            "taskId": session.task_id,
+            "toolCallId": id,
+            "toolKind": name,
+            "at": now_iso(),
+        }));
+    }
 }
 
 fn process_veil_payload(
@@ -829,6 +864,7 @@ async fn attempt_veil_chat(
     }
     let mut result = VeilChatResult::default();
     let mut partial = BTreeMap::new();
+    let mut preparing = std::collections::BTreeSet::new();
     let mut buffer = Vec::new();
     let mut completed = false;
     let mut text_streamed = false;
@@ -861,6 +897,7 @@ async fn attempt_veil_chat(
                     VeilAttemptError::final_failure(error).committed_if(committed)
                 })?;
             text_streamed |= emit_streamed(sink, session, &result, &content, &reasoning);
+            emit_tool_preparation(sink, session, &partial, &mut preparing);
             if line_completed {
                 completed = true;
             }
@@ -880,6 +917,7 @@ async fn attempt_veil_chat(
             process_veil_line(trailing, &mut result, &mut partial)
                 .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?;
         text_streamed |= emit_streamed(sink, session, &result, &content, &reasoning);
+        emit_tool_preparation(sink, session, &partial, &mut preparing);
         if line_completed {
             completed = true;
         }

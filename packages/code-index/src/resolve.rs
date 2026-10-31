@@ -14,7 +14,7 @@ use crate::{
     imports::ImportKind,
     lang::Language,
     model::{Edge, Location, Node, edge_id, file_node_id, sanitize, symbol_node_id},
-    tsconfig::{AliasResolver, parent_directory},
+    tsconfig::{AliasResolver, join_relative, parent_directory},
     walk::FileExtract,
 };
 
@@ -39,20 +39,6 @@ struct SymbolRecord {
     path: String,
     line: u64,
     is_test: bool,
-}
-
-fn join_relative(base: &str, relative: &str) -> String {
-    let mut parts: Vec<&str> = base.split('/').filter(|part| !part.is_empty()).collect();
-    for part in relative.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            other => parts.push(other),
-        }
-    }
-    parts.join("/")
 }
 
 /// TS/JS module specifiers omit the extension; probe the same order the

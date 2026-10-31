@@ -117,14 +117,28 @@ func (s *Store) IsSetup(ctx context.Context) (bool, error) {
 	return count == 1, err
 }
 
+var ErrSetupComplete = errors.New("Console already has an owner")
+
 func (s *Store) NewSetup(ctx context.Context, now time.Time) (string, error) {
 	plain, hash, err := auth.NewToken()
 	if err != nil {
 		return "", err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO setup(id, token_hash, expires_at, used_at) VALUES(1, ?, ?, NULL)
-ON CONFLICT(id) DO UPDATE SET token_hash=excluded.token_hash, expires_at=excluded.expires_at, used_at=NULL`, hash, now.Add(15*time.Minute).Unix())
-	return plain, err
+	result, err := s.db.ExecContext(ctx, `INSERT INTO setup(id, token_hash, expires_at, used_at)
+ SELECT 1, ?, ?, NULL WHERE NOT EXISTS (SELECT 1 FROM owner)
+ ON CONFLICT(id) DO UPDATE SET token_hash=excluded.token_hash, expires_at=excluded.expires_at, used_at=NULL
+ WHERE NOT EXISTS (SELECT 1 FROM owner)`, hash, now.Add(15*time.Minute).Unix())
+	if err != nil {
+		return "", err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+	if count == 0 {
+		return "", ErrSetupComplete
+	}
+	return plain, nil
 }
 
 func (s *Store) CreateOwner(ctx context.Context, setupCode, username, verifier string, now time.Time) error {
@@ -213,7 +227,7 @@ func (s *Store) RotateSession(ctx context.Context, oldToken, username string, no
 	return token, csrf, tx.Commit()
 }
 
-func (s *Store) Session(ctx context.Context, token string, now time.Time) (Session, error) {
+func (s *Store) Session(ctx context.Context, token string, now time.Time, activity bool) (Session, error) {
 	var session Session
 	var created, last, expires int64
 	err := s.db.QueryRowContext(ctx, "SELECT username,csrf_hash,created_at,last_seen,expires_at FROM sessions WHERE token_hash=?", auth.HashToken(token)).Scan(
@@ -224,7 +238,9 @@ func (s *Store) Session(ctx context.Context, token string, now time.Time) (Sessi
 		}
 		return Session{}, errors.New("session is invalid or expired")
 	}
-	_, err = s.db.ExecContext(ctx, "UPDATE sessions SET last_seen=? WHERE token_hash=?", now.Unix(), auth.HashToken(token))
+	if activity {
+		_, err = s.db.ExecContext(ctx, "UPDATE sessions SET last_seen=? WHERE token_hash=?", now.Unix(), auth.HashToken(token))
+	}
 	session.CreatedAt, session.LastSeen, session.ExpiresAt = time.Unix(created, 0), time.Unix(last, 0), time.Unix(expires, 0)
 	return session, err
 }

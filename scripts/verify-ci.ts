@@ -1,6 +1,4 @@
-// Local verification gate: pinned toolchains, supply-chain audit and SBOM,
-// then the full test suite. Releases are packaged on this machine afterwards
-// (`npm run desktop:release` / `npm run publish:release`), not by GitHub.
+// Local equivalent of the GitHub CI verification gate.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -158,4 +156,4 @@ for (const [index, step] of steps.entries()) {
 
 const minutes = (Number(process.hrtime.bigint() - started) / 60e9).toFixed(1);
 console.log(`\nLocal verification passed on ${process.platform}/${process.arch} in ${minutes} min.`);
-console.log("Packaging is still this machine's job: npm run desktop:release, then npm run publish:release.");
+console.log("GitHub Actions builds, signs and verifies desktop releases after CI passes on main.");

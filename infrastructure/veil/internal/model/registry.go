@@ -16,6 +16,7 @@ type RegistrySpec struct {
 	BaseURL          string
 	ContextLength    int
 	Reasoning        bool
+	SamplingProfiles *SamplingProfiles
 	EmbeddingBaseURL string
 	EmbeddingModel   string
 }
@@ -92,6 +93,17 @@ func (r *Registry) DoChat(ctx context.Context, req ChatRequest) (*http.Response,
 // that may not read it, so sending it unasked would be a silent no-op that
 // still reads, in a trace, as a directive that was honoured.
 func (r *Registry) resolveThinking(ctx context.Context, req ChatRequest) ChatRequest {
+	entry := r.entries[req.Model]
+	if entry == nil {
+		entry = r.entries[r.defaultID]
+	}
+	if entry.spec.SamplingProfiles != nil {
+		profile := entry.spec.SamplingProfiles.Thinking
+		if (req.Thinking != nil && !*req.Thinking) || (req.Thinking == nil && req.ReasoningEffort == ReasoningOff) {
+			profile = entry.spec.SamplingProfiles.NonThinking
+		}
+		req.SamplingProfile = &profile
+	}
 	if req.Thinking == nil || r.mode != ModeLocal {
 		return req
 	}

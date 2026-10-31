@@ -41,10 +41,10 @@ test("the published registry is read with its metadata and live availability", a
     assert.equal(seenPath, "/api/models");
     assert.equal(seenAuthorization, "Bearer test-token");
     assert.deepEqual(models, [
-      { id: "qwen3-32b", display: "Qwen 32B", contextLength: 98304, reasoning: true, available: true, default: true },
+      { id: "qwen3-32b", display: "Qwen 32B", contextLength: 98304, reasoning: true, reasoningEfforts: [], available: true, default: true },
       // A blank display falls back to the id; a missing window is omitted
       // rather than reported as zero.
-      { id: "small", display: "small", reasoning: false, available: false, default: false },
+      { id: "small", display: "small", reasoning: false, reasoningEfforts: [], available: false, default: false },
     ]);
   });
 });

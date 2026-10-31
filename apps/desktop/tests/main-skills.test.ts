@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +108,56 @@ paths:
   - apps/desktop/**
   - '**/*.tsx'
 ---`)).paths, ["apps/desktop/**", "**/*.tsx"]);
+});
+
+test("system skill installation includes schemas, upgrades untouched resources, and preserves edits", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-resources-"));
+  try {
+    const skills = loadSkills(userData);
+    const directory = path.join(userData, "skills");
+    skills.installBundledSystemSkills(directory);
+    for (const id of ["documents", "presentations", "spreadsheets", "pdf"]) {
+      for (const name of ["spec.md", "ops.md"]) {
+        const resource = path.join(directory, "system", `umbratic-${id}`, "references", name);
+        assert.ok(fs.readFileSync(resource, "utf8").length > 100, resource);
+      }
+    }
+    const resource = path.join(directory, "system", "umbratic-documents", "references", "spec.md");
+    const bundled = fs.readFileSync(resource, "utf8");
+    fs.writeFileSync(resource, "old installed schema");
+    const manifestPath = path.join(directory, ".manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.systemSkills["umbratic-documents/references/spec.md"].installedChecksum =
+      `sha256:${crypto.createHash("sha256").update("old installed schema").digest("hex")}`;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    skills.installBundledSystemSkills(directory);
+    assert.equal(fs.readFileSync(resource, "utf8"), bundled);
+    fs.writeFileSync(resource, "my custom schema");
+    skills.installBundledSystemSkills(directory);
+    assert.equal(fs.readFileSync(resource, "utf8"), "my custom schema");
+    fs.unlinkSync(resource);
+    skills.installBundledSystemSkills(directory);
+    assert.equal(fs.readFileSync(resource, "utf8"), bundled);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test("system resource installation does not follow destination symlinks", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-resource-link-"));
+  try {
+    const skills = loadSkills(userData);
+    const directory = path.join(userData, "skills");
+    const root = path.join(directory, "system", "umbratic-documents");
+    const outside = path.join(userData, "outside");
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(root, "references"), process.platform === "win32" ? "junction" : "dir");
+    skills.installBundledSystemSkills(directory);
+    assert.deepEqual(fs.readdirSync(outside), []);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
 });
 
 function storedZip(entries, options = {}) {
@@ -404,11 +455,21 @@ test("importSkill imports a real folder skill with referenced resources and reje
   assert.match(reserved.message, /reserved skill/);
 });
 
-test("importSkill imports a zip skill archive with one skill folder", async () => {
+test("importSkill imports a zip skill archive with one skill folder", async (t) => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-settings-"));
-  const skills = loadSkills(userData);
+  const options = { cache: new Map(), mocks: { electron: electronMock(userData) } };
+  const skills = loadTypeScriptModule(skillsPath, options);
+  const storage = loadTypeScriptModule(new URL("../src/main/storage.ts", import.meta.url), options);
+  t.after(() => {
+    storage.closeStorageDatabases();
+    assert.equal(storage.retainedStorageDatabaseCount(), 0);
+    fs.rmSync(userData, { recursive: true, force: true });
+  });
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-target-"));
-  const zipPath = path.join(os.tmpdir(), `umbratic-skill-${Date.now()}-${Math.random().toString(16).slice(2)}.zip`);
+  const archiveDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-"));
+  t.after(() => fs.rmSync(archiveDirectory, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const zipPath = path.join(archiveDirectory, "skill.zip");
   fs.writeFileSync(
     zipPath,
     storedZip({
@@ -419,6 +480,7 @@ test("importSkill imports a zip skill archive with one skill folder", async () =
   try {
     const imported = await skills.importSkill({ sourcePath: zipPath }, directory);
     assert.equal(imported.ok, true);
+    assert.ok(storage.retainedStorageDatabaseCount() > 0, "skill settings retain their SQLite database until shutdown");
     assert.equal(imported.skill.id, "zip-skill");
     assert.equal(fs.readFileSync(path.join(directory, "zip-skill", "examples.md"), "utf8"), "Zip resource text.");
     const selected = skills.enabledPromptSkills(directory, { "zip-skill": true });
@@ -428,15 +490,19 @@ test("importSkill imports a zip skill archive with one skill folder", async () =
   }
 });
 
-test("importSkill rejects zip archives with too many entries or symlink entries", async () => {
+test("importSkill rejects zip archives with too many entries or symlink entries", async (t) => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-limits-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
   const skills = loadSkills(userData);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-limits-target-"));
   const crowded = Object.fromEntries(
     Array.from({ length: 257 }, (_, index) => [`entry-${index}.md`, `# ${index}`]),
   );
-  const crowdedPath = path.join(os.tmpdir(), `umbratic-skill-crowded-${Date.now()}.zip`);
-  const symlinkPath = path.join(os.tmpdir(), `umbratic-skill-symlink-${Date.now()}.zip`);
+  const archiveDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-limits-archives-"));
+  t.after(() => fs.rmSync(archiveDirectory, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const crowdedPath = path.join(archiveDirectory, "crowded.zip");
+  const symlinkPath = path.join(archiveDirectory, "symlink.zip");
   fs.writeFileSync(crowdedPath, storedZip(crowded));
   fs.writeFileSync(
     symlinkPath,

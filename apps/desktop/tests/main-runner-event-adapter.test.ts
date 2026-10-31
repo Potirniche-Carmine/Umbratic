@@ -39,6 +39,37 @@ function adapterHarness() {
   return { adapter, emitted, invalid, failures, settledSteps, finished: () => finished, aborted: () => aborted };
 }
 
+test("file preparation starts immediately and updates one timeline row on execution", () => {
+  const h = adapterHarness();
+  const { composerTimelineFromEvents } = loadTypeScriptModule(new URL("../src/renderer/composerTimeline.ts", import.meta.url));
+  h.adapter.handle({ type: "tool.preparing", taskId: "task-1", toolCallId: "write-1", toolKind: "write" });
+  assert.equal(h.emitted[0].type, "command.started");
+  h.adapter.handle({ type: "tool.preparing", taskId: "task-1", toolCallId: "write-1", toolKind: "write" });
+  assert.equal(h.emitted.length, 1);
+  h.adapter.handle({ type: "tool.requested", taskId: "task-1", toolCallId: "write-1", toolKind: "write", summary: "write PRD.md", arguments: { path: "PRD.md", content: "requirements" } });
+  h.adapter.handle({ type: "tool.finished", taskId: "task-1", toolCallId: "write-1", exitCode: 0, status: "success" });
+  assert.equal(h.emitted[1].id, h.emitted[0].id);
+  assert.equal(h.emitted[1].command, "write PRD.md");
+  assert.equal(h.emitted[2].type, "command.finished");
+  const rows = composerTimelineFromEvents(h.emitted).flatMap((item) => item.segments ?? []).filter((segment) => segment.type === "command");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].run.command, "write PRD.md");
+  assert.equal(rows[0].run.status, "passed");
+});
+
+test("an interrupted write never claims success during preparation or execution", () => {
+  for (const executing of [false, true]) {
+    const h = adapterHarness();
+    h.adapter.handle({ type: "tool.preparing", taskId: "task-1", toolCallId: "write-1", toolKind: "write" });
+    if (executing) h.adapter.handle({ type: "tool.requested", taskId: "task-1", toolCallId: "write-1", toolKind: "write", summary: "write PRD.md" });
+    h.adapter.failStream("connection closed");
+    const ended = h.emitted.at(-1);
+    assert.equal(ended.type, "command.finished");
+    assert.equal(ended.exitCode, null);
+    assert.equal(ended.status, "aborted");
+  }
+});
+
 test("runner event adapter translates one typed tool lifecycle", () => {
   const harness = adapterHarness();
   harness.adapter.handle({

@@ -52,13 +52,11 @@ export function DocumentReviewPreview({
   preview,
   commenting,
   selection,
-  editor,
   onSelectionChange,
 }: {
   preview: DocumentReviewSnapshot;
   commenting: boolean;
   selection: readonly string[];
-  editor: React.ReactNode;
   onSelectionChange(selection: string[]): void;
 }) {
   const sentences = useMemo(() => segmentDocumentReview(preview), [preview]);
@@ -72,13 +70,6 @@ export function DocumentReviewPreview({
     }
     return grouped;
   }, [sentences]);
-  const editorBlockIndex = useMemo(() => {
-    let latest = -1;
-    for (const sentence of sentences) {
-      if (selected.has(sentence.id) && sentence.blockIndex > latest) latest = sentence.blockIndex;
-    }
-    return latest;
-  }, [sentences, selected]);
   const toggleSentence = (id: string) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
@@ -93,23 +84,32 @@ export function DocumentReviewPreview({
           const blockSentences = byBlock.get(block.id) ?? [];
           const selectedCount = blockSentences.filter((sentence) => selected.has(sentence.id)).length;
           return (
-            <React.Fragment key={block.id}>
-              <section
-                className={`documentReviewBlock style-${block.style} ${selectedCount ? "hasSelection" : ""}`}
-              >
-                <div className="documentReviewBlockContent">
-                  {block.style === "bullet" || block.style === "numbered" ? (
-                    <div className={`documentReviewListItem ${block.style}`}>
-                      <span aria-hidden="true">{block.style === "bullet" ? "•" : `${blockIndex + 1}.`}</span>
-                      <BlockText block={block} sentences={blockSentences} commenting={commenting} selected={selected} onToggleSentence={toggleSentence} />
-                    </div>
-                  ) : (
+            <section
+              key={block.id}
+              className={`documentReviewBlock style-${block.style} ${selectedCount ? "hasSelection" : ""}`}
+            >
+              <div className="documentReviewBlockContent">
+                {block.cells ? (
+                  <div className="documentReviewTable"><table>
+                    <tbody>{block.cells.map((row, rowIndex) => <tr key={rowIndex}>
+                      {row.map((_cell, columnIndex) => {
+                        const Cell = rowIndex === 0 ? "th" : "td";
+                        return <Cell key={columnIndex} scope={rowIndex === 0 ? "col" : undefined}>
+                          <BlockText block={block} sentences={blockSentences.filter((sentence) => sentence.rowIndex === rowIndex && sentence.columnIndex === columnIndex)} commenting={commenting} selected={selected} onToggleSentence={toggleSentence} />
+                        </Cell>;
+                      })}
+                    </tr>)}</tbody>
+                  </table></div>
+                ) : block.style === "bullet" || block.style === "numbered" ? (
+                  <div className={`documentReviewListItem ${block.style}`}>
+                    <span aria-hidden="true">{block.style === "bullet" ? "•" : `${blockIndex + 1}.`}</span>
                     <BlockText block={block} sentences={blockSentences} commenting={commenting} selected={selected} onToggleSentence={toggleSentence} />
-                  )}
-                </div>
-              </section>
-              {editorBlockIndex === blockIndex ? editor : null}
-            </React.Fragment>
+                  </div>
+                ) : (
+                  <BlockText block={block} sentences={blockSentences} commenting={commenting} selected={selected} onToggleSentence={toggleSentence} />
+                )}
+              </div>
+            </section>
           );
         })}
       </div>

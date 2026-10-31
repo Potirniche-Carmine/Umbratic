@@ -118,6 +118,9 @@ pub(super) async fn command_tool(
         .current_dir(&session.config.cwd)
         .env_clear()
         .envs(safe_command_environment())
+        // Tools have no stdin contract. Never expose the runner control stream
+        // or let a noninteractive child wait for that stream to close.
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -531,6 +534,28 @@ pub(super) fn safe_command_environment() -> BTreeMap<String, String> {
     // Never inherit a parent PATH that may prefer workspace-controlled runtimes.
     env.retain(|name, _| !name.eq_ignore_ascii_case("PATH"));
     env.insert("PATH".into(), trusted_command_path());
+    #[cfg(windows)]
+    {
+        // Windows PowerShell otherwise probes user/global module locations
+        // during cmdlet discovery even with -NoProfile/-NonInteractive. Only
+        // the modules beside the trusted system shell may enter this path.
+        // Provider qualification prevents Windows PowerShell from treating it
+        // as its default path and inserting AllUsers module directories.
+        // https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_psmodulepath#windows-powershell-startup
+        let root = std::env::var_os("SystemRoot")
+            .or_else(|| std::env::var_os("WINDIR"))
+            .unwrap_or_else(|| r"C:\Windows".into());
+        let modules = PathBuf::from(root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("Modules");
+        env.retain(|name, _| !name.eq_ignore_ascii_case("PSModulePath"));
+        env.insert(
+            "PSModulePath".into(),
+            format!("FileSystem::{}", modules.display()),
+        );
+    }
     env
 }
 
@@ -547,7 +572,25 @@ async fn terminate_command_tree(child: &mut tokio::process::Child, pid: Option<u
         }
         return;
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    if let Some(pid) = pid {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let _ = tokio::time::timeout(
+            Duration::from_secs(1),
+            Command::new(
+                std::path::Path::new(&root)
+                    .join("System32")
+                    .join("taskkill.exe"),
+            )
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status(),
+        )
+        .await;
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = pid;
     let _ = child.kill().await;
 }

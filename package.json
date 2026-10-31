@@ -1,41 +1,40 @@
 {
   "name": "umbratic-ai",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.3",
   "type": "module",
-  "packageManager": "npm@11.16.0",
+  "packageManager": "npm@11.20.0",
   "engines": {
-    "node": "26.3.0",
-    "npm": "11.16.0"
+    "node": "26.12.1",
+    "npm": "11.20.0"
   },
   "workspaces": [
     "apps/desktop",
     "packages/*"
   ],
   "overrides": {
-    "@electron/asar": "4.2.1",
+    "@electron/asar": "4.3.1",
     "@electron/get": {
-      "undici": "7.29.0"
+      "undici": "7.30.1"
     },
     "@electron/universal": "3.0.6",
-    "brace-expansion": "5.0.9",
-    "fast-uri": "3.1.5",
+    "brace-expansion": "5.0.12",
+    "fast-uri": "3.1.9",
     "jake": "12.10.1",
-    "js-yaml": "4.3.1",
+    "js-yaml": "4.3.2",
     "nanoid": "3.3.18",
     "node-gyp": {
-      "undici": "6.28.0"
+      "undici": "6.29.1"
     },
-    "pdf-to-img": {
-      "pdfjs-dist": "6.2.108"
-    },
-    "postcss": "8.5.25"
+    "postcss": "8.5.25",
+    "glob": "14.0.3",
+    "minimatch": "11.0.3",
+    "source-map-js": "1.2.2"
   },
   "scripts": {
     "desktop:dev": "npm --workspace @umbratic/desktop run dev",
-    "desktop:release": "node scripts/build-go-services.ts && npm --workspace @umbratic/desktop run package && npm --workspace @umbratic/desktop run verify:package",
-    "publish:release": "node scripts/publish-release.ts",
-    "release:version": "npm version --workspaces --include-workspace-root --no-git-tag-version --ignore-scripts",
+    "desktop:release": "node scripts/desktop-release.ts",
+    "release:version": "node scripts/release-version.ts",
     "veil:dev": "cd infrastructure/veil && go run ./cmd/veil",
     "veil:test": "cd infrastructure/veil && go test ./...",
     "veil-console:dev": "node scripts/run-veil-console.ts dev",
@@ -46,8 +45,9 @@
     "supply-chain:check": "node scripts/check-supply-chain.ts",
     "supply-chain:audit": "node scripts/audit-supply-chain.ts",
     "supply-chain:sbom": "node scripts/generate-sbom.ts",
-    "quality:check": "cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets -- -D warnings && go -C infrastructure/veil vet ./... && go -C infrastructure/veil-console vet ./... && node scripts/run-go-race.ts infrastructure/veil && node scripts/run-go-race.ts infrastructure/veil-console && node scripts/check-source-size.ts",
+    "quality:check": "cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets -- -D warnings && go -C infrastructure/veil vet ./... && go -C infrastructure/veil-console vet ./... && node scripts/run-go-race.ts infrastructure/veil && node scripts/run-go-race.ts infrastructure/veil-console && go -C infrastructure/veil-console/deploy/caddy vet ./... github.com/go-jose/go-jose/v3/... && node scripts/run-go-race.ts infrastructure/veil-console/deploy/caddy github.com/go-jose/go-jose/v3/... && node scripts/check-source-size.ts",
     "verify:ci": "node scripts/verify-ci.ts",
-    "test:all": "npm run supply-chain:check && npm run quality:check && npm --workspace @umbratic/pdf run test:all && npm --workspace @umbratic/code-index run test:all && cargo test --locked --package umbratic-artifacts --all-targets && npm --workspace @umbratic/runner run test:all && npm --workspace @umbratic/desktop run test:all && npm run veil:test && npm run veil-console:test && npm --workspace @umbratic/desktop run build"
-  }
+    "test:all": "node scripts/check-release-version.ts && npm run supply-chain:check && npm run quality:check && npm --workspace @umbratic/pdf run test:all && npm --workspace @umbratic/code-index run test:all && cargo test --locked --package umbratic-artifacts --all-targets && npm --workspace @umbratic/runner run test:all && npm --workspace @umbratic/desktop run test:all && npm run veil:test && npm run veil-console:test && npm --workspace @umbratic/desktop run build"
+  },
+  "license": "MIT"
 }

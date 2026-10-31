@@ -39,7 +39,7 @@ function MemoryFitNote({ fit, neededRamGB }: { fit: LocalMemoryFit; neededRamGB:
   );
 }
 
-export function useLocalModelCatalog(api: DesktopApi, kind: "chat" | "dictation", active: boolean) {
+export function useLocalModelCatalog(api: DesktopApi, kind: "chat" | "dictation" | "image", active: boolean) {
   const [models, setModels] = useState<LocalCatalogModel[]>([]);
   const [progress, setProgress] = useState<ModelDownloadEvent | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -116,12 +116,14 @@ export function useLocalModelCatalog(api: DesktopApi, kind: "chat" | "dictation"
 function QuantPicker({
   modelName,
   quants,
+  sharedBytes = 0,
   selected,
   disabled,
   onSelect,
 }: {
   modelName: string;
   quants: LocalModelQuant[];
+  sharedBytes?: number;
   selected: string;
   disabled: boolean;
   onSelect: (quant: string) => void;
@@ -159,7 +161,7 @@ function QuantPicker({
     if (!rect) return;
     // Fixed-positioned so the scrolling model menu cannot clip it; flipped
     // above the trigger when the viewport below is too short for it.
-    const menuHeight = quants.length * 32 + 12;
+    const menuHeight = quants.length * 32 + 12 + (sharedBytes ? 33 : 0);
     const top = rect.bottom + 5 + menuHeight > window.innerHeight
       ? Math.max(8, rect.top - menuHeight - 5)
       : rect.bottom + 5;
@@ -216,7 +218,7 @@ function QuantPicker({
                 className={`quantPickerSize is-${entry.fit}`}
                 title={entry.fit === "comfortable" ? undefined : `Wants ${entry.neededRamGB} GB of memory`}
               >
-                {formatBytes(entry.bytes)}
+                {formatBytes(entry.bytes - sharedBytes)}
               </span>
               {/* Which quantizations are already on disk decides whether picking
                   one costs a download, so it is said in words rather than left
@@ -228,6 +230,7 @@ function QuantPicker({
               {entry.quant === selected ? <Check size={13} aria-hidden="true" /> : null}
             </button>
           ))}
+          {sharedBytes ? <div className="quantPickerShared">Plus {formatBytes(sharedBytes)} shared files</div> : null}
         </div>,
         document.body,
       ) : null}
@@ -361,6 +364,7 @@ export function LocalModelMenu({
       <QuantPicker
         modelName={model.displayName}
         quants={model.quants}
+        sharedBytes={model.sharedBytes}
         selected={model.selectedQuant}
         disabled={disabled || downloading}
         onSelect={(quant) => onQuantChange(model.id, quant)}
@@ -395,11 +399,12 @@ export function LocalModelMenu({
     // question — a 3 GB model chosen for agentic work reads as a broken app
     // rather than as the wrong model. Given the row's full width, so a row
     // carrying a badge does not get a narrower sentence than the row above it.
-    const under = model.role || model.fit !== "comfortable" ? (
+    const under = model.role || model.sharedBytes || model.fit !== "comfortable" ? (
       <span className="localModelRowUnder">
         <span className="localModelRole">
           {model.role ? <strong>{model.role.label}</strong> : null}
           {model.role?.detail}
+          {model.sharedBytes ? <span title="Text encoder and image decoder, downloaded once for all quantizations.">Shared files: {formatBytes(model.sharedBytes)} · Total: {formatBytes(model.bytes)}</span> : null}
         </span>
         <MemoryFitNote fit={model.fit} neededRamGB={model.neededRamGB} />
       </span>
@@ -450,7 +455,7 @@ export function LocalModelMenu({
           {traits}
           <span className="localModelRowSide">
             {quantPicker}
-            <span className="localModelNote">{formatBytes(model.bytes)}</span>
+            <span className="localModelNote">{formatBytes(model.bytes - (model.sharedBytes ?? 0))}</span>
             {removeButton}
             <span className="localModelAction">
               <button
@@ -505,7 +510,7 @@ export function LocalModelMenu({
             </button>
           ) : null}
           {quantPicker}
-          <span className="localModelNote">{formatBytes(model.bytes)}</span>
+          <span className="localModelNote">{formatBytes(model.bytes - (model.sharedBytes ?? 0))}</span>
           {removeButton}
           <span className="localModelAction">
             {selected ? <Check className="localModelTick" size={14} /> : null}

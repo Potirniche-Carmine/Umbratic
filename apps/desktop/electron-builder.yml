@@ -5,6 +5,7 @@ asar: true
 asarUnpack:
   - "**/*.node"
 npmRebuild: false
+afterPack: scripts/after-pack.cjs
 electronDist: ../../node_modules/electron/dist
 directories:
   output: ../../target/release/desktop
@@ -14,6 +15,8 @@ files:
   - assets/**/*
   - package.json
 extraResources:
+  - from: .package/image-runtime
+    to: image-runtime
   - from: .package/artifacts
     to: artifacts
   - from: .package/code-index
@@ -28,21 +31,23 @@ extraResources:
     to: veil
   - from: .package/llama-server
     to: llama-server
-# Where installed apps look for updates. Nothing here uploads: `--publish never`
-# stays in force and scripts/publish-release.ts does the uploading. The block
-# exists so that electron-builder writes latest.yml / latest-mac.yml next to
-# the installers and bakes this address into the app as app-update.yml.
+# GitHub hosts public metadata and installers; CI publishes only after verifying
+# every signed platform package. Packaging itself never uploads.
 publish:
-  provider: generic
-  url: https://downloads.umbratic.ai/releases
+  provider: github
+  owner: Potirniche-Carmine
+  repo: Umbratic
+  releaseType: release
 # Supported platforms: Windows x64, Windows arm64, and macOS arm64. One
 # installer per platform — the runnable-in-place build lives in win-unpacked.
 mac:
   icon: assets/icons/icon.icns
   category: public.app-category.developer-tools
-  # Signed with whatever Developer ID Application identity the keychain holds,
-  # and notarized when the APPLE_* variables from ~/.umbratic/release.env are
-  # present; without either the build is unsigned and only for looking at.
+  # Keep appId, productName, and the Developer ID team stable across releases
+  # so Keychain recognizes updates as the same app. Only --unsigned local
+  # packages may skip signing. APPLE_* variables configure notarization.
+  forceCodeSigning: true
+  type: distribution
   # The hardened runtime is on by default. The entitlements add the microphone
   # to electron-builder's defaults, for the app and everything inside it.
   entitlements: assets/entitlements.mac.plist
@@ -57,9 +62,40 @@ mac:
       arch: [arm64]
     - target: zip
       arch: [arm64]
+# The drag-to-install window: the same dark surface as the app icon and the
+# NSIS wizard, with the drop points pinned where the background's arrow
+# expects them. The background is generated — see generate:dmg-background.
 dmg:
+  sign: true
   icon: assets/icons/icon.icns
+  background: assets/dmg/background.tiff
+  window:
+    width: 540
+    height: 380
+  iconSize: 100
+  # Finder paints labels black over any background picture, invisible on this
+  # surface, so the background carries white wordmarks instead and the real
+  # labels are kept at the smallest size Finder allows.
+  iconTextSize: 10
+  contents:
+    - { x: 140, y: 190, type: file }
+    - { x: 400, y: 190, type: link, path: /Applications }
+    # The two support files Finder shows to anyone browsing with hidden files
+    # on, parked outside the 540pt window so the layout stays clean either
+    # way. dmgbuild places them itself but offers no way to position them, so
+    # each is re-declared as a copy of the identical bytes — the copy lands on
+    # the file dmgbuild already wrote, and the position comes along with it.
+    - { x: 700, y: 130, type: file, path: assets/dmg/background.tiff, name: .background.tiff }
+    - { x: 700, y: 290, type: file, path: assets/icons/icon.icns, name: .VolumeIcon.icns }
 win:
+  extraFiles:
+    - from: .package/windows-runtime
+      to: .
+  forceCodeSigning: true
+  verifyUpdateCodeSignature: true
+  signExts: [".dll", ".node"]
+  signtoolOptions:
+    signingHashAlgorithms: [sha256]
   icon: assets/icons/icon.ico
   # x64 and arm64 are separate builds carrying differently-compiled sidecars,
   # so the architecture is part of the file name. Without it both land on the
@@ -67,7 +103,7 @@ win:
   # The updater picks the file whose name carries its own architecture.
   artifactName: Umbratic-${version}-${arch}.${ext}
   # Signing is Azure Trusted Signing, configured per release machine: the
-  # package script passes win.azureSignOptions from ~/.umbratic/release.env.
+  # package script supplies a hook using pinned Microsoft signing tooling.
   # It is not written here because every unsigned developer package
   # would then try to sign and fail.
   target:

@@ -28,52 +28,57 @@ One data root per user:
 | `artifacts/ocr/` | Rasterized pages cached for OCR | No |
 | `cache/models/<model-id>/` | Downloaded GGUF weights, plus `.partial` and `.partial.chunks` while a download is in flight | No |
 | `cache/electron/` | Electron session cache | No |
+| `cache/tmp/` | Private temporary files for Electron and its child processes | No |
 | `logs/electron/`, `logs/runner/`, `logs/crash-dumps/` | Diagnostics | No |
-| `telemetry/spool/` | Telemetry bundles waiting to upload | No |
+
+Diagnostic logs are local troubleshooting data. Umbratic does not automatically upload them or collect usage analytics. A user can export logs manually. In company server mode, model requests and server diagnostics are governed by that server’s configuration and operator.
 
 Inside a user's own repository the runner writes `.umbratic/` — build output,
 runtime state, diagnostics, temporary files. Workspace-local and disposable.
 
 ## Company server
 
-Ubuntu 24.04 amd64, installed by `install.sh` from the release zip.
+Installed by `deploy.sh` from the target-specific server ZIP. Mac data lives under `/Library/Application Support/Umbratic/Veil Console/`.
 
-### Programs — root-owned, replaced on upgrade
+On Mac, the entire server uses `/Library/Application Support/Umbratic/Veil Console/`:
 
-| Path | Contents |
+| Directory | Contents |
 | --- | --- |
-| `/opt/umbratic/veil-console/veil` | Veil binary |
-| `/opt/umbratic/veil-console/veil-console` | Console binary |
-| `/opt/umbratic/veil-console/umbratic-pdf` | PDF text extractor for `.pdf` uploads |
-| `/opt/umbratic/veil-console/entitlement.json` | Signed customer entitlement |
-| `/opt/umbratic/veil-console/VERSION` | Installed release version |
-| `/opt/umbratic/qdrant/qdrant` | Qdrant vector database binary |
+| `Program/` | Executables, entitlement, deployment settings, pinned dependencies, Python and its virtual environment |
+| `State/` | Private settings, credentials, documents, database, logs, caches and temporary files |
+| `Models/` | Imported model folders |
+| `Backups/<timestamp>/` | Stopped programs and state captured before a deployment |
 
-### State — service-account owned, preserved across upgrades
+The installer moves the former `/opt/umbratic/` directory, including its historical backups, into the new deployment backup's `previous-layout/` after readiness succeeds. It rebuilds Python's environment at its new path and updates launchd. Model paths, state and certificates stay in place. If installation fails before readiness, the previous services and state are restored. `--clean` removes active programs, state and models; it retains backup history.
 
-| Path | Owner | Mode | Contents | Back up |
-| --- | --- | --- | --- | --- |
-| `/var/lib/veil-console/console.db` | `veil-console` | 0600 | Owner account, sessions, configuration, document rows, retrieval settings, audit events | Yes |
-| `/var/lib/veil-console/secrets.json` | `veil-console` | 0600 | Veil auth token, control token, CSRF signing key | Yes |
-| `/var/lib/veil-console/veil-identity.json` | `veil-console` | 0600 | Enrolled users and devices | Yes |
-| `/var/lib/veil-console/qdrant-api-key` | `veil-console` | 0600 | Qdrant API key, generated at install | Yes |
-| `/var/lib/veil-console/documents/` | `veil-console` | 0700 | Uploaded originals, one file per document id | Yes |
-| `/var/lib/qdrant/storage/` | `qdrant` | 0700 | Vectors and chunk payloads | Rebuildable |
-| `/var/lib/qdrant/snapshots/` | `qdrant` | 0700 | Qdrant snapshots | No |
+Linux programs remain under `/opt/umbratic/veil-console/`: executables in `bin/`, signed entitlement in `entitlement.json`, deployment settings in `deployment.json`, and pinned runtime dependencies in `runtime/`.
 
-### Configuration and runtime
+Private state lives under `/var/lib/veil-console/` on Linux and `/Library/Application Support/Umbratic/Veil Console/State/` on Mac, owned by `_umbratic`. Back up the entire directory while services are stopped. It includes:
 
-| Path | Owner | Mode | Contents |
-| --- | --- | --- | --- |
-| `/etc/qdrant/config.yaml` | `qdrant` | 0600 | Loopback bind, storage paths, API key, telemetry off |
-| `/etc/systemd/system/veil-console.service` | root | 0644 | Console unit |
-| `/etc/systemd/system/qdrant.service` | root | 0644 | Qdrant unit |
-| `/etc/caddy/conf.d/veil-console.caddy` | root | 0644 | HTTPS front end for Veil |
-| `/run/veil-console/setup-code` | `veil-console` | 0600 | One-time setup code, removed after 15 minutes |
+- `console.db`: owner, configuration, sessions, model startup preferences, and document records.
+- `secrets.json` and `veil-identity.json`: service credentials, enrolled users, and devices.
+- `documents/`: uploaded documents.
+- `qdrant/`, `qdrant.yaml`, and `qdrant-api-key`: vector storage and private database settings.
+- `.local/share/caddy/`: TLS certificates and keys. Console reads only the public `root.crt` when creating private-HTTPS enrollment codes.
+- `cache/` and `tmp/`: private model-runtime caches and temporary files on Mac; these can be regenerated.
+
+Models live separately in `/Library/Application Support/Umbratic/Veil Console/Models/` on Mac and `/var/lib/umbratic-models/` on Linux. Copy model folders there with the local file manager. For Hugging Face caches, keep each model’s `blobs` and `snapshots` together. Back up this directory separately if you need to preserve the model files; deployment state backups do not include it.
+
+The private `bootstrap.sock` issues an expiring setup code on request; no setup-code file is written. The installer prints the code only after readiness checks pass.
+
+Console supervises Caddy and generates its `Caddyfile` in the state directory from `connection_settings` in SQLite. System services are `/Library/LaunchDaemons/com.umbratic.{console,qdrant}.plist` on Mac, or `/etc/systemd/system/umbratic-{console,qdrant}.service` on Linux. Linux deployment backups remain next to the program directory.
+
+## Release machine
+
+On Mac, release work lives in the repository's ignored `artifacts/release-work/`: `release.env`, signing keys, notarization keys, dependency kits, download caches, deployment packages and `tmp/`. Run release commands from the repository root. Keep this directory owner-only and never force-add its credentials to Git. Windows and Linux keep `~/.umbratic/release.env` and `~/umbratic-release/`.
+
+For a clean local Console setup on Mac, run `sudo python3 scripts/reset-veil-console-macos.py` from the repository root. It unloads and removes the Console and Qdrant services, archives the installed programs, state and previous backups in the invoking user's Trash, and clears known Console test leftovers. Downloaded models and desktop data remain intact. It does not reinstall or start services.
+
+Application bundles still belong in `/Applications/`, launchd registrations in `/Library/LaunchDaemons/`, and project outputs in their repository. Those locations are not duplicate stores of app data.
 
 ### Ports
 
-All loopback except the Caddy listener.
+All listeners start on loopback. Caddy becomes reachable over the network after an administrator configures a non-loopback address in Console.
 
 | Port | Service |
 | --- | --- |
@@ -97,5 +102,4 @@ Veil writes no configuration file. Console passes every setting through an
 allowlisted child environment, so there is no on-disk Veil config to back up or
 drift.
 
-Backup and restore steps:
-[../guides/operate-server.md](../guides/operate-server.md#back-up).
+Deployment instructions: [deploy-customer.md](../guides/deploy-customer.md).

@@ -191,6 +191,10 @@ test("the active quantization follows the choice only once it is on disk", async
   fs.mkdirSync(downloads.modelDirectory(dataRoot, model), { recursive: true });
   const q4Path = downloads.modelFilePath(dataRoot, model, q4.files[0]);
   writeSizedPlaceholder(q4Path, q4.files[0].bytes);
+  assert.equal(localModels.activeQuant(dataRoot, model)?.quant, "Q4_K_M", "chat weights remain usable without optional vision");
+  assert.equal(localModels.selectedLocalChatModel(dataRoot, model.id)?.id, model.id);
+  const projector = catalog.quantProjectorFile(q4);
+  writeSizedPlaceholder(downloads.modelFilePath(dataRoot, model, projector), projector.bytes);
   assert.equal(localModels.activeQuant(dataRoot, model).quant, "Q4_K_M");
   assert.equal(localModels.selectedLocalChatModel(dataRoot, model.id)?.id, model.id);
 
@@ -214,7 +218,7 @@ test("the active quantization follows the choice only once it is on disk", async
     "Q4_K_M,Q6_K",
   );
 
-  // A quantization counts as here only when every file it lists is. The
+  // Dictation still needs every file it lists. The
   // dictation weights are the multi-file case in the catalog: llama-server
   // will not load the audio encoder without its projector beside it.
   const asr = catalog.catalogModel("qwen3-asr-0.6b");

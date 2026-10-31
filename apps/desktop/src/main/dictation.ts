@@ -56,6 +56,14 @@ type ActiveDictation = {
 
 let active: ActiveDictation | null = null;
 
+/**
+ * Which press the current start belongs to. A cancel that lands while the
+ * speech model is still loading finds no session to tear down — `active` is
+ * only set after the load — so it advances this instead, and the start
+ * abandons itself when it comes back to a stale number.
+ */
+let startGeneration = 0;
+
 function deliver(session: ActiveDictation, event: DictationEvent): void {
   if (session.finished) return;
   if (event.kind === "partial") {
@@ -162,6 +170,7 @@ function handleFrame(session: ActiveDictation, frame: string): void {
 
 export async function startDictation(input: { language?: string }, webContents: WebContents): Promise<{ started: boolean }> {
   cancelDictation();
+  const generation = ++startGeneration;
 
   const dictationSettings = readDictationSettings();
   const settings = readModelEndpointSettings();
@@ -187,6 +196,13 @@ export async function startDictation(input: { language?: string }, webContents: 
       dictationModel,
       (diagnostic) => recordLocalDiagnostic({ ...diagnostic, source: "desktop" }),
     );
+    // Cancelled while the model loaded: no session opens for a press the user
+    // already abandoned, and the idle countdown the cancel could not start —
+    // there was nothing active yet — begins now.
+    if (generation !== startGeneration) {
+      releaseLocalSpeech();
+      return { started: false };
+    }
 
     // Deliberately not through Veil. Veil refuses to start without a chat
     // model, so routing local dictation through it would make speaking a
@@ -266,15 +282,22 @@ export function sendDictationAudio(input: { chunk: Uint8Array }): void {
   else active.transport.request.write(Buffer.from(input.chunk));
 }
 
-/** Ends the recording. One last transcript follows over whichever transport carried it. */
-export function stopDictation(): void {
-  if (!active || active.finished) return;
+/**
+ * Ends the recording. One last transcript follows over whichever transport
+ * carried it — unless there is no live session to stop, which the renderer
+ * must hear about: waiting on a transcript from a session that does not exist
+ * left the composer on "transcribing" forever.
+ */
+export function stopDictation(): { stopping: boolean } {
+  if (!active || active.finished) return { stopping: false };
   if (active.transport.kind === "local") active.transport.session.stop();
   else active.transport.request.end();
+  return { stopping: true };
 }
 
 /** Abandons the recording without waiting for a transcript. */
 export function cancelDictation(): void {
+  startGeneration += 1;
   const session = active;
   active = null;
   if (!session) return;

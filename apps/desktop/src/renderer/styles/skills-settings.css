@@ -177,7 +177,8 @@
   line-height: 1.4;
 }
 
-.localLogsControl {
+.localLogsControl,
+.generalSettingRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -188,10 +189,41 @@
   background: color-mix(in srgb, var(--surface-2) 48%, transparent);
 }
 
-.localLogsControl > strong {
+.generalSettingRow + .generalSettingRow {
+  margin-top: 8px;
+}
+
+.generalSettingText {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.generalSettingText > strong {
   color: var(--text);
-  font-family: var(--mono-font);
   font-size: 13px;
+}
+
+.generalSettingText > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.localLogsLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.localLogsLabel > strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.localLogsLabel > span {
+  color: var(--muted);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 

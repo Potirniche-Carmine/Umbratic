@@ -9,5 +9,5 @@
 # landed in ggml-org/llama.cpp#19441 and `/v1/audio/transcriptions` in
 # ggml-org/llama.cpp#21863; dictation does not work on anything older.
 repository=https://github.com/ggml-org/llama.cpp.git
-tag=b10419
-commit=aee56b3abfeb134218fe5c496c329a1faac1ef28
+tag=v0.8.0
+commit=8642541b255bfb5dc39cd351a178be09013a55d6

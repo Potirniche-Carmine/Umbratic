@@ -19,9 +19,6 @@ var serverFeatures = []string{
 	"chat.harness_bucket_hint",
 	// Unknown body fields on product routes are stripped and counted.
 	"chat.tolerant_body",
-	// Telemetry accepts any event type and drops unreadable records one at a
-	// time instead of rejecting the bundle.
-	"telemetry.open_vocabulary",
 	// The orient classifier accepts previousResponse as carried context.
 	"orient.previous_response",
 	// GET /api/models lists the models this Veil routes to, with live
@@ -32,6 +29,7 @@ var serverFeatures = []string{
 	// harness_bucket — the name exists so a client knows the field means
 	// something here, not so an unknown value can be refused.
 	"chat.thinking_toggle",
+	"chat.reasoning_effort",
 	// Chat bodies may carry `reasoning_visible`. Security-semantic: the
 	// default is still to strip reasoning tokens, and a client must see this
 	// name before asking to forward them. An older server that never
@@ -80,6 +78,14 @@ func Features(ragEnabled, modelSelectionEnabled, speechEnabled, webSearchEnabled
 	}
 	if webSearchEnabled {
 		names = append(names, webSearchFeature)
+	}
+	return names
+}
+
+func (s *Server) features(rag, selection bool) []string {
+	names := Features(rag, selection, s.cfg.SpeechEnabled(), s.webSearchAvailable())
+	if s.cfg.Image != nil {
+		names = append(names, "image.generate")
 	}
 	return names
 }

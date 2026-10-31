@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::{ToolSurface, catalog::ContractViolation};
+use super::{ToolSurface, catalog::ContractViolation, string_arg, string_list_arg};
 use crate::{
     policy::redact_text,
     safety::{SafetyDecision, evaluate_command},
@@ -27,6 +27,7 @@ request_type!(LsRequest);
 request_type!(FindRequest);
 request_type!(SearchRequest);
 request_type!(WebSearchRequest);
+request_type!(GenerateImageRequest);
 request_type!(WebFetchRequest);
 request_type!(LspRequest);
 request_type!(WorkspaceGraphRequest);
@@ -52,6 +53,7 @@ pub(super) enum ToolRequest {
     Find(FindRequest),
     Search(SearchRequest),
     WebSearch(WebSearchRequest),
+    GenerateImage(GenerateImageRequest),
     WebFetch(WebFetchRequest),
     Lsp(LspRequest),
     WorkspaceGraph(WorkspaceGraphRequest),
@@ -108,6 +110,10 @@ impl ToolRequest {
             }),
             "search" => Self::Search(SearchRequest {
                 primary: string_arg(&arguments, &["query"]),
+                arguments,
+            }),
+            "generate_image" => Self::GenerateImage(GenerateImageRequest {
+                primary: string_arg(&arguments, &["path"]),
                 arguments,
             }),
             "web_search" => Self::WebSearch(WebSearchRequest {
@@ -182,6 +188,7 @@ impl ToolRequest {
             Self::Ls(request) => format!("ls {}", request.primary),
             Self::Find(request) => format!("find {}", request.primary),
             Self::Search(request) => format!("search {}", request.primary),
+            Self::GenerateImage(request) => format!("generate image {}", request.primary),
             Self::WebSearch(request) => format!("web_search {}", request.primary),
             Self::WebFetch(request) => format!("web_fetch {}", request.primary),
             Self::Lsp(request) => format!("lsp {}", request.primary),
@@ -200,7 +207,7 @@ impl ToolRequest {
     pub(super) fn command_class(&self) -> &'static str {
         match self {
             Self::Command(request) => request.safety.command_class,
-            Self::Write(_) | Self::Edit(_) | Self::ApplyPatch(_) => "edit",
+            Self::Write(_) | Self::Edit(_) | Self::ApplyPatch(_) | Self::GenerateImage(_) => "edit",
             // Only two of the three actions write, and the difference matters
             // to everything downstream that treats "edit" as a mutation.
             Self::Artifact(request) => {
@@ -226,6 +233,7 @@ impl ToolRequest {
             Self::Ls(request) => &request.arguments,
             Self::Find(request) => &request.arguments,
             Self::Search(request) => &request.arguments,
+            Self::GenerateImage(request) => &request.arguments,
             Self::WebSearch(request) => &request.arguments,
             Self::WebFetch(request) => &request.arguments,
             Self::Lsp(request) => &request.arguments,
@@ -260,6 +268,7 @@ pub fn tool_capability_name(name: &str) -> Option<&'static str> {
         "ls" => Some("ls"),
         "find" => Some("find"),
         "search" => Some("search"),
+        "generate_image" => Some("write"),
         "web_search" => Some("web_search"),
         "web_fetch" => Some("web_fetch"),
         "lsp" => Some("lsp"),
@@ -285,30 +294,6 @@ pub(super) fn parse_arguments(value: &Value) -> Result<Map<String, Value>, Strin
         }
         _ => Err("Tool arguments must be a JSON object.".into()),
     }
-}
-
-fn string_arg(input: &Map<String, Value>, names: &[&str]) -> String {
-    names
-        .iter()
-        .find_map(|name| input.get(*name).and_then(Value::as_str))
-        .unwrap_or("")
-        .to_owned()
-}
-
-fn string_list_arg(input: &Map<String, Value>, names: &[&str]) -> Vec<String> {
-    names
-        .iter()
-        .find_map(|name| input.get(*name))
-        .map(|value| match value {
-            Value::String(value) => vec![value.clone()],
-            Value::Array(values) => values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect(),
-            _ => Vec::new(),
-        })
-        .unwrap_or_default()
 }
 
 pub(super) fn command_display(input: &Map<String, Value>) -> String {

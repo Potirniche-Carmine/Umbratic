@@ -14,7 +14,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +31,8 @@ import (
 var content embed.FS
 
 type Server struct {
+	proxy        *supervisor.Proxy
+	hardware     supervisor.Hardware
 	startup      config.Startup
 	store        *state.Store
 	secretsMu    sync.RWMutex
@@ -50,20 +51,23 @@ type Server struct {
 const restartCooldown = 5 * time.Second
 
 type pageData struct {
-	Title      string
-	CSRF       string
-	Error      string
-	Notice     string
-	Username   string
-	Setup      bool
-	Configured bool
-	Status     string
-	Config     config.Veil
-	Token      string
+	Connection          config.Connection
+	ConnectionAvailable bool
+	ConnectionReady     bool
+	Hardware            supervisor.Hardware
+	Title               string
+	CSRF                string
+	Error               string
+	Notice              string
+	Username            string
+	Setup               bool
+	Configured          bool
+	Status              string
+	Config              config.Veil
+	Token               string
 	// ContextLabel is the default model's context, printed beside its name. It
 	// is not editable here: context belongs to the model.
 	ContextLabel      string
-	PasswordError     bool
 	Running           bool
 	Healthy           bool
 	VeilURL           string
@@ -115,9 +119,25 @@ func New(startup config.Startup, store *state.Store, secrets state.Secrets, proc
 	crossOrigin.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "request origin is invalid", http.StatusForbidden)
 	}))
+	hardware := supervisor.DetectHardware()
+	if startup.VLLMBinary != "" {
+		hardware.Runtime = "vLLM"
+		if hardware.OS == "darwin" {
+			hardware.Runtime = "vLLM-Metal"
+		}
+	}
+	if startup.VLLMDockerImage != "" {
+		hardware.Runtime = "vLLM container"
+	}
+	connection, err := store.Connection(context.Background())
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
-		startup: startup, store: store, secrets: secrets, supervisor: process, corpus: corpus,
-		models:    supervisor.NewModelSupervisor(startup.VLLMBinary),
+		proxy:    supervisor.NewProxy(startup.CaddyBinary, startup.StateDir, startup.VeilAddress, startup.Port, connection),
+		hardware: hardware,
+		startup:  startup, store: store, secrets: secrets, supervisor: process, corpus: corpus,
+		models:    supervisor.NewModelSupervisor(startup.VLLMBinary, startup.VLLMDockerImage),
 		access:    access.NewClient(startup.VeilAddress, secrets.ControlToken),
 		templates: templates, throttle: newLoginThrottle(), crossOrigin: crossOrigin,
 	}, nil
@@ -140,10 +160,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /settings", s.requireSession(http.HandlerFunc(s.settingsPage)))
 	mux.Handle("POST /settings/test", s.requireSession(http.HandlerFunc(s.settingsTest)))
 	mux.Handle("POST /settings/apply", s.requireSession(http.HandlerFunc(s.settingsApply)))
+	mux.Handle("POST /connection", s.requireSession(http.HandlerFunc(s.connectionApply)))
 	mux.Handle("POST /veil/start", s.requireSession(http.HandlerFunc(s.veilStart)))
 	mux.Handle("POST /veil/stop", s.requireSession(http.HandlerFunc(s.veilStop)))
 	mux.Handle("POST /veil/restart", s.requireSession(http.HandlerFunc(s.veilRestart)))
 	mux.Handle("GET /models", s.requireSession(http.HandlerFunc(s.modelsPage)))
+	mux.Handle("GET /models/status", s.requireSession(http.HandlerFunc(s.modelsStatus)))
 	mux.Handle("POST /models/create", s.requireSession(http.HandlerFunc(s.modelsCreate)))
 	mux.Handle("POST /models/{model_id}/default", s.requireSession(http.HandlerFunc(s.modelsDefault)))
 	mux.Handle("POST /models/{model_id}/update", s.requireSession(http.HandlerFunc(s.modelsUpdate)))
@@ -206,7 +228,7 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		session, err := s.store.Session(r.Context(), cookie.Value, time.Now())
+		session, err := s.store.Session(r.Context(), cookie.Value, time.Now(), r.URL.Path != "/models/status")
 		if err != nil {
 			s.clearSessionCookies(w)
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -217,8 +239,10 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 				http.Error(w, err.Error(), http.StatusForbidden)
 				return
 			}
+			csrf := r.FormValue("csrf")
+
 			csrfCookie, err := r.Cookie("veil_console_csrf")
-			if err != nil || subtle.ConstantTimeCompare(auth.HashToken(r.FormValue("csrf")), session.CSRFHash) != 1 || subtle.ConstantTimeCompare([]byte(r.FormValue("csrf")), []byte(csrfCookie.Value)) != 1 {
+			if err != nil || subtle.ConstantTimeCompare(auth.HashToken(csrf), session.CSRFHash) != 1 || subtle.ConstantTimeCompare([]byte(csrf), []byte(csrfCookie.Value)) != 1 {
 				http.Error(w, "request verification failed", http.StatusForbidden)
 				return
 			}
@@ -323,9 +347,6 @@ func (s *Server) setupSubmit(w http.ResponseWriter, r *http.Request) {
 		s.renderStatus(w, "setup.html", http.StatusBadRequest, pageData{Title: "Create owner", CSRF: r.FormValue("csrf"), Error: err.Error()})
 		return
 	}
-	if os.Getenv("INVOCATION_ID") != "" {
-		_ = os.Remove("/run/veil-console/setup-code")
-	}
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
@@ -408,18 +429,25 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashboardData(r *http.Request, errorMessage, noticeMessage string) pageData {
 	session := r.Context().Value(sessionKey).(requestSession)
 	_, configured, _ := s.store.Configuration(r.Context(), "current")
-	processStatus := s.supervisor.Status()
 	s.secretsMu.RLock()
 	token := s.secrets.ControlToken
 	s.secretsMu.RUnlock()
 	metricsCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	ops := s.supervisor.FetchOpsMetrics(metricsCtx, token)
+	s.supervisor.RefreshHealth(metricsCtx, token)
+	processStatus := s.supervisor.Status()
+	connection, connectionReady := s.proxy.Snapshot()
+	veilURL := "http://" + s.startup.VeilAddress
+	if s.proxy.Available() {
+		veilURL = connection.URL()
+	}
 	managed, _ := s.store.ManagedModels(r.Context())
 	return pageData{
-		Title: "Veil Console", CSRF: csrfCookie(r), Username: session.Data.Username,
+		Hardware: s.hardware, Title: "Veil Console", CSRF: csrfCookie(r), Username: session.Data.Username,
 		Configured: configured, Status: processStatus.String(), Running: processStatus.Running, Healthy: processStatus.Healthy,
-		VeilURL: "http://" + s.startup.VeilAddress, Ops: ops,
+		VeilURL: veilURL, Ops: ops,
+		Connection: connection, ConnectionAvailable: s.proxy.Available(), ConnectionReady: connectionReady,
 		Models: modelsView{Registered: len(managed), Running: s.models.RunningCount(managed)},
 		Error:  errorMessage, Notice: noticeMessage,
 	}
@@ -455,6 +483,9 @@ func (s *Server) settingsData(r *http.Request, cfg config.Veil, errorMessage, no
 // start. It applies only once models are registered: a deployment with none
 // still points Veil at whatever the administrator configured by hand.
 func (s *Server) defaultModelIsManaged(r *http.Request, cfg config.Veil) error {
+	if cfg.Model == "" {
+		return nil
+	}
 	managed, err := s.store.ManagedModels(r.Context())
 	if err != nil || len(managed) == 0 {
 		return nil
@@ -468,18 +499,6 @@ func (s *Server) defaultModelIsManaged(r *http.Request, cfg config.Veil) error {
 }
 
 func (s *Server) settingsTest(w http.ResponseWriter, r *http.Request) {
-	cfg, _ := s.parseSettings(r)
-	if err := s.freshPassword(w, r); err != nil {
-		status := http.StatusInternalServerError
-		data := s.settingsData(r, cfg, "Password confirmation failed. Try again.", "")
-		if errors.Is(err, errPasswordConfirmation) {
-			status = http.StatusUnauthorized
-			data.Error = ""
-			data.PasswordError = true
-		}
-		s.renderStatus(w, "settings.html", status, data)
-		return
-	}
 	cfg, err := s.parseSettings(r)
 	if err == nil {
 		err = s.defaultModelIsManaged(r, cfg)
@@ -495,18 +514,6 @@ func (s *Server) settingsTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
-	cfg, _ := s.parseSettings(r)
-	if err := s.freshPassword(w, r); err != nil {
-		status := http.StatusInternalServerError
-		data := s.settingsData(r, cfg, "Password confirmation failed. Try again.", "")
-		if errors.Is(err, errPasswordConfirmation) {
-			status = http.StatusUnauthorized
-			data.Error = ""
-			data.PasswordError = true
-		}
-		s.renderStatus(w, "settings.html", status, data)
-		return
-	}
 	cfg, err := s.parseSettings(r)
 	if err == nil {
 		err = s.defaultModelIsManaged(r, cfg)
@@ -517,7 +524,7 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		s.renderStatus(w, "settings.html", http.StatusBadRequest, s.settingsData(r, cfg, err.Error(), ""))
 		return
 	}
-	if err := supervisor.TestProvider(r.Context(), cfg); err != nil {
+	if err := testConfiguredProvider(r.Context(), cfg); err != nil {
 		s.store.Audit(r.Context(), "settings.apply", "failure", time.Now())
 		s.renderStatus(w, "settings.html", http.StatusBadRequest, s.settingsData(r, cfg, err.Error(), ""))
 		return
@@ -569,9 +576,6 @@ func (s *Server) veilStart(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "dashboard.html", s.dashboardData(r, "Veil is already running.", ""))
 		return
 	}
-	if !s.confirmDashboardPassword(w, r) {
-		return
-	}
 	cfg, ok, err := s.store.Configuration(r.Context(), "current")
 	if err != nil || !ok {
 		s.renderStatus(w, "dashboard.html", http.StatusConflict, s.dashboardData(r, "Veil is not configured.", ""))
@@ -583,18 +587,12 @@ func (s *Server) veilStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) veilStop(w http.ResponseWriter, r *http.Request) {
-	if !s.confirmDashboardPassword(w, r) {
-		return
-	}
 	s.actionResult(w, r, s.supervisor.Stop(r.Context()), "veil.stop")
 }
 
 func (s *Server) veilRestart(w http.ResponseWriter, r *http.Request) {
 	if !s.supervisor.Status().Running {
 		s.render(w, "dashboard.html", s.dashboardData(r, "Veil is stopped. Use Start.", ""))
-		return
-	}
-	if !s.confirmDashboardPassword(w, r) {
 		return
 	}
 	if wait := s.restartWait(time.Now()); wait > 0 {
@@ -625,20 +623,6 @@ func (s *Server) actionResult(w http.ResponseWriter, r *http.Request, err error,
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func (s *Server) confirmDashboardPassword(w http.ResponseWriter, r *http.Request) bool {
-	if err := s.freshPassword(w, r); err != nil {
-		status := http.StatusInternalServerError
-		message := "Password confirmation failed. Try again."
-		if errors.Is(err, errPasswordConfirmation) {
-			status = http.StatusUnauthorized
-			message = "Owner password is incorrect."
-		}
-		s.renderStatus(w, "dashboard.html", status, s.dashboardData(r, message, ""))
-		return false
-	}
-	return true
-}
-
 func (s *Server) restartWait(now time.Time) time.Duration {
 	s.restartMu.Lock()
 	defer s.restartMu.Unlock()
@@ -652,29 +636,6 @@ func (s *Server) markRestart(now time.Time) {
 	s.restartMu.Lock()
 	s.restartAfter = now.Add(restartCooldown)
 	s.restartMu.Unlock()
-}
-
-var errPasswordConfirmation = errors.New("password confirmation failed")
-
-func (s *Server) freshPassword(w http.ResponseWriter, r *http.Request) error {
-	session := r.Context().Value(sessionKey).(requestSession)
-	key := "confirm|" + session.Data.Username
-	if wait := s.throttle.Wait(key, time.Now()); wait > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-		return errPasswordConfirmation
-	}
-	if !s.store.VerifyOwner(r.Context(), session.Data.Username, r.FormValue("password")) {
-		s.throttle.Failed(key, time.Now())
-		return errPasswordConfirmation
-	}
-	s.throttle.Success(key)
-	token, csrf, err := s.store.RotateSession(r.Context(), session.Token, session.Data.Username, time.Now())
-	if err != nil {
-		return errors.New("session rotation failed")
-	}
-	s.setSessionCookies(w, token, csrf)
-	r.Header.Set("X-Veil-Console-CSRF", csrf)
-	return nil
 }
 
 // parseSettings reads the settings form onto the stored configuration.
@@ -769,7 +730,7 @@ func (s *Server) defaultModelName(r *http.Request, cfg config.Veil) string {
 	models, _ := s.store.ManagedModels(r.Context())
 	for _, model := range models {
 		if model.ID == cfg.Model {
-			return model.DisplayName
+			return model.ID
 		}
 	}
 	return cfg.Model
@@ -898,6 +859,7 @@ func (t *loginThrottle) Success(key string) {
 // Shutdown reaps every supervised process. A model runtime that outlives
 // Console holds its share of the GPU with nothing left to stop it.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.proxy.Stop()
 	s.models.StopAll()
 	return s.supervisor.Stop(ctx)
 }
@@ -907,10 +869,23 @@ func (s *Server) StartLastKnownGood(ctx context.Context) {
 	// exists rather than at the first page load.
 	if models, err := s.store.ManagedModels(ctx); err == nil {
 		s.supervisor.SetModels(models)
+		for _, model := range models {
+			if model.Enabled && ctx.Err() == nil {
+				if err := s.models.Start(model); err != nil {
+					log.Printf("Enabled model could not start: %s", model.ID)
+				}
+			}
+		}
 	}
 	cfg, ok, err := s.store.Configuration(ctx, "current")
-	if err != nil || !ok {
+	if err != nil {
 		return
+	}
+	if !ok {
+		cfg = config.DefaultVeil()
+		if s.store.SavePending(ctx, cfg, time.Now()) != nil || s.store.PromotePending(ctx, time.Now()) != nil {
+			return
+		}
 	}
 	secrets := s.currentSecrets()
 	if err := s.supervisor.Start(ctx, cfg, secrets.ControlToken); err != nil {
@@ -923,3 +898,10 @@ func (s *Server) Address() string {
 }
 
 func (s *Server) String() string { return fmt.Sprintf("Veil Console on %s", s.Address()) }
+
+func testConfiguredProvider(ctx context.Context, cfg config.Veil) error {
+	if cfg.Model == "" {
+		return nil
+	}
+	return supervisor.TestProvider(ctx, cfg)
+}

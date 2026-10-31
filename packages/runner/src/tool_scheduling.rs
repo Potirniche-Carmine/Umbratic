@@ -52,7 +52,7 @@ fn batch_mutates(calls: &[ToolCall]) -> bool {
     calls.iter().any(|call| {
         matches!(
             call.name.as_str(),
-            "command" | "run_program" | "apply_patch" | "write" | "edit"
+            "command" | "run_program" | "apply_patch" | "write" | "edit" | "generate_image"
         )
     })
 }
@@ -75,7 +75,7 @@ fn tool_access_in_batch(session: &Session, call: &ToolCall, batch_mutates: bool)
             ToolAccess::Free
         };
     }
-    let write = matches!(call.name.as_str(), "write" | "edit");
+    let write = matches!(call.name.as_str(), "write" | "edit" | "generate_image");
     if !write && !matches!(call.name.as_str(), "read" | "lsp") {
         return ToolAccess::Free;
     }

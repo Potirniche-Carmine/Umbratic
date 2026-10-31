@@ -522,6 +522,7 @@
 
 .quantPickerMenu {
   width: 240px;
+  max-height: calc(100vh - 16px);
   right: 0;
   left: auto;
   /* Portalled to <body> so the scrolling model menu cannot clip it, which puts
@@ -532,6 +533,14 @@
 
 .quantPickerOption {
   gap: 8px;
+}
+
+.quantPickerShared {
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
 }
 
 /* Neither the label nor the size gives way: they are the two facts the row

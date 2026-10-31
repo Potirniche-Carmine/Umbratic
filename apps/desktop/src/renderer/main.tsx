@@ -1,12 +1,13 @@
+import { ImageSettings } from "./ImageSettings";
+import { GeneratedImages } from "./GeneratedImages";
+import { withoutGeneratedImages } from "../shared/generatedImages";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { trackPanelResize } from "./panelResize";
+import { ChatArchive } from "./ChatArchive";
+import { useSkillSettings } from "./useSkillSettings";
 import type {
   BackendStatus,
   BackendUiEvent,
-  CapabilityProbeCategory,
-  CapabilityProbeImportance,
-  CapabilityProbeReport,
-  CapabilityProbeResult,
-  CapabilityProbeStatus,
   ChatAttachment,
   ChatRecord,
   DesktopStartupSettings,
@@ -14,33 +15,26 @@ import type {
   FileSearchKind,
   FileSearchResult,
   HarnessProfileId,
-  IdeInfo,
   LocalCatalogModel,
-  LocalModelInfo,
   PastedAttachmentInput,
   PermissionMode,
   ReasoningEffort,
   RepositoryInfo,
   ServerModelInfo,
-  SkillDocument,
   SkillInfo,
   TaskInfo,
-  UserNotes,
   WorkspaceMode,
 } from "../shared/desktopApi";
-import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
-import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
+import { DEFAULT_REASONING_EFFORT, isReasoningEffort, resolveReasoningEffort } from "../shared/desktopApi";
+import { stableChatTitle } from "../shared/chatTitle";
 import {
-  attachmentDetail,
   chatAfterDeletion,
   chatAttachmentsMatch,
   chatAttachmentsSignature,
-  chatCountLabel,
   chatDisplayTitle,
   chatJumpNumbers,
   visibleChatOrder,
   chatProjectKey,
-  chatSubline,
   chatWorktreeKey,
   closedChatMessage,
   deleteCandidateActionLabel,
@@ -52,21 +46,15 @@ import {
   isImageAttachment,
   chatActivityUtcIso,
   samePathKey,
-  shortHash,
   stateLabel,
   titleFromPrompt,
-  worktreeSubline,
   worktreeTitle,
   type ChatProjectGroup,
   type DeleteCandidate,
   type ProjectDeleteTarget,
   type WorktreeChatGroup,
 } from "./chatListPresentation";
-import type {
-  AppearanceSettings, ComposerActivitySegment, ComposerSubmission,
-  ComposerTimelineItem, IdeChoice, PermissionRequest, PromptMention, QueuedComposerPrompt,
-  ResponseFeedbackDialogState, ReviewFile, SkillSourceFilter,
-} from "./rendererTypes";
+import type { AppearanceSettings, ComposerSubmission, IdeChoice, PermissionRequest, PromptMention, QueuedComposerPrompt, ReviewFile } from "./rendererTypes";
 import { readQueuedPrompts } from "./queuedPrompts";
 import { QueuedPromptList } from "./queuedPromptList";
 import {
@@ -102,51 +90,32 @@ import { KeyboardSettingsPanel } from "./KeyboardSettings";
 import { AboutSettingsPanel } from "./AboutSettings";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { eventDetail, eventTitle } from "./eventDisplay";
 import {
   AtSign,
-  BarChart3,
-  Brain,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
-  CircleDashed,
-  Cloud,
   Copy,
-  Ellipsis,
   File,
   Folder,
-  FolderPlus,
   FolderX,
   FolderOpen,
-  GitBranch,
-  Hand,
   Loader2,
   MessageSquareX,
   MessageSquareText,
   Mic,
   MicOff,
-  Monitor,
-  Moon,
   PanelRight,
   Paperclip,
   Play,
-  RefreshCw,
   RotateCw,
   Send,
-  Server,
   Settings,
   ShieldCheck,
   Sparkles,
   Square,
-  SquarePen,
-  Sun,
-  ThumbsDown,
-  ThumbsUp,
   Trash2,
-  Type,
-  User,
   X,
 } from "lucide-react";
 import {
@@ -160,30 +129,24 @@ import {
 } from "./composerText";
 import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
 import { AssistantMessage } from "./assistantMessage";
-import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
+import { normalizeReviewFile } from "../shared/reviewDiff";
 import { isArtifactPath } from "../shared/artifactReview";
-import type { DocumentReviewSnapshot } from "../shared/documentReview";
-import { appendTaskEvent, appendTaskEvents, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
-import {
-  responseFeedbackReasons,
-  type ResponseFeedbackReason,
-  type ResponseRating,
-} from "../shared/responseFeedback";
+import { appendTaskEvent, appendTaskEvents, compactTaskEvents } from "../shared/taskEvents";
 import { ReviewPanel } from "./review/ReviewPanel";
 import { defaultModelEndpointSettings } from "./endpointSettings";
 import { ConnectionSettingsPanel, useConnectionSettings } from "./ConnectionSettings";
 import { AppearanceSettingsPanel } from "./AppearanceSettings";
 import { VoiceSettings } from "./VoiceSettings";
 import { SettingsNav, type SettingsTab } from "./SettingsNav";
-import { TelemetrySettingsPanel } from "./TelemetrySettings";
+import { GeneralSettingsPanel } from "./GeneralSettings";
+import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
 import { RemoteChatBadge, RemoteHostPicker } from "./RemoteControls";
 import { RemoteSettingsPanel, useRemoteSettings } from "./RemoteSettings";
-import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
+import { appendReviewFeedback, reviewCommentLineLabel, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 import {
   reducePendingPermission,
   reduceVisibleTask,
   taskEventEffects,
-  type TaskPermissionRequest,
 } from "./taskEventReducer";
 import { composerTimelineFromEvents } from "./composerTimeline";
 import {
@@ -195,9 +158,7 @@ import {
   AssistantAnswerContent,
   MarkdownContent,
 } from "./markdownContent";
-import { useActivityTuckDelay } from "./activityTuck";
 import { WorkingBlock } from "./workingBlock";
-import { filterSkillsBySource, skillPreviewMarkdown } from "./skillDisplay";
 import { reviewCloseSpring, reviewOpenSpring, reviewSpringStep, type ReviewSpring } from "./reviewSpring";
 import {
   cssFontValue,
@@ -237,7 +198,7 @@ import {
   type MentionCategoryId,
 } from "./promptMentions";
 import { SkillsSettingsPanel } from "./SkillsSettings";
-import { formatFileSize, taskStatusDetail, taskStatusTitle } from "./taskStatusDisplay";
+import { formatFileSize } from "./taskStatusDisplay";
 import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
 import { ConnectionNotice } from "./connectionNotice";
@@ -255,7 +216,7 @@ const defaultStartupSettings: DesktopStartupSettings = {
   harnessProfile: defaultHarnessProfileId,
   contextLength: DEFAULT_CONTEXT_LENGTH,
   reasoningEffort: DEFAULT_REASONING_EFFORT,
-  showThinking: false, webTools: false,
+  showThinking: true, sendOnEnter: true, webTools: false,
 };
 const initialPrompt = "";
 const emptyReviewFiles: ReviewFile[] = [];
@@ -298,6 +259,11 @@ const reviewDefaultWidth = 440;
 const reviewOpenWidthRatio = 0.65;
 const reviewMaxWidthRatio = 0.95;
 const sidebarMaxRatio = 0.28;
+/// Every control that opens the review panel. A pointerdown on one of these is
+/// not a click away from the panel: the button's own click lands after the
+/// pointerdown, so closing here would only make it reopen what had just
+/// started sliding out.
+const reviewOpeningControls = ".composerReviewToggle, .reviewSummaryCard, .documentResponseLink, .reviewReferenceToken";
 
 function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const initialHarnessProfile = isHarnessProfileId(startupSettings.harnessProfile) ? startupSettings.harnessProfile : defaultHarnessProfileId;
@@ -335,14 +301,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [chatJumpKeysVisible, setChatJumpKeysVisible] = useState(false);
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(previewEnvironment?.events ?? []);
-  const [responseFeedbackDialog, setResponseFeedbackDialog] = useState<ResponseFeedbackDialogState | null>(null);
-  const [responseFeedbackSubmitting, setResponseFeedbackSubmitting] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() =>
     previewEnvironment ? new Set(previewEnvironment.reviewFiles.map((file) => file.path)) : new Set(),
   );
   const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set());
-  const autoOpenedActivityIdsRef = useRef<Set<string>>(new Set());
   const [expandedActivityToolIds, setExpandedActivityToolIds] = useState<Set<string>>(() => new Set());
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -365,14 +328,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [updateReadyVersion, setUpdateReadyVersion] = useState<string | null>(null);
   // The dictation offer, raised by pressing a microphone that is not set up.
   const [dictationSetupOffer, setDictationSetupOffer] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [contextLength, setContextLength] = useState(initialContextLength);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
     isReasoningEffort(startupSettings.reasoningEffort) ? startupSettings.reasoningEffort : DEFAULT_REASONING_EFFORT,
   );
-  const [showThinking, setShowThinking] = useState(startupSettings.showThinking === true);
+  const [showThinking, setShowThinking] = useState(startupSettings.showThinking !== false);
+  const [sendOnEnter, setSendOnEnter] = useState(startupSettings.sendOnEnter !== false);
+  const [launchAtLogin, setLaunchAtLogin] = useState<{ enabled: boolean; available: boolean }>({ enabled: false, available: false });
+  useEffect(() => {
+    let current = true;
+    void api.getLaunchAtLogin().then(
+      (status) => { if (current) setLaunchAtLogin(status); },
+      () => undefined,
+    );
+    return () => { current = false; };
+  }, [api]);
   const [harnessDraftContextLength, setHarnessDraftContextLength] = useState(initialContextLength);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
   const [harnessSaving, setHarnessSaving] = useState(false);
@@ -390,19 +363,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   );
   const [fontScanMessage, setFontScanMessage] = useState<string | null>(null);
   const [fontScanPending, setFontScanPending] = useState(false);
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [skillsLoading, setSkillsLoading] = useState(false);
-  const [skillsLoaded, setSkillsLoaded] = useState(false);
-  const [skillsEnabled, setSkillsEnabled] = useState<Record<string, boolean>>({});
-  const [skillsMessage, setSkillsMessage] = useState<string | null>(null);
+  const skillSettings = useSkillSettings(api);
+  const { skills, skillsEnabled, loadSkills } = skillSettings;
   const [localLogsBusy, setLocalLogsBusy] = useState(false);
-  const [newSkillFormOpen, setNewSkillFormOpen] = useState(false);
-  const [newSkillName, setNewSkillName] = useState("");
-  const [creatingSkill, setCreatingSkill] = useState(false);
-  const [skillSourceFilter, setSkillSourceFilter] = useState<SkillSourceFilter>("local");
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
-  const [skillDocument, setSkillDocument] = useState<SkillDocument | null>(null);
-  const [skillPreviewLoading, setSkillPreviewLoading] = useState(false);
   const [ideMenuOpen, setIdeMenuOpen] = useState<"composer" | "review" | null>(null);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
@@ -473,9 +436,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const reviewScopeRequestRef = useRef(0);
   const modalTriggerRef = useRef<HTMLElement | null>(null);
   const modalRef = useRef<HTMLElement | null>(null);
-  const responseFeedbackInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const skillsSaveSequenceRef = useRef(0);
-  const skillsLoadedRef = useRef(false);
   const suppressDraftSaveRef = useRef(false);
   // Read by the async unsaved-draft restore, which must see the live value
   // rather than the one captured when it started.
@@ -500,9 +460,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // rebuilt on every chat that arrives.
   const chatJumpTargetsRef = useRef<ChatRecord[]>([]);
   const shortcutsBlockedRef = useRef(false);
+  const settingsToggleAllowedRef = useRef(false);
   const visibleTaskIdRef = useRef<string | null>(previewEnvironment?.task.id ?? null);
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
-
   const latestTaskId = task?.id;
   const rawReviewFiles = task?.reviewFiles ?? workspaceReview?.reviewFiles ?? emptyReviewFiles;
   // Review refreshes usually return byte-identical files. Reusing the previous
@@ -521,8 +481,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       );
     }
     normalizedReviewFilesRef.current = byPath;
-    return Array.from(byPath.values());
-  }, [rawReviewFiles]);
+    return withoutGeneratedImages(Array.from(byPath.values()), events);
+  }, [rawReviewFiles, events]);
   const documentReviewFiles = useMemo(() => reviewFiles.filter((file) => isArtifactPath(file.path)), [reviewFiles]);
   const codeReviewFiles = useMemo(() => reviewFiles.filter((file) => !isArtifactPath(file.path)), [reviewFiles]);
   const codeReviewTotals = useMemo(
@@ -583,6 +543,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // direction on how hard to think, which is what keeps the section out of the
   // menu rather than showing a choice the chat template would ignore.
   const modelReasoningEfforts = selectedModel?.capabilities?.reasoningEfforts ?? [];
+  // The level this model is actually running at. The stored effort is one
+  // setting across every model while each model grades thinking its own way,
+  // so the stored level is often not one this model reads — and a menu that
+  // checked the stored level checked nothing at all, leaving the composer with
+  // no answer to "is this thing thinking". Resolved through the same helper
+  // the runtime starts the model with, so the checked row is the truth.
+  const activeReasoningEffort = resolveReasoningEffort(modelReasoningEfforts, reasoningEffort) ?? reasoningEffort;
   const harnessDirty = harnessDraftProfile !== harnessProfile || harnessDraftContextLength !== contextLength;
   const harnessDraftContextIndex = Math.max(
     0,
@@ -611,25 +578,36 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   useEffect(() => {
     if (!connectionSettings.localModelLoading && !dictationStarting) setModelStartupDismissed(false);
   }, [connectionSettings.localModelLoading, dictationStarting]);
-  const telemetrySyncEnabled = backend?.diagnostics.telemetry.syncEnabled ?? endpointSettings.mode === "server";
   const localLogInfo = backend?.diagnostics.localLogs ?? { bytes: 0, entries: 0 };
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
+  // A chat that already ran without a folder keeps running without one: its
+  // task's workspace is the hidden scratch directory, and pointing the chat
+  // at a real folder later would silently swap the workspace its history
+  // happened in.
+  const chatStartedWithoutFolder = Boolean(activeChat && !activeChat.repositoryPath && activeChat.taskId);
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
   const isGenerating = task?.state === "running";
   const hasComposerMessage = prompt.trim().length > 0 || reviewPromptFeedback.length > 0;
   const activeQueuedPrompts = task ? queuedPrompts.filter((item) => item.taskId === task.id) : [];
-  // Only the files the prompt does not already name get a chip. An `@` mention
-  // is drawn in the text where it was typed, so a chip beside it would be the
-  // same reference twice; the paperclip count still covers both kinds.
   const pickedAttachments = attachedFiles.filter(
     (file) => !promptMentionsAttachment(prompt, normalizeAttachment(file)),
   );
   const canStart = (prompt.trim().length > 0 || reviewPromptFeedback.length > 0) && !busy && !isGenerating && !closedChatNotice;
   const canQueue = hasComposerMessage && isGenerating && !busy && !steerPending && !closedChatNotice;
-  // Per file, never per turn: undo puts one reviewed file back, and taking
-  // back more than that is a thing to ask the model for.
+  // A finished turn still has the checkpoint it was taken from, and a turn
+  // that was stopped part-way — which also lands on "completed" — is the one
+  // people most want back, so both undo as readily as a review that is
+  // waiting. What is genuinely out of reach is work that has already left the
+  // task: approved, merged, or rejected.
   const canUndoFile =
-    !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
+    !!task && !task.remote && !["running", "approving", "awaiting_worktree_approval", "approved", "merged", "rejected"].includes(task.state) && !busy;
+  // A grey button with no reason reads as broken. Every state that turns undo
+  // off says which one it is in, in the button's own tooltip.
+  const undoUnavailableReason = !task
+    ? "Undo restores a file to how a turn found it, and this review is of the folder rather than of a turn."
+    : busy || isGenerating
+      ? "Another action is still finishing."
+      : `This turn's work has already been ${task.state === "merged" ? "merged" : task.state === "rejected" ? "rejected" : "approved"}.`;
   const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
   const approvalPending = task?.state === "awaiting_worktree_approval" || !!pendingPermission;
   const reviewEmptyLabel = !task
@@ -638,16 +616,15 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       ? "No file changes found"
       : stateLabel(task.state);
   const mentionQuery = mention?.query ?? "";
-  // The @ menu walks through modes: "category" (just pressed @ — pick Files,
-  // Folders, or Skills), a scoped search, or "all" (typed straight through the
-  // category list). The $ trigger jumps directly to skills.
   const mentionMode: "category" | FileSearchKind | "skill" | null = !mention
     ? null
     : mention.kind === "skill" || mentionScope === "skill"
       ? "skill"
       : mentionScope === "file" || mentionScope === "folder"
         ? mentionScope
-        : mentionQuery
+        : /^image$/i.test(mentionQuery)
+          ? null
+          : mentionQuery
           ? "all"
           : "category";
   const promptReferenceMenuOpen = mentionMode !== null;
@@ -658,14 +635,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const skillMenuOpen = mentionMode === "skill";
   const skillSearchQuery = skillMenuOpen ? mentionQuery : "";
   const skillMatches = useMemo(() => rankSkillMatches(skills, skillSearchQuery, 10), [skillSearchQuery, skills]);
-  const selectedSkillPreview = useMemo(
-    () => (skillDocument ? skillPreviewMarkdown(skillDocument.content, skillDocument.name) : ""),
-    [skillDocument],
-  );
-  const visibleSkills = useMemo(
-    () => filterSkillsBySource(skills, skillSourceFilter),
-    [skillSourceFilter, skills],
-  );
   const canAttachFiles = !busy && !closedChatNotice;
   const canUseWorktreeMode = repository?.kind === "git";
   const activeTaskWorkspaceMode = task?.chatId === activeChatId ? task.workspaceMode : undefined;
@@ -673,22 +642,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const workspaceModeLocked = activeTaskWorkspaceMode === "worktree" || !!activeChatWorktreeTaskId;
   const useWorktreeForNextRun = canUseWorktreeMode && (workspaceModeLocked || workspaceMode === "worktree");
   const visibleEvents = events;
-  const responseFeedback = useMemo(() => {
-    const ratings = new Map<string, "good" | "bad">();
-    for (const event of visibleEvents) {
-      if (event.type === "response.feedback") {
-        ratings.set(event.messageId, event.rating);
-      }
-    }
-    return ratings;
-  }, [visibleEvents]);
   const composerItems = useMemo(() => {
     const items = composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state);
     // Soft bound for very long chats: keep the newest composer items without a full virtualizer rewrite.
     const composerItemSoftLimit = 120;
     return items.length <= composerItemSoftLimit ? items : items.slice(-composerItemSoftLimit);
   }, [task?.prompt, task?.state, visibleEvents]);
-  const keepFinishedOpen = useActivityTuckDelay(composerItems);
   const lastAssistantItemId = [...composerItems].reverse().find((item) => item.type === "assistant")?.id;
   const reviewReadyForDisplay =
     task?.state === "review_ready"
@@ -924,14 +883,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   function setVisibleTask(nextTask: TaskInfo | null) {
     visibleTaskIdRef.current = nextTask?.id ?? null;
-    setResponseFeedbackDialog(null);
     if (nextTask) setWorkspaceReview(null);
     setTask(nextTask);
   }
 
   function prepareVisibleTaskLoad(taskId: string | null) {
     visibleTaskIdRef.current = taskId;
-    setResponseFeedbackDialog(null);
     setWorkspaceReview(null);
     setTask(null);
   }
@@ -995,20 +952,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         }
       }
     }
-    setExpandedActivityIds((current) => {
-      const next = reconcileActivityDisclosureState(
-        current,
-        composerItems,
-        task?.id,
-        autoOpenedActivityIdsRef.current,
-        keepFinishedOpen,
-      );
-      autoOpenedActivityIdsRef.current = next.autoOpenedKeys;
-      for (const id of next.newlyOpenedIds) {
-        activityFollowScrollRef.current.set(id, true);
-      }
-      return next.expandedIds;
-    });
+    setExpandedActivityIds((current) => reconcileActivityDisclosureState(current, composerItems));
     setExpandedActivityToolIds((current) => {
       let changed = false;
       const next = new Set(current);
@@ -1019,7 +963,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       }
       return changed ? next : current;
     });
-  }, [composerItems, keepFinishedOpen, task?.id]);
+  }, [composerItems]);
 
   useEffect(() => {
     void refreshStatus();
@@ -1173,13 +1117,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // Whether something is layered over the app. Shared by the focus trap below
   // and by the global shortcuts, which must not reach past a dialog to a
   // composer the user cannot currently see.
-  const modalOpen =
-    settingsOpen
-    || !!previewAttachment?.previewDataUrl
+  const nonSettingsModalOpen =
+    !!previewAttachment?.previewDataUrl
     || !!deleteCandidate
     || showElevatedPermissionsDialog
-    || approvalPending
-    || !!responseFeedbackDialog;
+    || approvalPending;
+  const modalOpen = settingsOpen || nonSettingsModalOpen;
 
   /** Opens the microphone, or offers the way in when dictation is not set up. */
   function toggleDictation() {
@@ -1226,7 +1169,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     // deleting outright: a chat is gone for good, and a chord is far easier to
     // press by accident than a button is to click by accident.
     "chat.delete": () => { if (activeChat) setDeleteCandidate({ kind: "chat", chat: activeChat }); },
-    "app.settings": () => openSettings(),
+    "app.settings": () => (settingsOpen ? closeSettingsDialog() : openSettings()),
     "app.shortcuts": () => openSettings("keyboard"),
     "review.toggle": () => (reviewClosing ? openReviewPanel() : toggleReviewPanel()),
     "composer.focus": () => textareaRef.current?.focus(),
@@ -1239,11 +1182,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // Read the same way, so a chord cannot reach past a dialog to a window the
   // user cannot currently see.
   shortcutsBlockedRef.current = modalOpen;
+  // The one exception: the settings chord keeps working while the settings
+  // dialog itself is what is open, so the key that opened it closes it.
+  settingsToggleAllowedRef.current = settingsOpen && !nonSettingsModalOpen;
 
   useEffect(() => {
     const runShortcut = (event: KeyboardEvent) => {
       // Never on the auto-repeat of a held key, and never mid-IME sequence.
-      if (shortcutsBlockedRef.current || event.repeat || event.isComposing) return;
+      if (event.repeat || event.isComposing) return;
+      if (shortcutsBlockedRef.current) {
+        // Behind the settings dialog the settings chord still lands — it
+        // toggles the dialog closed. Every other modal keeps every chord out.
+        const blockedShortcut = shortcutForEvent(event);
+        if (blockedShortcut?.id === "app.settings" && settingsToggleAllowedRef.current) {
+          event.preventDefault();
+          shortcutActionsRef.current["app.settings"]?.();
+        }
+        return;
+      }
       // The number keys first: they are nine chords for one gesture, so they
       // are matched by position rather than looked up in the table. A number
       // with no chat under it is left alone rather than swallowed.
@@ -1324,13 +1280,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     };
     document.addEventListener("keydown", trapFocus);
     return () => { window.cancelAnimationFrame(frame); document.removeEventListener("keydown", trapFocus); };
-  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending, responseFeedbackDialog]);
+  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending]);
 
-  useEffect(() => {
-    if (!responseFeedbackDialog) return undefined;
-    const frame = window.requestAnimationFrame(() => responseFeedbackInputRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
-  }, [responseFeedbackDialog?.messageId, responseFeedbackDialog?.rating]);
 
   // The offset lives on the DOM node rather than in the style prop, so it needs
   // its starting value written once. Everything after this comes from the
@@ -1503,11 +1454,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setSelectedSkillIndex(0);
   }, [skillSearchQuery]);
 
-  useEffect(() => {
-    if (!selectedSkillId || skills.some((skill) => skill.id === selectedSkillId)) return;
-    setSelectedSkillId(null);
-    setSkillDocument(null);
-  }, [selectedSkillId, skills]);
+
 
   async function persistDraft(
     chatId: string,
@@ -1841,175 +1788,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
   }
 
-  async function loadSkills() {
-    setSkillsLoading(true);
-    try {
-      const result = await api.listSkills();
-      setSkills(result.skills);
-      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
-      setSelectedSkillId((current) => (current && result.skills.some((skill) => skill.id === current) ? current : null));
-      skillsLoadedRef.current = true;
-      setSkillsLoaded(true);
-    } catch (cause) {
-      if (!skillsLoadedRef.current) setSkills([]);
-      console.warn("Failed to list skills", cause);
-    } finally {
-      setSkillsLoading(false);
-    }
-  }
-
-  async function toggleSkillSetting(skillId: string) {
-    let previous = skillsEnabled;
-    let next = skillsEnabled;
-    setSkillsEnabled((current) => {
-      previous = current;
-      next = { ...current, [skillId]: !current[skillId] };
-      return next;
-    });
-    setSkillsMessage(null);
-    const requestId = skillsSaveSequenceRef.current + 1;
-    skillsSaveSequenceRef.current = requestId;
-    try {
-      const result = await api.saveSkillSettings(next);
-      if (requestId !== skillsSaveSequenceRef.current) return;
-      setSkills(result.skills);
-      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
-      setSkillDocument((current) =>
-        current && current.id === skillId ? { ...current, enabled: result.skills.find((skill) => skill.id === skillId)?.enabled ?? current.enabled } : current,
-      );
-    } catch (cause) {
-      if (requestId !== skillsSaveSequenceRef.current) return;
-      setSkillsEnabled(previous);
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
-  async function openSkillsFolder() {
-    setSkillsMessage(null);
-    try {
-      const result = await api.openSkillsFolder();
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-      }
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
-  function selectSkillSourceFilter(filter: SkillSourceFilter) {
-    setSkillSourceFilter(filter);
-    setSelectedSkillId(null);
-    setSkillDocument(null);
-    setSkillsMessage(null);
-  }
-
-  async function toggleSkillPreview(skillId: string) {
-    if (skillPreviewLoading) return;
-    if (selectedSkillId === skillId) {
-      setSelectedSkillId(null);
-      setSkillDocument(null);
-      setSkillsMessage(null);
-      return;
-    }
-    setSelectedSkillId(skillId);
-    setSkillsMessage(null);
-    setSkillPreviewLoading(true);
-    try {
-      const result = await api.getSkillDocument({ id: skillId });
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-        setSkillDocument(null);
-        return;
-      }
-      setSkillDocument(result.skill);
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-      setSkillDocument(null);
-    } finally {
-      setSkillPreviewLoading(false);
-    }
-  }
-
-  async function openSelectedSkillInEditor() {
-    if (!skillDocument) return;
-    setSkillsMessage(null);
-    try {
-      const result = await api.openSkillInEditor({ id: skillDocument.id });
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-        return;
-      }
-      setSkillsMessage("Opened skill file.");
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
-  async function resetSelectedSystemSkill() {
-    if (!skillDocument || skillDocument.source !== "system") return;
-    setSkillsMessage(null);
-    setSkillPreviewLoading(true);
-    try {
-      const result = await api.resetSystemSkill({ id: skillDocument.id });
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-        return;
-      }
-      setSkills(result.skills);
-      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
-      setSkillDocument(result.skill);
-      setSkillsMessage(`Reset ${result.skill.name}.`);
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setSkillPreviewLoading(false);
-    }
-  }
-
-  async function submitCreateSkill() {
-    if (creatingSkill) return;
-    setSkillsMessage(null);
-    setCreatingSkill(true);
-    try {
-      const result = await api.createSkill({ name: newSkillName });
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-        return;
-      }
-      setNewSkillName("");
-      setNewSkillFormOpen(false);
-      await loadSkills();
-      await toggleSkillPreview(result.skill.id);
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setCreatingSkill(false);
-    }
-  }
-
-  async function importSkill() {
-    if (skillsLoading) return;
-    setSkillsMessage(null);
-    setSkillsLoading(true);
-    try {
-      const result = await api.importSkill();
-      if (!result.ok) {
-        setSkillsMessage(result.message);
-        return;
-      }
-      setSkills(result.skills);
-      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
-      skillsLoadedRef.current = true;
-      setSkillsLoaded(true);
-      await toggleSkillPreview(result.skill.id);
-      setSkillsMessage(`Imported ${result.skill.name}.`);
-    } catch (cause) {
-      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setSkillsLoading(false);
-    }
-  }
-
   async function loadAvailableIdes() {
     try {
       const ides = (await api.listAvailableIdes()).filter((ide) => ide.id !== "cursor");
@@ -2076,7 +1854,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         const nextRepository = result.repository;
         mergeProject(nextRepository);
         setRepository(nextRepository);
-        const chatWithoutProject = activeChatId ? chats.find((chat) => chat.id === activeChatId && !chat.repositoryPath) : undefined;
+        // Only a chat that has not run yet may take the folder; one with a
+        // task keeps the workspace it started in.
+        const chatWithoutProject = activeChatId
+          ? chats.find((chat) => chat.id === activeChatId && !chat.repositoryPath && !chat.taskId)
+          : undefined;
         if (chatWithoutProject) {
           const nextChat = await api.updateChatProject({
             chatId: chatWithoutProject.id,
@@ -2260,6 +2042,25 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       setShowThinking(await api.saveShowThinking(next));
     } catch (cause) {
       setShowThinking(previous);
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function updateSendOnEnter(next: boolean) {
+    const previous = sendOnEnter;
+    setSendOnEnter(next);
+    try {
+      setSendOnEnter(await api.saveSendOnEnter(next));
+    } catch (cause) {
+      setSendOnEnter(previous);
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function updateLaunchAtLogin(next: boolean) {
+    try {
+      setLaunchAtLogin(await api.saveLaunchAtLogin(next));
+    } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -2493,9 +2294,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     // full, or the turn already ended) must not leave a phantom row behind.
     try {
       const { prompt, attachedFiles, reviewFeedback } = submission;
-      // The queue stores plain prompt text, so pending review comments travel
-      // inside it the same way startTask and steerTask send them. The queued
-      // row re-parses the block to display the clean text plus a feedback chip.
+      // Queue review comments with the prompt.
       await api.queueFollowUpTask({ taskId, prompt: appendReviewFeedback(prompt, reviewFeedback).trim(), attachedFiles });
       clearComposerInput();
       await syncQueuedPrompts(taskId);
@@ -2591,86 +2390,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     await copyPlainText(value);
   }
 
-  function openResponseFeedbackDialog(
-    messageId: string,
-    rating: ResponseRating,
-    trigger: HTMLButtonElement,
-  ) {
-    modalTriggerRef.current = trigger;
-    const previousFeedback = [...visibleEvents].reverse().find(
-      (event): event is Extract<BackendUiEvent, { type: "response.feedback" }> =>
-        event.type === "response.feedback" && event.messageId === messageId,
-    );
-    setResponseFeedbackDialog({
-      messageId,
-      rating,
-      ...(previousFeedback?.rating === rating && previousFeedback.reason
-        ? { reason: previousFeedback.reason }
-        : {}),
-      comment: previousFeedback?.rating === rating ? previousFeedback.comment ?? "" : "",
-    });
-  }
-
-  async function rateResponse(
-    messageId: string,
-    rating: ResponseRating,
-    reason?: ResponseFeedbackReason,
-    comment?: string,
-  ): Promise<boolean> {
-    if (!latestTaskId) return false;
-    setError(null);
-    const taskId = latestTaskId;
-    const previousFeedback = [...visibleEvents].reverse().find(
-      (event): event is Extract<BackendUiEvent, { type: "response.feedback" }> =>
-        event.type === "response.feedback" && event.taskId === taskId && event.messageId === messageId,
-    );
-    const nextComment = (comment ?? "").trim().slice(0, 1000);
-    setEvents((current) => appendBackendEvent(current, {
-      type: "response.feedback",
-      taskId,
-      messageId,
-      rating,
-      ...(reason ? { reason } : {}),
-      ...(nextComment ? { comment: nextComment } : {}),
-      at: new Date().toISOString(),
-    }, 500));
-    try {
-      await api.setResponseFeedback({
-        taskId,
-        messageId,
-        rating,
-        ...(reason ? { reason } : {}),
-        ...(nextComment ? { comment: nextComment } : {}),
-      });
-      return true;
-    } catch (cause) {
-      setEvents((current) => {
-        const withoutFailedRating = removeResponseFeedback(current, taskId, messageId) as BackendUiEvent[];
-        return previousFeedback
-          ? appendBackendEvent(withoutFailedRating, { ...previousFeedback, at: new Date().toISOString() }, 500)
-          : withoutFailedRating;
-      });
-      setError(String(cause instanceof Error ? cause.message : cause));
-      return false;
-    }
-  }
-
-  async function submitResponseFeedback() {
-    if (!responseFeedbackDialog || responseFeedbackSubmitting) return;
-    setResponseFeedbackSubmitting(true);
-    try {
-      const submitted = await rateResponse(
-        responseFeedbackDialog.messageId,
-        responseFeedbackDialog.rating,
-        responseFeedbackDialog.reason,
-        responseFeedbackDialog.comment,
-      );
-      if (submitted) setResponseFeedbackDialog(null);
-    } finally {
-      setResponseFeedbackSubmitting(false);
-    }
-  }
-
   async function exportLocalLogs() {
     setLocalLogsBusy(true);
     try {
@@ -2762,13 +2481,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 type="button"
                 role="menuitem"
                 onClick={() => {
-                  void api.recordProductEvent({
-                    type: "ide.selected",
-                    taskId: task?.id,
-                    repositoryId: repository?.id,
-                    ideId: ide.id,
-                    surface: owner,
-                  }).catch(() => undefined);
                   setSelectedIdeId(ide.id);
                   setIdeMenuOpen(null);
                 }}
@@ -2872,13 +2584,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   function openReviewPanel(filePath?: string) {
     if (!reviewOpen || reviewClosing) {
-      void api.recordProductEvent({
-        type: "review.opened",
-        taskId: task?.id,
-        repositoryId: repository?.id,
-        scope: task?.reviewScope ?? tasklessReviewScope,
-        target: task ? "task" : "project",
-      }).catch(() => undefined);
     }
     cancelReviewClose();
     if (!reviewHasSessionWidth) setReviewWidth(Math.min(reviewOpenWidth(), reviewMaxWidth()));
@@ -2915,6 +2620,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
     openReviewPanel();
   }
+
+  // The panel is a look at the diff beside the conversation, not a mode to be
+  // dismissed by hand: going back to the composer puts it away, the same as
+  // every menu above. Held in a ref because closing reads the current width —
+  // a listener captured at open time would animate to a width the user has
+  // since dragged away from, and leave a sliver of panel on screen.
+  const closeReviewPanelRef = useRef(closeReviewPanel);
+  closeReviewPanelRef.current = closeReviewPanel;
+  useEffect(() => {
+    if (!reviewOpen || reviewClosing) return undefined;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target || target.closest(`.reviewSidebar, ${reviewOpeningControls}`)) return;
+      closeReviewPanelRef.current();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [reviewOpen, reviewClosing]);
 
   async function openReviewFile(filePath: string) {
     if (!canOpenIde || !task) return;
@@ -3006,17 +2729,15 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     });
   }
 
-  async function undoReviewFile(filePath: string) {
+  async function undoReviewChanges(filePath?: string) {
     if (!task || !canUndoFile) return;
     setBusy(true);
     setIdeMenuOpen(null);
     try {
-      const next = await api.revertReviewFile({ taskId: task.id, path: filePath });
+      const next = await api.undoTaskChanges({ taskId: task.id, ...(filePath ? { path: filePath } : {}) });
       if (!next) return;
       setExpandedReviewPaths((current) => {
-        const remaining = new Set(current);
-        remaining.delete(filePath);
-        return remaining;
+        return new Set([...current].filter((path) => filePath !== undefined && path !== filePath));
       });
       setTask(next);
       upsertChatFromTask(next);
@@ -3128,6 +2849,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }
 
   function selectMentionCategory(category: MentionCategoryId) {
+    if (category === "image") {
+      const start = mention?.start ?? prompt.length, end = mention?.end ?? prompt.length;
+      setPrompt(`${prompt.slice(0, start)}@image ${prompt.slice(end)}`);
+      setMention(null);
+      window.setTimeout(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(start + 7, start + 7); }, 0);
+      return;
+    }
     setMentionScope(category);
     setSelectedFileIndex(0);
     setSelectedSkillIndex(0);
@@ -3319,7 +3047,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     if (event.key !== "Enter") {
       return;
     }
-    if (event.shiftKey) {
+    // ⌘/Ctrl+Enter always sends. Plain Enter sends only while "Send with
+    // Enter" is on; switched off, it starts a new line like Shift+Enter does.
+    const modifierSend = event.metaKey || event.ctrlKey;
+    if (!modifierSend && (event.shiftKey || !sendOnEnter)) {
       const target = event.currentTarget;
       const continuation = continueNumberedList(target.value, target.selectionStart, target.selectionEnd);
       if (!continuation) return;
@@ -3512,7 +3243,30 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       if (sentDraft) void persistDraft(chat.id, "", []);
     } catch (cause) {
       if (chatSelectionSequenceRef.current !== selectionSequence) return;
-      if (canOpenImmediately) setVisibleTask(null);
+      if (canOpenImmediately) {
+        setVisibleTask(null);
+      } else {
+        // The task could not be loaded, but the chat still opens: its title,
+        // draft, and attachments are usable without it, and a row that
+        // swallows its click reads as a dead app rather than a failed load.
+        flushSync(() => {
+          forceComposerBottomScrollRef.current = true;
+          prepareVisibleTaskLoad(null);
+          setActiveChatId(chat.id);
+          setVisibleTask(null);
+          setEvents([]);
+          setExpandedActivityIds(new Set());
+          setExpandedActivityToolIds(new Set());
+          setPendingPermission(null);
+          setExpandedReviewPaths(new Set());
+          setPrompt(chat.draftPrompt ?? "");
+          setAttachedFiles(chat.attachedFiles ?? []);
+          setMention(null);
+          setFileMatches([]);
+        });
+        const node = streamRef.current;
+        if (node) placeElementAtBottom(node);
+      }
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -3591,52 +3345,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }
 
   function beginSidebarResize(event: React.PointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
     const startX = event.clientX;
     const startWidth = sidebarWidth;
-    document.body.classList.add("isResizing");
-    const move = (moveEvent: PointerEvent) => {
-      const nextWidth = startWidth + moveEvent.clientX - startX;
-      setSidebarWidth(clamp(nextWidth, sidebarMinWidth, sidebarMaxAvailableWidth()));
-    };
-    const stop = () => {
-      setSidebarWidth((current) => clamp(current, sidebarMinWidth, sidebarMaxAvailableWidth()));
-      document.body.classList.remove("isResizing");
-      event.currentTarget.removeEventListener("pointermove", move);
-      event.currentTarget.removeEventListener("pointerup", stop);
-    };
-    event.currentTarget.addEventListener("pointermove", move);
-    event.currentTarget.addEventListener("pointerup", stop, { once: true });
+    trackPanelResize(event,
+      (clientX) => setSidebarWidth(clamp(startWidth + clientX - startX, sidebarMinWidth, sidebarMaxAvailableWidth())),
+      () => setSidebarWidth((current) => clamp(current, sidebarMinWidth, sidebarMaxAvailableWidth())),
+    );
   }
 
   function beginReviewResize(event: React.PointerEvent<HTMLDivElement>) {
     if (!event.isPrimary || event.button !== 0) return;
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
     cancelReviewClose();
     setReviewHasSessionWidth(true);
     const startX = event.clientX;
     const startWidth = reviewWidth;
-    document.body.classList.add("isResizing");
-    const move = (moveEvent: PointerEvent) => {
-      if (!moveEvent.isPrimary || (moveEvent.buttons & 1) !== 1) {
-        stop();
-        return;
-      }
-      const nextWidth = startWidth - (moveEvent.clientX - startX);
-      setReviewWidth(clamp(nextWidth, reviewMinWidthForViewport(), reviewMaxWidth()));
-    };
-    const stop = () => {
-      setReviewWidth((current) => clamp(current, reviewMinWidthForViewport(), reviewMaxWidth()));
-      document.body.classList.remove("isResizing");
-      event.currentTarget.removeEventListener("pointermove", move);
-      event.currentTarget.removeEventListener("pointerup", stop);
-      event.currentTarget.removeEventListener("pointercancel", stop);
-    };
-    event.currentTarget.addEventListener("pointermove", move);
-    event.currentTarget.addEventListener("pointerup", stop, { once: true });
-    event.currentTarget.addEventListener("pointercancel", stop, { once: true });
+    trackPanelResize(event,
+      (clientX) => setReviewWidth(clamp(startWidth - (clientX - startX), reviewMinWidthForViewport(), reviewMaxWidth())),
+      () => setReviewWidth((current) => clamp(current, reviewMinWidthForViewport(), reviewMaxWidth())),
+    );
   }
 
   function handleReviewResizeKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
@@ -3647,50 +3373,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setReviewWidth((width) => clamp(width + (event.key === "ArrowLeft" ? step : -step), reviewMinWidthForViewport(), reviewMaxWidth()));
   }
 
-  function renderChatRow(chat: ChatRecord) {
-    const connectionLabel = chat.modelEndpointMode === "server"
-      ? "Company server"
-      : chat.modelEndpointMode === "local"
-        ? "Local model"
-        : "";
-    // The number takes the connection icon's place rather than sitting beside
-    // it: the slot is already the right size, so holding the modifier changes
-    // what the row starts with without moving a single word of it.
-    const jumpNumber = chatJumpKeysVisible ? chatJumpNumbersById.get(chat.id) : undefined;
-    return (
-      <div
-        className={`chatRow ${activeChatId === chat.id ? "active" : ""} ${
-          closedChatMessage(chat.taskState) ? "closed" : ""
-        }`}
-        key={chat.id}
-      >
-        <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
-          <span className={`chatRowContent ${connectionLabel || jumpNumber ? "hasConnection" : ""}`}>
-            {jumpNumber ? (
-              <span className="chatJumpKey" aria-hidden="true">{jumpNumber}</span>
-            ) : connectionLabel ? (
-              <span className="chatConnectionIcon" role="img" aria-label={connectionLabel} title={connectionLabel}>
-                {chat.modelEndpointMode === "server" ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
-              </span>
-            ) : null}
-            <strong>{chatDisplayTitle(chat)}</strong>
-            <em title={chat.updatedAt}>{chatSubline(chat)}</em>
-          </span>
-        </button>
-        <button
-          className="chatDeleteButton"
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            setDeleteCandidate({ kind: "chat", chat });
-          }}
-          title="Delete chat"
-        >
-          <Trash2 size={14} />
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -3711,158 +3393,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       <aside className="sidebar">
         <div className="sidebarResizeHandle" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={sidebarMinWidth} aria-valuemax={sidebarMaxAvailableWidth()} aria-valuenow={Math.round(sidebarWidth)} aria-label="Sidebar width" onPointerDown={beginSidebarResize} onKeyDown={(event) => { const step = event.shiftKey ? 24 : 8; if (event.key === "ArrowLeft") { event.preventDefault(); setSidebarWidth((width) => clamp(width - step, sidebarMinWidth, sidebarMaxAvailableWidth())); } if (event.key === "ArrowRight") { event.preventDefault(); setSidebarWidth((width) => clamp(width + step, sidebarMinWidth, sidebarMaxAvailableWidth())); } }} />
         <div className="sidebarStack">
-          <section className="chatArchive">
-            <div className="sideHeader">
-              <h2>Chats</h2>
-              <div className="newActionSplit" role="toolbar" aria-label="Create">
-                <ShortcutTooltip id="chat.new" placement="bottom">
-                  <button className="newActionButton" type="button" onClick={newChat} aria-label="New chat">
-                    <SquarePen size={13} />
-                  </button>
-                </ShortcutTooltip>
-                <button
-                  className="newActionButton"
-                  type="button"
-                  onClick={() => void newProject()}
-                  disabled={busy}
-                  aria-label="New project"
-                  title="New project"
-                >
-                  <FolderPlus size={13} />
-                </button>
-              </div>
-            </div>
-            <div className="chatList">
-              {chatProjectGroups.length ? (
-                chatProjectGroups.map((group) => {
-                  const collapsed = collapsedProjectKeys.has(group.key);
-                  const projectTarget = chatProjectTarget(group);
-                  return (
-                    <section className="chatProject" key={group.key}>
-                      <div className="chatProjectHeader">
-                        <button
-                          className="chatProjectToggle"
-                          type="button"
-                          onClick={() => toggleProjectGroup(group.key)}
-                          aria-expanded={!collapsed}
-                          title={group.path ?? group.name}
-                        >
-                          <ChevronDown className={collapsed ? "collapsed" : ""} size={14} />
-                          <span>
-                            <strong>{group.name}</strong>
-                          </span>
-                        </button>
-                        {group.path ? (
-                          <button
-                            className="chatProjectNewButton"
-                            type="button"
-                            onClick={() => void newChatForProject({ name: group.name, path: group.path })}
-                            title={`Start a new chat in "${group.name}"`}
-                          >
-                            <SquarePen size={14} />
-                          </button>
-                        ) : null}
-                        {projectTarget ? (
-                          <div className="chatProjectActions">
-                            <button
-                              className="chatProjectActionButton"
-                              type="button"
-                              onClick={() => {
-                                setProjectActionMenuKey((current) => (current === group.key ? null : group.key));
-                              }}
-                              aria-expanded={projectActionMenuKey === group.key}
-                              aria-haspopup="menu"
-                              title={`Project actions for "${group.name}"`}
-                            >
-                              <Ellipsis size={14} />
-                            </button>
-                            {projectActionMenuKey === group.key ? (
-                              <div className="chatProjectMenu" role="menu">
-                                {projectTarget.chatCount > 0 ? (
-                                  <button
-                                    type="button"
-                                    role="menuitem"
-                                    onClick={() => {
-                                      setProjectActionMenuKey(null);
-                                      setDeleteCandidate({ kind: "projectChats", project: projectTarget });
-                                    }}
-                                  >
-                                    <MessageSquareX size={14} />
-                                    <span>Delete all chats</span>
-                                  </button>
-                                ) : null}
-                                <button
-                                  className="danger"
-                                  type="button"
-                                  role="menuitem"
-                                  onClick={() => {
-                                    setProjectActionMenuKey(null);
-                                    setDeleteCandidate({ kind: "project", project: projectTarget });
-                                  }}
-                                >
-                                  <FolderX size={14} />
-                                  <span>Delete project</span>
-                                </button>
-                              </div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </div>
-                      {!collapsed ? (
-                        <div className={`chatProjectChats ${group.worktrees.length ? "hasWorktrees" : ""}`}>
-                          {group.chats.map((chat) => renderChatRow(chat))}
-                          {group.worktrees.map((worktree) => {
-                            const worktreeCollapsed = collapsedWorktreeKeys.has(worktree.key);
-                            const canCreateWorktreeChat = /^task-[A-Za-z0-9_-]+$/.test(worktree.rootTaskId);
-                            return (
-                              <section className="chatWorktree" key={worktree.key}>
-                                <div className="chatWorktreeHeader">
-                                  <button
-                                    className="chatWorktreeToggle"
-                                    type="button"
-                                    onClick={() => toggleWorktreeGroup(worktree.key)}
-                                    aria-expanded={!worktreeCollapsed}
-                                    title={worktree.path}
-                                  >
-                                    <ChevronDown className={worktreeCollapsed ? "collapsed" : ""} size={13} />
-                                    <GitBranch size={13} />
-                                    <span>
-                                      <strong>{worktreeTitle(worktree)}</strong>
-                                      <em>{worktreeSubline(worktree)}</em>
-                                    </span>
-                                  </button>
-                                  <button
-                                    className="chatWorktreeNewButton"
-                                    type="button"
-                                    onClick={() => void newChatForWorktree(group, worktree)}
-                                    disabled={!canCreateWorktreeChat}
-                                    title={`Start a new chat in "${worktreeTitle(worktree)}"`}
-                                  >
-                                    <SquarePen size={13} />
-                                  </button>
-                                </div>
-                                {!worktreeCollapsed ? (
-                                  <div className="chatWorktreeChats">
-                                    {worktree.chats.map((chat) => renderChatRow(chat))}
-                                  </div>
-                                ) : null}
-                              </section>
-                            );
-                          })}
-                          {!group.chats.length && !group.worktrees.length ? <div className="chatProjectEmpty">No chats yet.</div> : null}
-                        </div>
-                      ) : null}
-                    </section>
-                  );
-                })
-              ) : (
-                <div className="archiveEmpty">
-                  <CircleDashed size={17} />
-                  <span>No chats yet.</span>
-                </div>
-              )}
-            </div>
-          </section>
+          <ChatArchive
+            chatProjectGroups={chatProjectGroups} activeChatId={activeChatId}
+            chatJumpKeysVisible={chatJumpKeysVisible} chatJumpNumbersById={chatJumpNumbersById}
+            collapsedProjectKeys={collapsedProjectKeys} collapsedWorktreeKeys={collapsedWorktreeKeys}
+            projectActionMenuKey={projectActionMenuKey} setProjectActionMenuKey={setProjectActionMenuKey}
+            setDeleteCandidate={setDeleteCandidate} chatProjectTarget={chatProjectTarget}
+            toggleProjectGroup={toggleProjectGroup} toggleWorktreeGroup={toggleWorktreeGroup}
+            selectChat={selectChat} newChat={newChat} newProject={newProject}
+            newChatForProject={newChatForProject} newChatForWorktree={newChatForWorktree} busy={busy}
+          />
         </div>
 
         <div className="sidebarFooter">
@@ -3972,15 +3512,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         key={item.id}
                         item={item}
                         settled={!isGenerating || item.id !== lastAssistantItemId}
-                        rating={responseFeedback.get(item.id)}
                         copyText={item.text}
                         onCopy={(text) => void copyText(text)}
-                        onRate={openResponseFeedbackDialog}
                         documents={
-                          // Every turn has an answer, but the documents a run
-                          // produced belong to the newest one — the review state
-                          // they link into is the task's current state, not a
-                          // snapshot of what scrollback said at the time.
+                          // Generated documents belong to the newest answer.
                           item.id === lastAssistantItemId && reviewReadyForDisplay && documentReviewFiles.length ? (
                             <div className="documentResponseLinks" aria-label="Generated documents">
                               {documentReviewFiles.map((file) => (
@@ -4002,8 +3537,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         />
                       </AssistantMessage>
                     ) : (
-                      <WorkingBlock
-                        key={item.id}
+                      <React.Fragment key={item.id}><WorkingBlock
                         item={item}
                         clock={activityClock}
                         expanded={expandedActivityIds.has(item.id)}
@@ -4017,7 +3551,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         onScroll={handleActivityScroll}
                         onTouchMove={handleActivityTouchMove}
                         onWheel={handleActivityWheel}
-                      />
+                      /><GeneratedImages api={api} taskId={task?.id ?? ""} item={item} onPreview={setPreviewAttachment} /></React.Fragment>
                     ),
                   )}
                   {codeReviewFiles.length && reviewReadyForDisplay ? (
@@ -4070,87 +3604,110 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         ) : null}
 
         <section className="promptDock">
-          {/* Everything already committed but not yet answered, in one stack above
-              the controls: messages waiting their turn, and the review comments
-              riding along with the message being written. They were two trays in
-              two places, which read as two unrelated things when they are both
-              just "what is going out next". */}
-          <div className={`composerPendingTray ${
-            activeQueuedPrompts.length || reviewPromptFeedback.length || dictation.status.error
-              ? "hasPending"
-              : ""
-          }`}>
-            <QueuedPromptList
-              items={activeQueuedPrompts}
-              isGenerating={isGenerating}
-              steerPending={steerPending}
-              onEdit={editQueuedPrompt}
-              onSteer={(item) => void steerSubmission(item, item.id)}
-              onDelete={removeQueuedPrompt}
-              onPreviewFeedback={(feedback) => {
-                setReviewFeedbackPreview(feedback);
-                setReviewFeedbackDialogOpen(true);
-              }}
-            />
-            {dictation.status.error ? (
-              // Sized to its sentence rather than to the composer: a line about
-              // one microphone press that ruled a bar across the full width read
-              // as a state the whole composer was in.
-              <div className="dictationNotice" role="status" aria-live="polite">
-                <Mic size={13} aria-hidden="true" />
-                <span>{dictation.status.error}</span>
-                <button
-                  className="dictationNoticeDismiss"
-                  type="button"
-                  aria-label="Dismiss"
-                  onClick={dictation.dismissError}
-                >
-                  <X size={11} aria-hidden="true" />
-                </button>
-              </div>
-            ) : null}
-            {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
-          </div>
           <div className="promptControls">
-            <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
-              <button className="workspaceControl" type="button" onClick={pickRepository} disabled={busy}>
-                <span className="controlIcon"><FolderOpen size={14} /></span>
-                <span>
-                  <strong>{repository ? repository.name : "Select folder"}</strong>
-                </span>
-              </button>
-              {repository?.kind === "git" ? (
-                <BranchPicker
-                  branch={repository.originalBranch}
-                  branches={branches}
-                  open={branchMenuOpen}
-                  loading={branchesLoading}
-                  error={branchError}
-                  disabled={busy || checkoutPending}
-                  checkoutPending={checkoutPending}
-                  onToggleMenu={() => void toggleBranchMenu()}
-                  onRefresh={() => void refreshBranches()}
-                  onSelect={(branch) => void selectBranch(branch)}
-                />
+            {/* Everything already committed but not yet answered, in one stack above
+                the controls: messages waiting their turn, and the review comments
+                riding along with the message being written. They were two trays in
+                two places, which read as two unrelated things when they are both
+                just "what is going out next". Anchored to the controls row rather
+                than the dock, because the controls row is the one element that is
+                exactly as wide as the prompt box: a tray anchored to the dock
+                spans the whole pane on a wide window. */}
+            <div className={`composerPendingTray ${
+              activeQueuedPrompts.length || reviewPromptFeedback.length || dictation.status.error
+                ? "hasPending"
+                : ""
+            }`}>
+              <QueuedPromptList
+                items={activeQueuedPrompts}
+                isGenerating={isGenerating}
+                steerPending={steerPending}
+                onEdit={editQueuedPrompt}
+                onSteer={(item) => void steerSubmission(item, item.id)}
+                onDelete={removeQueuedPrompt}
+                onPreviewFeedback={(feedback) => {
+                  setReviewFeedbackPreview(feedback);
+                  setReviewFeedbackDialogOpen(true);
+                }}
+              />
+              {dictation.status.error ? (
+                // Sized to its sentence rather than to the composer: a line about
+                // one microphone press that ruled a bar across the full width read
+                // as a state the whole composer was in.
+                <div className="dictationNotice" role="status" aria-live="polite">
+                  <Mic size={13} aria-hidden="true" />
+                  <span>{dictation.status.error}</span>
+                  <button
+                    className="dictationNoticeDismiss"
+                    type="button"
+                    aria-label="Dismiss"
+                    onClick={dictation.dismissError}
+                  >
+                    <X size={11} aria-hidden="true" />
+                  </button>
+                </div>
               ) : null}
+              {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
             </div>
+            {/* A chat that started without a folder can never be given one, so
+                the control goes rather than sitting there greyed out: a dead
+                button is a question the user keeps re-asking. Starting a new
+                chat is the way back to a folder, and the sidebar is where that
+                lives. `busy` still only disables — it lifts in a moment, and a
+                control that vanished for the length of a run would move every
+                other control in the row twice. */}
+            {chatStartedWithoutFolder ? null : (
+              <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
+                <button
+                  className="workspaceControl"
+                  type="button"
+                  onClick={pickRepository}
+                  disabled={busy}
+                >
+                  <span className="controlIcon"><FolderOpen size={14} /></span>
+                  <span>
+                    <strong>{repository ? repository.name : "Select folder"}</strong>
+                  </span>
+                </button>
+                {repository?.kind === "git" ? (
+                  <BranchPicker
+                    branch={repository.originalBranch}
+                    branches={branches}
+                    open={branchMenuOpen}
+                    loading={branchesLoading}
+                    error={branchError}
+                    disabled={busy || checkoutPending}
+                    checkoutPending={checkoutPending}
+                    onToggleMenu={() => void toggleBranchMenu()}
+                    onRefresh={() => void refreshBranches()}
+                    onSelect={(branch) => void selectBranch(branch)}
+                  />
+                ) : null}
+              </div>
+            )}
 
-            <RemoteHostPicker
-              connections={remoteSettings.connections}
-              selectedId={remoteConnectionId}
-              directory={remoteDirectory}
-              disabled={busy}
-              locked={task !== null}
-              onSelect={(connectionId, directory) => {
-                setRemoteConnectionId(connectionId);
-                setRemoteDirectory(directory);
-              }}
-              onBrowse={(connectionId, path) => api.browseRemoteDirectory({ connectionId, path })}
-              onManage={() => {
-                setSettingsOpen(true);
-                setSettingsTab("remote");
-              }}
-            />
+            {/* Same reason, and the information is not lost with it: a chat
+                that has started keeps the host it started on, and the badge
+                above the messages names that host for as long as it matters.
+                A pill with a padlock on it said the same thing while still
+                inviting a press that could not do anything. */}
+            {task ? null : (
+              <RemoteHostPicker
+                connections={remoteSettings.connections}
+                selectedId={remoteConnectionId}
+                directory={remoteDirectory}
+                disabled={busy}
+                onSelect={(connectionId, directory) => {
+                  setRemoteConnectionId(connectionId);
+                  setRemoteDirectory(directory);
+                }}
+                onBrowse={(connectionId, path) => api.browseRemoteDirectory({ connectionId, path })}
+                onManage={() => {
+                  setSettingsOpen(true);
+                  setSettingsTab("remote");
+                }}
+              />
+            )}
 
             {canUseWorktreeMode && !remoteConnectionId ? (
               <WorktreeToggle
@@ -4205,7 +3762,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     {skillMenuOpen
                       ? "Use a skill for this turn"
                       : !repository
-                        ? "Search files after selecting a folder"
+                        ? "Create an image or add context"
                         : categoryMenuOpen
                           ? `Add context from ${repository.name}`
                           : mentionMode === "file"
@@ -4428,13 +3985,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         void api.listServerModels().then(setServerModels).catch(() => undefined);
                       }}
                       efforts={modelReasoningEfforts}
-                      effort={reasoningEffort}
+                      effort={activeReasoningEffort}
                       effortDisabled={busy || isGenerating}
-                      showThinking={showThinking}
-                      showThinkingAvailable={backend?.veilFeatures.includes("chat.reasoning_visible") === true}
                       onSelect={(modelId) => void selectComposerModel(modelId)}
                       onSelectEffort={(next) => void updateReasoningEffort(next)}
-                      onToggleShowThinking={(next) => void updateShowThinking(next)}
                       onManage={endpointSettings.mode === "local" ? () => {
                         setSettingsOpen(true);
                         setSettingsTab("account");
@@ -4502,6 +4056,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       <aside className="reviewSidebar">
         <ReviewPanel
           files={reviewFiles}
+          // False the moment the panel is asked to close, not when its spring
+          // comes to rest: an interrupted animation would otherwise leave the
+          // feedback mode armed behind a panel nobody can see.
+          open={reviewOpen && !reviewClosing}
           initialSelectedPath={reviewTargetPath}
           taskId={task?.id ?? `workspace:${repository?.rootPath ?? "none"}`}
           patchHash={task?.reviewPatchHash}
@@ -4509,9 +4067,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           canUseWorktreeScope={repository?.kind === "git" || task?.workspaceKind === "git"}
           canOpenIde={canOpenIde}
           canUndoFile={canUndoFile}
+          undoUnavailableReason={undoUnavailableReason}
           selectedIdeLabel={selectedIde.label}
           onClose={closeReviewPanel}
-          onUndoFile={(filePath) => void undoReviewFile(filePath)}
+          onUndoFile={(filePath) => void undoReviewChanges(filePath)}
+          onUndoAll={() => void undoReviewChanges()}
           onOpenFile={openReviewFile}
           onScopeChange={changeReviewScope}
           onResizePointerDown={beginReviewResize}
@@ -4523,101 +4083,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         />
       </aside>
 
-      {responseFeedbackDialog ? (
-        <div
-          className="modalScrim responseFeedbackScrim"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !responseFeedbackSubmitting) {
-              setResponseFeedbackDialog(null);
-            }
-          }}
-        >
-          <form
-            ref={modalRef as React.RefObject<HTMLFormElement>}
-            tabIndex={-1}
-            className="responseFeedbackDialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="response-feedback-title"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submitResponseFeedback();
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && !responseFeedbackSubmitting) {
-                setResponseFeedbackDialog(null);
-              }
-            }}
-          >
-            <header>
-              <span className={`responseFeedbackDialogIcon is${responseFeedbackDialog.rating === "good" ? "Good" : "Bad"}`}>
-                {responseFeedbackDialog.rating === "good" ? <ThumbsUp size={16} /> : <ThumbsDown size={16} />}
-              </span>
-              <h3 id="response-feedback-title">
-                {responseFeedbackDialog.rating === "good"
-                  ? "What made this a good answer?"
-                  : "What could be better?"}
-              </h3>
-              <button
-                className="responseFeedbackClose"
-                type="button"
-                aria-label="Close response feedback"
-                disabled={responseFeedbackSubmitting}
-                onClick={() => setResponseFeedbackDialog(null)}
-              >
-                <X size={15} />
-              </button>
-            </header>
-            <fieldset>
-              <legend>Choose one (optional)</legend>
-              <div className="responseFeedbackOptions">
-                {responseFeedbackReasons[responseFeedbackDialog.rating].map((reason) => (
-                  <button
-                    type="button"
-                    key={reason}
-                    aria-pressed={responseFeedbackDialog.reason === reason}
-                    onClick={() => setResponseFeedbackDialog((current) => current ? {
-                      ...current,
-                      reason: current.reason === reason ? undefined : reason,
-                    } : current)}
-                  >
-                    {reason}
-                  </button>
-                ))}
-              </div>
-            </fieldset>
-            <label>
-              <span>Additional details (optional)</span>
-              <textarea
-                ref={responseFeedbackInputRef}
-                autoFocus
-                data-modal-autofocus
-                value={responseFeedbackDialog.comment}
-                maxLength={1000}
-                placeholder="Add a note"
-                onChange={(event) => {
-                  const comment = event.target.value;
-                  setResponseFeedbackDialog((current) => current ? { ...current, comment } : current);
-                }}
-              />
-            </label>
-            <footer>
-              <button
-                className="secondaryAction"
-                type="button"
-                disabled={responseFeedbackSubmitting}
-                onClick={() => setResponseFeedbackDialog(null)}
-              >
-                Cancel
-              </button>
-              <button className="primaryAction" type="submit" disabled={responseFeedbackSubmitting}>
-                {responseFeedbackSubmitting ? "Submitting…" : "Submit"}
-              </button>
-            </footer>
-          </form>
-        </div>
-      ) : null}
       {reviewFeedbackDialogOpen ? (() => {
         const readOnly = reviewFeedbackPreview !== null;
         const dialogFeedback = readOnly
@@ -4691,54 +4156,28 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   />
                 ) : null}
 
+                {settingsTab === "image" ? <ImageSettings api={api} serverMode={connectionSettings.settings.mode === "server"} /> : null}
                 {settingsTab === "voice" ? (
                   <VoiceSettings api={api} backend={backend} active onBackendStatus={setBackend}
                     serverMode={connectionSettings.settings.mode === "server"} speechAdvertised={dictationAvailable} />
                 ) : null}
                 {settingsTab === "keyboard" ? <KeyboardSettingsPanel api={api} /> : null}
                 {settingsTab === "skills" ? (
-                  <SkillsSettingsPanel
-                    skills={skills}
-                    visibleSkills={visibleSkills}
-                    skillsEnabled={skillsEnabled}
-                    skillsLoading={skillsLoading}
-                    skillsLoaded={skillsLoaded}
-                    skillSourceFilter={skillSourceFilter}
-                    selectedSkillId={selectedSkillId}
-                    selectedSkillPreview={selectedSkillPreview}
-                    skillPreviewLoading={skillPreviewLoading}
-                    skillDocument={skillDocument}
-                    newSkillFormOpen={newSkillFormOpen}
-                    newSkillName={newSkillName}
-                    creatingSkill={creatingSkill}
-                    skillsMessage={skillsMessage}
-                    onRefresh={() => {
-                      setSkillsMessage(null);
-                      void loadSkills();
-                    }}
-                    onOpenFolder={() => void openSkillsFolder()}
-                    onImport={() => void importSkill()}
-                    onToggleNewSkillForm={() => {
-                      setNewSkillFormOpen((open) => !open);
-                      setSkillsMessage(null);
-                    }}
-                    onSelectSourceFilter={selectSkillSourceFilter}
-                    onNewSkillName={setNewSkillName}
-                    onCreateSkill={() => void submitCreateSkill()}
-                    onCancelNewSkill={() => {
-                      setNewSkillFormOpen(false);
-                      setNewSkillName("");
-                    }}
-                    onTogglePreview={(skillId) => void toggleSkillPreview(skillId)}
-                    onToggleEnabled={(skillId) => void toggleSkillSetting(skillId)}
-                    onResetSystemSkill={() => void resetSelectedSystemSkill()}
-                    onOpenInEditor={() => void openSelectedSkillInEditor()}
-                  />
+                  <SkillsSettingsPanel {...skillSettings.panelProps} />
                 ) : null}
 
-                {settingsTab === "telemetry" ? (
-                  <TelemetrySettingsPanel
-                    syncEnabled={telemetrySyncEnabled}
+                {settingsTab === "general" ? (
+                  <GeneralSettingsPanel
+                    showThinking={showThinking}
+                    sendOnEnter={sendOnEnter}
+                    launchAtLogin={launchAtLogin}
+                    onToggleShowThinking={(next) => void updateShowThinking(next)}
+                    onToggleSendOnEnter={(next) => void updateSendOnEnter(next)}
+                    onToggleLaunchAtLogin={(next) => void updateLaunchAtLogin(next)}
+                  />
+                ) : null}
+                {settingsTab === "diagnostics" ? (
+                  <DiagnosticsSettingsPanel
                     localLogSize={formatFileSize(localLogInfo.bytes)}
                     busy={localLogsBusy}
                     logEntryCount={localLogInfo.entries}
@@ -4768,7 +4207,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           >
             <div className="imagePreviewHeader">
               <strong>{attachmentLabel(previewAttachment)}</strong>
-              <button className="messageAction" type="button" onClick={() => setPreviewAttachment(null)} title="Close preview">
+              <button className="messageAction" type="button" onClick={() => setPreviewAttachment(null)} aria-label="Close preview" title="Close preview">
                 <X size={15} />
               </button>
             </div>

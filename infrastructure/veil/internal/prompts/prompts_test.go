@@ -200,7 +200,7 @@ func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 	}
 }
 
-func TestBuildAddsOptionalSkillCatalogAndRequiresCompleteReadBeforeUse(t *testing.T) {
+func TestBuildRequiresMatchingSkillsBeforeDependentWork(t *testing.T) {
 	skills := []SkillMetadata{
 		{ID: "python", Name: "Python", Description: "Use for Python work.", Source: "system"},
 		{ID: "deal-review", Name: "Deal Review", Description: "Use for account reviews.", Source: "local"},
@@ -220,23 +220,40 @@ func TestBuildAddsOptionalSkillCatalogAndRequiresCompleteReadBeforeUse(t *testin
 		t.Fatal("skill catalog should use the system tier")
 	}
 	for _, want := range []string{
-		"optional task-specific playbooks",
-		"not an exhaustive capability list",
-		"If no skill would materially help, handle the request normally",
-		"Do not describe your general capabilities by enumerating enabled skills",
-		"Review the names and descriptions for relevance",
-		"One request may use multiple enabled skills",
-		"Use the smallest relevant set",
-		"you MUST first call read_skill",
-		"Do this for every skill you use",
-		"read its SKILL.md completely",
+		"On EVERY user request, including follow-ups",
+		"review the entire catalog's names, descriptions, and path scopes before planning or acting",
+		"You MUST call read_skill for EVERY skill the user names or whose described scope matches any part of the task",
+		"including partially relevant skills",
+		"system, personal, and imported skills on every route",
+		"Do not skip a relevant skill because you are confident",
+		"not whether you think you need help",
+		"Read each selected SKILL.md completely on this request",
+		"even if you used it earlier in the conversation",
+		"An explicit skill already supplied in full for this request counts as loaded",
 		"Next offset",
+		"Read status: complete",
+		"Before EVERY dependent action, check which additional resources",
+		"You MUST load their complete content before constructing tool arguments",
+		"Reading SKILL.md does not load its references",
+		"this never waives a newly required reference",
+		"keep the same skillId and set resource to the relative path specified by the skill",
+		"full content is still in context and unchanged",
+		"do not substitute guessed instructions",
+		"never batch a skill read with actions that depend on its instructions",
+		"Do not load unrelated skills",
+		"If no enabled skill matches, handle the request normally",
+		"not an exhaustive capability list",
 		"Never infer or apply instructions from only a skill's name or description",
 		`"id":"python"`,
 		`"description":"Use for account reviews."`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("skill prompt missing %q: %s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"optional task-specific", "If no skill would materially help", "if you decide to use", "umbratic-documents", "Word", "PowerPoint", "references/spec.md", "references/ops.md"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("skill prompt contains optional or format-specific routing: %q", forbidden)
 		}
 	}
 	if messages[3].Role != "user" {

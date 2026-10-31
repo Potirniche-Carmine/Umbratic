@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -38,10 +40,29 @@ test("all managed desktop paths stay below one data root", () => {
     pathsModule.workspaceRuntimeDirectory(root, "C:\\repo"),
     pathsModule.workspaceOcrDirectory(root, "C:\\repo"),
     pathsModule.electronSessionDirectory(root),
+    pathsModule.temporaryDirectory(root),
     pathsModule.electronLogsDirectory(root),
     pathsModule.crashDumpsDirectory(root),
     pathsModule.runnerLogsDirectory(root),
-    pathsModule.telemetrySpoolDirectoryPath(root),
   ];
   assert.equal(paths.every((value) => path.relative(root, value) && !path.relative(root, value).startsWith("..")), true);
+});
+
+test("Electron and child processes share an owner-only temporary directory", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-paths-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configured = new Map<string, string>();
+  const environment: NodeJS.ProcessEnv = { TMPDIR: "/unusable-system-temp" };
+  pathsModule.configureDesktopAppPaths({
+    setPath: (name: string, value: string) => configured.set(name, value),
+    setAppLogsPath: (value: string) => configured.set("logs", value),
+  }, root, environment);
+  const temporary = path.join(root, "cache", "tmp");
+  assert.equal(configured.get("temp"), temporary);
+  assert.equal(environment.TMPDIR, temporary);
+  assert.equal(environment.TMP, temporary);
+  assert.equal(environment.TEMP, temporary);
+  fs.writeFileSync(path.join(temporary, "probe"), "writable");
+  if (process.platform !== "win32") assert.equal(fs.statSync(temporary).mode & 0o777, 0o700);
+  assert.equal(configured.get("userData"), root);
 });

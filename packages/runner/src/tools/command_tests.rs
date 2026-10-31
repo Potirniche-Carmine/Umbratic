@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(unix)]
 use std::fs;
 
 async fn execute_command_for_test(command: &str, timeout_ms: u64) -> ToolResult {
@@ -15,7 +16,7 @@ async fn execute_command_in(
     let sink = crate::session::test_sink(directory.path());
     let mut events = sink.subscribe();
     let permissions = Arc::new(crate::permission::PermissionBroker::default());
-    let task = tokio::spawn(execute_tool(
+    let mut task = tokio::spawn(execute_tool(
         crate::session::test_session(directory.path()),
         sink.clone(),
         permissions.clone(),
@@ -27,7 +28,10 @@ async fn execute_command_in(
         },
     ));
     loop {
-        let event = events.recv().await.unwrap();
+        let event = tokio::select! {
+            result = &mut task => return (result.unwrap(), directory),
+            event = events.recv() => event.unwrap(),
+        };
         if event["type"] == "permission.requested" {
             permissions.reply(&sink, event["permissionId"].as_str().unwrap(), "allow");
             break;
@@ -136,4 +140,72 @@ async fn timeout_reaps_the_spawned_process_tree() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     panic!("child {pid} outlived the timed-out command");
+}
+
+#[tokio::test]
+async fn commands_do_not_inherit_runner_stdin() {
+    const CHILD: &str = "UMBRATIC_TEST_COMMAND_STDIN";
+    if std::env::var_os(CHILD).is_some() {
+        let command = if cfg!(windows) {
+            "$line = [Console]::In.ReadLine(); if ($null -ne $line) { exit 19 }; Write-Output stdin-closed"
+        } else {
+            "if read -r line; then exit 19; fi; printf stdin-closed"
+        };
+        let result = execute_command_for_test(command, 5_000).await;
+        assert_eq!(result.status, "success", "{:?}", result.error_message);
+        assert!(result.content.contains("stdin-closed"));
+        return;
+    }
+
+    // Keep the runner's input pipe open and empty. An inheriting tool would
+    // block on its read until the unchanged command deadline expires.
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tools::command_tests::commands_do_not_inherit_runner_stdin",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let _open_input = child.stdin.take().unwrap();
+    let output = tokio::time::timeout(Duration::from_secs(15), child.wait_with_output())
+        .await
+        .expect("command test process exceeded its own command deadline")
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "child test failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn command_module_search_stays_within_the_trusted_system_shell() {
+    let result = execute_command_for_test(
+        "Write-Output 'module-probe'; [Console]::Out.WriteLine('effective-modules=' + [Environment]::GetEnvironmentVariable('PSModulePath'))",
+        5_000,
+    )
+    .await;
+    assert_eq!(result.status, "success", "{:?}", result.error_message);
+    let effective = result
+        .content
+        .lines()
+        .find_map(|line| line.strip_prefix("effective-modules="))
+        .unwrap();
+    let expected = safe_command_environment().remove("PSModulePath").unwrap();
+    assert_eq!(
+        effective, expected,
+        "PowerShell expanded its restricted module search path"
+    );
+    assert!(
+        !effective.contains(';'),
+        "Only one trusted system module directory is allowed"
+    );
 }

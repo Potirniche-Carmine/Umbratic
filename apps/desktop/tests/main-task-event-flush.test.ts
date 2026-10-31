@@ -73,7 +73,8 @@ test("a batch folds in one pass and matches folding the events one at a time", a
   }
   const oneAtATime = batch.reduce((events, event) => shared.appendTaskEvent(events, event, 500), []);
   const inOnePass = shared.appendTaskEvents([], batch, 500);
-  assert.deepEqual(inOnePass, oneAtATime);
+  // Compare event payloads across the test VM boundary, not realm prototypes.
+  assert.deepEqual(JSON.parse(JSON.stringify(inOnePass)), JSON.parse(JSON.stringify(oneAtATime)));
 
   // A batch that changes nothing hands back the caller's own array, so React
   // can skip the render rather than diffing an identical transcript.

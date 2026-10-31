@@ -47,7 +47,7 @@ func TestThinkingDirectiveIsTolerant(t *testing.T) {
 		`{"input":"hi","thinking":" off "}`:       "off",
 		`{"input":"hi","thinking":"off"}`:         "off",
 		`{"input":"hi"}`:                          "",
-		`{"input":"hi","thinking":"maybe"}`:       "",
+		`{"input":"hi","thinking":"maybe"}`:       "maybe",
 		`{"input":"hi","thinking":true}`:          "",
 		`{"input":"hi","thinking":3}`:             "",
 		`{"input":"hi","thinking":null}`:          "",

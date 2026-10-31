@@ -174,12 +174,6 @@ export function worktreeTitle(group: WorktreeChatGroup): string {
   return group.branch || folderName(group.path);
 }
 
-export function worktreeSubline(group: WorktreeChatGroup): string {
-  const count = chatCountLabel(group.chats.length);
-  const base = group.baseCommit ? `base ${group.baseCommit.slice(0, 7)}` : folderName(group.path);
-  return `${count} - ${base}`;
-}
-
 export function chatCountLabel(count: number): string {
   return `${count} chat${count === 1 ? "" : "s"}`;
 }

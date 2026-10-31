@@ -1,9 +1,9 @@
 {
   "minimumReleaseAgeDays": 14,
-  "nodeVersion": "26.3.0",
-  "npmVersion": "11.16.0",
+  "nodeVersion": "26.12.1",
+  "npmVersion": "11.20.0",
   "rustVersion": "1.96.0",
-  "minimumGoVersion": "1.26.6",
+  "minimumGoVersion": "1.26.10",
   "cargoAuditVersion": "0.22.2",
   "govulncheckVersion": "1.6.0",
   "acceptedGoModuleAdvisories": [
@@ -13,7 +13,7 @@
       "package": "golang.org/x/crypto/openpgp",
       "reachable": false,
       "fixedIn": null,
-      "reason": "Permanent deprecation notice with no fix, reported under Module Results only. The single import from this module is golang.org/x/crypto/argon2 (veil-console internal/auth/auth.go); go list -deps confirms only argon2 and blake2b compile in. Go 1.26 ships no Argon2 in the standard library, so replacing the password hash to silence an unreachable advisory would be a net security loss."
+      "reason": "Permanent deprecation notice with no fix, reported only at module scope. Console compiles argon2 and blake2b, and the reviewed Caddy graph compiles other required crypto helpers; neither imports OpenPGP. Source and unstripped-binary govulncheck report no reachable/imported findings. This entry documents the residual module notice; scanner failures are never suppressed."
     }
   ],
   "acceptedNpmReleaseAgeExceptions": [
@@ -24,60 +24,101 @@
       "acceptedOn": "2026-08-23",
       "reason": "0.9.10 is affected by GHSA-965w-775f-mr7g (High, CVSS 8.7): parsing a deeply or repeatedly namespaced document consumes quadratic memory, a denial of service reachable from DOMParser.parseFromString with default options. The DOCX and PPTX readers run xmldom over OOXML parts unzipped from files the user supplies, so the advisory sits directly on an untrusted-input path. 0.9.12 also closes twelve further advisories in the same set. 0.9.11 is still affected and is not a fix. Installing at two days old is a deliberate trade of the 14-day cooldown against a reachable High; re-check on the next dependency sweep once the version has aged past 14 days.",
       "installCommand": "npm install --ignore-scripts --min-release-age=0"
+    },
+    {
+      "package": "electron",
+      "version": "44.10.0",
+      "publishedAt": "2026-10-27",
+      "acceptedOn": "2026-10-31",
+      "reason": "44.9.1 fixed GHSA-jr5w-w6x2-84p9 but still embeds vulnerable Node24.22.0. Official Electron44.10.0 updates embedded Node24.22.1 for the2026-10-21 BrotliRCE/TLS/DNS security fixes, including CVE-2026-111497. Keep the44 major; security exemption preserves normal14-day cooldown.",
+      "installCommand": "npm install --ignore-scripts --min-release-age=0"
+    },
+    {
+      "package": "vite",
+      "version": "8.3.5",
+      "publishedAt": "2026-10-21",
+      "acceptedOn": "2026-10-31",
+      "reason": "Replaces vulnerable8.2.0, including development-server filesystem disclosure and editor command execution advisories. Security update exemption; the normal14-day cooldown remains configured.",
+      "installCommand": "npm install --ignore-scripts --min-release-age=0"
+    },
+    {
+      "package": "glob",
+      "version": "14.0.3",
+      "publishedAt": "2026-10-28",
+      "acceptedOn": "2026-10-31",
+      "reason": "GHSA-3g3m-2fjr-6pw4 requires a version beyond14.0.1. Security update exemption; the normal14-day cooldown remains configured.",
+      "installCommand": "npm install --ignore-scripts --min-release-age=0"
+    },
+    {
+      "package": "minimatch",
+      "version": "11.0.3",
+      "publishedAt": "2026-10-28",
+      "acceptedOn": "2026-10-31",
+      "reason": "GHSA-g3hv-75wg-m249 affects versions below11.0.1; this is the current supported fixed patch. Security update exemption; the normal14-day cooldown remains configured.",
+      "installCommand": "npm install --ignore-scripts --min-release-age=0"
+    },
+    {
+      "package": "fast-uri",
+      "version": "3.1.9",
+      "publishedAt": "2026-10-19",
+      "acceptedOn": "2026-10-31",
+      "reason": "Closes scheme/host confusion and URI injection advisories affecting3.1.6 through3.1.8. Security update exemption; the normal14-day cooldown remains configured.",
+      "installCommand": "npm install --ignore-scripts --min-release-age=0"
     }
   ],
   "reviewedNpmOverrides": {
-    "@electron/asar": "4.2.1",
+    "@electron/asar": "4.3.1",
     "@electron/get": {
-      "undici": "7.29.0"
+      "undici": "7.30.1"
     },
     "@electron/universal": "3.0.6",
-    "brace-expansion": "5.0.9",
-    "fast-uri": "3.1.5",
+    "brace-expansion": "5.0.12",
+    "fast-uri": "3.1.9",
     "jake": "12.10.1",
-    "js-yaml": "4.3.1",
+    "js-yaml": "4.3.2",
     "nanoid": "3.3.18",
     "node-gyp": {
-      "undici": "6.28.0"
+      "undici": "6.29.1"
     },
-    "pdf-to-img": {
-      "pdfjs-dist": "6.2.108"
-    },
-    "postcss": "8.5.25"
+    "postcss": "8.5.25",
+    "glob": "14.0.3",
+    "minimatch": "11.0.3",
+    "source-map-js": "1.2.2"
   },
   "omittedNpmPeerPackages": [
-    "electron-builder-squirrel-windows@26.15.3"
+    "electron-builder-squirrel-windows@26.18.0"
   ],
   "allowedNpmInstallScriptPackages": [
     "electron-winstaller@5.4.0",
     "fsevents@2.3.3"
   ],
   "allowedNpmPlatformPackages": [
-    "@napi-rs/canvas-android-arm64@1.0.6",
-    "@napi-rs/canvas-darwin-arm64@1.0.6",
-    "@napi-rs/canvas-darwin-x64@1.0.6",
-    "@napi-rs/canvas-linux-arm-gnueabihf@1.0.6",
-    "@napi-rs/canvas-linux-arm64-gnu@1.0.6",
-    "@napi-rs/canvas-linux-arm64-musl@1.0.6",
-    "@napi-rs/canvas-linux-riscv64-gnu@1.0.6",
-    "@napi-rs/canvas-linux-x64-gnu@1.0.6",
-    "@napi-rs/canvas-linux-x64-musl@1.0.6",
-    "@napi-rs/canvas-win32-arm64-msvc@1.0.6",
-    "@napi-rs/canvas-win32-x64-msvc@1.0.6",
-    "@rolldown/binding-android-arm64@1.2.1",
-    "@rolldown/binding-darwin-arm64@1.2.1",
-    "@rolldown/binding-darwin-x64@1.2.1",
-    "@rolldown/binding-freebsd-x64@1.2.1",
-    "@rolldown/binding-linux-arm-gnueabihf@1.2.1",
-    "@rolldown/binding-linux-arm64-gnu@1.2.1",
-    "@rolldown/binding-linux-arm64-musl@1.2.1",
-    "@rolldown/binding-linux-ppc64-gnu@1.2.1",
-    "@rolldown/binding-linux-s390x-gnu@1.2.1",
-    "@rolldown/binding-linux-x64-gnu@1.2.1",
-    "@rolldown/binding-linux-x64-musl@1.2.1",
-    "@rolldown/binding-openharmony-arm64@1.2.1",
-    "@rolldown/binding-win32-arm64-msvc@1.2.1",
-    "@rolldown/binding-win32-x64-msvc@1.2.1",
+    "@napi-rs/canvas-android-arm64@1.0.11",
+    "@napi-rs/canvas-darwin-arm64@1.0.11",
+    "@napi-rs/canvas-darwin-x64@1.0.11",
+    "@napi-rs/canvas-linux-arm-gnueabihf@1.0.11",
+    "@napi-rs/canvas-linux-arm64-gnu@1.0.11",
+    "@napi-rs/canvas-linux-arm64-musl@1.0.11",
+    "@napi-rs/canvas-linux-riscv64-gnu@1.0.11",
+    "@napi-rs/canvas-linux-x64-gnu@1.0.11",
+    "@napi-rs/canvas-linux-x64-musl@1.0.11",
+    "@napi-rs/canvas-win32-arm64-msvc@1.0.11",
+    "@napi-rs/canvas-win32-x64-msvc@1.0.11",
+    "@rolldown/binding-android-arm-eabi@1.2.16",
+    "@rolldown/binding-android-arm64@1.2.16",
+    "@rolldown/binding-darwin-arm64@1.2.16",
+    "@rolldown/binding-darwin-x64@1.2.16",
+    "@rolldown/binding-freebsd-x64@1.2.16",
+    "@rolldown/binding-linux-arm-gnueabihf@1.2.16",
+    "@rolldown/binding-linux-arm64-gnu@1.2.16",
+    "@rolldown/binding-linux-arm64-musl@1.2.16",
+    "@rolldown/binding-linux-ppc64-gnu@1.2.16",
+    "@rolldown/binding-linux-s390x-gnu@1.2.16",
+    "@rolldown/binding-linux-x64-gnu@1.2.16",
+    "@rolldown/binding-linux-x64-musl@1.2.16",
+    "@rolldown/binding-openharmony-arm64@1.2.16",
+    "@rolldown/binding-win32-arm64-msvc@1.2.16",
+    "@rolldown/binding-win32-x64-msvc@1.2.16",
     "fsevents@2.3.3",
     "lightningcss-android-arm64@1.33.0",
     "lightningcss-darwin-arm64@1.33.0",
@@ -92,44 +133,44 @@
     "lightningcss-win32-x64-msvc@1.33.0"
   ],
   "allowedCargoBuildScriptPackages": [
-    "crc32fast@1.5.0",
-    "defmt-macros@1.1.1",
-    "defmt@1.1.1",
+    "crc32fast@1.5.3",
+    "encoding_rs@0.8.44",
     "generic-array@0.14.7",
     "getrandom@0.4.3",
     "httparse@1.10.1",
     "iana-time-zone-haiku@0.1.2",
-    "icu_normalizer_data@2.2.0",
-    "icu_properties_data@2.2.0",
+    "icu_normalizer_data@2.4.0",
+    "icu_properties_data@2.4.0",
     "jetscii@0.5.3",
-    "libc@0.2.189",
+    "libc@0.2.191",
+    "nix@0.31.3",
     "num-traits@0.2.19",
-    "portable-atomic-util@0.2.7",
+    "portable-atomic-util@0.2.8",
     "portable-atomic@1.15.0",
-    "proc-macro2@1.0.106",
-    "quinn-udp@0.5.15",
-    "quinn@0.11.11",
-    "quote@1.0.46",
+    "proc-macro2@1.0.107",
+    "quinn-udp@0.5.16",
+    "quinn@0.11.12",
+    "quote@1.0.47",
     "ring@0.17.14",
-    "rustix@1.1.4",
-    "rustls@0.23.43",
+    "rustix@1.1.6",
+    "rustls@0.23.46",
     "rustversion@1.0.23",
     "serde@1.0.229",
     "serde_core@1.0.229",
-    "serde_json@1.0.151",
-    "thiserror@2.0.18",
+    "serde_json@1.0.154",
+    "thiserror@2.0.21",
     "tree-sitter-c-sharp@0.23.5",
     "tree-sitter-c@0.24.2",
-    "tree-sitter-cmake@0.7.4",
+    "tree-sitter-cmake@0.7.5",
     "tree-sitter-go@0.25.0",
     "tree-sitter-javascript@0.25.0",
-    "tree-sitter-language@0.1.7",
+    "tree-sitter-language@0.1.9",
     "tree-sitter-python@0.25.0",
     "tree-sitter-rust@0.24.2",
     "tree-sitter-typescript@0.23.2",
-    "tree-sitter@0.26.11",
-    "wasm-bindgen-shared@0.2.126",
-    "wasm-bindgen@0.2.126",
+    "tree-sitter@0.26.13",
+    "wasm-bindgen-shared@0.2.130",
+    "wasm-bindgen@0.2.130",
     "windows_aarch64_gnullvm@0.52.6",
     "windows_aarch64_msvc@0.52.6",
     "windows_i686_gnu@0.52.6",
@@ -138,26 +179,24 @@
     "windows_x86_64_gnu@0.52.6",
     "windows_x86_64_gnullvm@0.52.6",
     "windows_x86_64_msvc@0.52.6",
-    "zmij@1.0.23",
-    "zstd-safe@7.2.4",
-    "zstd-sys@2.0.16+zstd.1.5.7"
+    "zmij@1.0.23"
   ],
   "allowedCargoProcMacroPackages": [
-    "defmt-macros@1.1.1",
-    "displaydoc@0.2.6",
-    "futures-macro@0.3.33",
-    "jiff-static@0.2.35",
+    "displaydoc@0.2.7",
+    "futures-macro@0.3.34",
+    "jiff-static@0.2.28",
+    "multiversion_no_op@1.0.0",
     "phf_macros@0.14.0",
     "rustversion@1.0.23",
     "serde_derive@1.0.229",
-    "thiserror-impl@2.0.18",
-    "tokio-macros@2.7.0",
-    "wasm-bindgen-macro@0.2.126",
+    "thiserror-impl@2.0.21",
+    "tokio-macros@2.7.2",
+    "wasm-bindgen-macro@0.2.130",
     "windows-implement@0.60.2",
     "windows-interface@0.59.3",
-    "yoke-derive@0.8.2",
-    "zerofrom-derive@0.1.7",
-    "zerovec-derive@0.11.3"
+    "yoke-derive@0.8.4",
+    "zerofrom-derive@0.1.8",
+    "zerovec-derive@0.11.7"
   ],
   "allowedNpmLicenses": [
     "(MIT AND Zlib)",
@@ -188,6 +227,7 @@
     "Apache-2.0 OR MIT",
     "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
     "BSD-3-Clause",
+    "BSD-3-Clause/MIT",
     "CC0-1.0 OR MIT-0",
     "CC0-1.0 OR MIT-0 OR Apache-2.0",
     "CDLA-Permissive-2.0",
@@ -205,5 +245,27 @@
     "Zlib",
     "Zlib OR Apache-2.0 OR MIT",
     "bzip2-1.0.6"
-  ]
+  ],
+  "reviewedVendoredCargoPackages": [
+    {
+      "name": "umya-spreadsheet",
+      "version": "4.0.0-beta.1",
+      "path": "third_party/umya-spreadsheet",
+      "manifestSha256": "5ec80b4034fdc11ba81fe9ec449f73535c5fb54bab6ef2061bfb1187b80e50ef",
+      "reason": "Only published fix for the vulnerable zip8 dependency chain; nonempty validation-formula condition corrected locally. See PROVENANCE.json and artifact round-trip regression tests."
+    }
+  ],
+  "reviewedVendoredGoPackages": [
+    {
+      "name": "github.com/go-jose/go-jose/v3",
+      "version": "v3.0.5",
+      "path": "third_party/go-jose-v3",
+      "manifestSha256": "3f7539e52cbb899588f0936434413014fff6eb195a718312e0b60a51b6074200"
+    }
+  ],
+  "setuptoolsInstallControlSha256": {
+    "infrastructure/veil-console/deploy/build-metal-kit.py": "a0d29c2e1d4d0c8ead1020af33b6de8a714c434e4b18a9c51462694a6272adca",
+    "infrastructure/veil-console/internal/deployment/host.go": "86d36d7e749fb69873315b81481324c56f06cb422610a0ec1e2805011767f833",
+    "infrastructure/veil-console/internal/deployment/package.go": "f1d4b533d552d1254f25c2ef2f9f06c6aca84d866d861080659994da498315c7"
+  }
 }

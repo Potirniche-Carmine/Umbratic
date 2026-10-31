@@ -1,4 +1,5 @@
 import { taskUsesIsolatedWorktree } from "./worktreeOps";
+import { withoutGeneratedImages } from "../shared/generatedImages";
 import { emit, getTask, missingSnapshotValue, publicTask, saveTask } from "./mainRuntime";
 import { buildBinaryDiff, buildSnapshotDiff } from "./taskPromptContext";
 import { readTextFileIfSafe, snapshotFileValue, snapshotFolder } from "./workspaceSnapshot";
@@ -48,9 +49,9 @@ export function folderReviewFiles(task: TaskRecord): ReviewFile[] {
   const paths = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
     .filter((file) => !isGeneratedRuntimePath(file))
     .sort((a, b) => a.localeCompare(b));
-  return paths
+  return withoutGeneratedImages(paths
     .map((file) => buildSnapshotDiff(file, before[file] ?? null, after[file] ?? null))
-    .filter((file): file is ReviewFile => !!file);
+    .filter((file): file is ReviewFile => !!file), task.events ?? []);
 }
 
 /// Each changed file costs one or two git subprocesses. Reviews of large
@@ -94,7 +95,7 @@ export async function gitWorkspaceReviewFile(repositoryPath: string, baseline: s
   return buildBinaryDiff(
     file,
     status === "added" ? null : "before",
-    status === "deleted" ? null : "after",
+    status === "deleted" ? null : snapshotFileValue(absolute),
   );
 }
 
@@ -122,9 +123,12 @@ export async function gitLocalReviewFiles(task: TaskRecord): Promise<ReviewFile[
 
 export async function gitReviewFiles(task: TaskRecord, baseline = task.baseCommit, repositoryPath = task.worktreePath): Promise<ReviewFile[]> {
   if (task.baselineFiles && baseline !== "HEAD") {
-    return task.workspaceKind === "git" ? gitLocalReviewFiles(task) : folderReviewFiles(task);
+    const files = task.workspaceKind === "git" ? await gitLocalReviewFiles(task) : folderReviewFiles(task);
+    return withoutGeneratedImages(files, task.events ?? []);
   }
-  return gitWorkspaceReviewFiles(repositoryPath, baseline);
+  const files = await gitWorkspaceReviewFiles(repositoryPath, baseline);
+  return path.resolve(repositoryPath) === path.resolve(task.worktreePath)
+    ? withoutGeneratedImages(files, task.events ?? []) : files;
 }
 
 export async function gitFileStatus(repositoryPath: string, baseline: string, file: string): Promise<ReviewFile["status"]> {
@@ -145,6 +149,17 @@ export async function refreshReview(
   scope: "task" | "worktree" = "task",
   wholeDiffWorkspacePath?: string,
 ): Promise<ReviewFile[]> {
+  // A remote path must never be interpreted on this computer, even if a local
+  // directory happens to have the same name. Remote runs have no local review.
+  if (task.remote) {
+    task.reviewFiles = [];
+    task.changedFiles = [];
+    task.reviewPatchHash = undefined;
+    task.reviewScope = undefined;
+    task.reviewBaselineLabel = undefined;
+    task.reviewBaselineOid = undefined;
+    return [];
+  }
   const workspacePath = scope === "worktree" && wholeDiffWorkspacePath
     ? wholeDiffWorkspacePath
     : fs.existsSync(task.worktreePath)
@@ -172,7 +187,7 @@ export async function refreshReview(
 
 export function reviewPatchHash(reviewFiles: ReviewFile[]): string {
   const normalized = reviewFiles
-    .map((file) => `${file.path}\0${file.status}\0${file.patch}`)
+    .map((file) => `${file.path}\0${file.status}\0${file.contentHash}\0${file.patch}`)
     .sort()
     .join("\0");
   return crypto.createHash("sha256").update(normalized).digest("hex");
@@ -198,6 +213,11 @@ export async function refreshTaskReview(input: unknown): Promise<TaskInfo | null
     throw new Error("Invalid review refresh input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
+  if (task.remote) {
+    await refreshReview(task);
+    saveTask(task);
+    return publicTask(task);
+  }
   const scope = input.scope === "worktree"
     ? "worktree"
     : input.scope === "task"

@@ -26,19 +26,26 @@ impl PermissionBroker {
         auto_allow: bool,
     ) -> String {
         let id = format!("perm-{}", Uuid::new_v4());
-        sink.emit(json!({ "type": "permission.requested", "taskId": task_id, "permissionId": id, "permissionKind": permission_kind, "summary": summary, "at": now_iso() }));
+        let requested = json!({ "type": "permission.requested", "taskId": task_id, "permissionId": id, "permissionKind": permission_kind, "summary": summary, "at": now_iso() });
         if auto_allow {
+            sink.emit(requested);
             sink.emit(json!({ "type": "permission.resolved", "taskId": task_id, "permissionId": id, "decision": "allow", "at": now_iso() }));
             return "allow".to_owned();
         }
         let (sender, receiver) = oneshot::channel();
-        self.pending.lock().unwrap().insert(
-            id,
-            PendingPermission {
-                task_id: task_id.to_owned(),
-                sender,
-            },
-        );
+        {
+            let mut pending = self.pending.lock().unwrap();
+            pending.insert(
+                id,
+                PendingPermission {
+                    task_id: task_id.to_owned(),
+                    sender,
+                },
+            );
+            // A consumer can answer as soon as the event is published. Keep
+            // registration and publication ordered with replies and aborts.
+            sink.emit(requested);
+        }
         receiver.await.unwrap_or_else(|_| "deny".to_owned())
     }
 
@@ -53,8 +60,8 @@ impl PermissionBroker {
         }
         .to_owned();
         let task_id = pending.task_id.clone();
-        let _ = pending.sender.send(decision.clone());
         sink.emit(json!({ "type": "permission.resolved", "taskId": task_id, "permissionId": permission_id, "decision": decision, "at": now_iso() }));
+        let _ = pending.sender.send(decision);
         true
     }
 
@@ -78,6 +85,33 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn immediate_replies_are_registered_and_resolve_before_the_tool_resumes() {
+        let directory = tempfile::tempdir().unwrap();
+        let sink = crate::session::test_sink(directory.path());
+        let mut events = sink.subscribe();
+        let broker = Arc::new(PermissionBroker::default());
+        for _ in 0..2_000 {
+            let request = {
+                let broker = broker.clone();
+                let sink = sink.clone();
+                tokio::spawn(async move {
+                    let decision = broker
+                        .request(&sink, "task-a", "edit", "write", false)
+                        .await;
+                    sink.emit(json!({ "type": "tool.resumed" }));
+                    decision
+                })
+            };
+            let event = events.recv().await.unwrap();
+            assert_eq!(event["type"], "permission.requested");
+            assert!(broker.reply(&sink, event["permissionId"].as_str().unwrap(), "allow"));
+            assert_eq!(events.recv().await.unwrap()["type"], "permission.resolved");
+            assert_eq!(events.recv().await.unwrap()["type"], "tool.resumed");
+            assert_eq!(request.await.unwrap(), "allow");
+        }
+    }
 
     #[tokio::test]
     async fn auto_allow_emits_requested_and_resolved_events() {

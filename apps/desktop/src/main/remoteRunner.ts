@@ -1,3 +1,4 @@
+import { awaitRunnerListener, stopRunnerProcess } from "./runnerLifecycle";
 import * as crypto from "node:crypto";
 import { app } from "electron";
 
@@ -66,15 +67,8 @@ export async function checkRemoteRunnerReady(connectionId: string): Promise<Remo
   return { ok: true, connection };
 }
 
-/**
- * The local Veil, as the remote host will reach it.
- *
- * The reverse forward deliberately reuses the same port number on both sides,
- * so `http://127.0.0.1:<port>` names the same service from either machine and
- * the runner's configuration is byte-identical to a local run's. Model traffic
- * then travels inside the SSH channel and is never exposed on the network.
- */
-function veilReverseForward(): string {
+/** The remote listener can differ from the local port, including on localhost. */
+function veilReverseForward(remotePort: number): string {
   const connection = currentLocalVeilConnection();
   if (!connection) {
     throw new Error("The local model service is not running, so a remote run has nothing to call.");
@@ -83,7 +77,7 @@ function veilReverseForward(): string {
   if (!Number.isInteger(port) || port <= 0) {
     throw new Error("The local model service is not reachable on a port that can be forwarded.");
   }
-  return `127.0.0.1:${port}:127.0.0.1:${port}`;
+  return `127.0.0.1:${remotePort}:127.0.0.1:${port}`;
 }
 
 function startAttempt(
@@ -113,42 +107,6 @@ function startAttempt(
     ].join("\n"),
     remoteSecret(connection),
   );
-}
-
-function awaitRemoteListener(child: ReturnType<typeof spawnSsh>): Promise<{ ok: true } | { ok: false; output: string; portInUse: boolean }> {
-  return new Promise((resolve) => {
-    let output = "";
-    let settled = false;
-    const timer = setTimeout(() => finish({ ok: false, output, portInUse: false }), startupTimeoutMs);
-    const cleanup = () => {
-      clearTimeout(timer);
-      child.stdout?.off("data", onData);
-      child.stderr?.off("data", onData);
-      child.off("error", onError);
-      child.off("exit", onExit);
-    };
-    const finish = (result: { ok: true } | { ok: false; output: string; portInUse: boolean }) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(result);
-    };
-    const onData = (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-      if (/umbratic runner listening on\s+https?:\/\//i.test(output)) finish({ ok: true });
-    };
-    const onError = () => finish({ ok: false, output, portInUse: false });
-    const onExit = () =>
-      finish({
-        ok: false,
-        output,
-        portInUse: /address (already )?in use|cannot listen to port|bind: /i.test(output),
-      });
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.once("error", onError);
-    child.once("exit", onExit);
-  });
 }
 
 function startupFailure(output: string): string {
@@ -182,36 +140,35 @@ export async function startRemoteRunnerServer(
   if (!readiness.ok) throw new Error(readiness.message);
   const connection = readiness.connection;
   const capabilityReport = await remoteCapabilityReport(connection.id);
-  const veilForward = veilReverseForward();
   const password = crypto.randomBytes(18).toString("base64url");
   // Attachments live in this app's data directory; the remote runner cannot
   // read them, so a remote run carries no attachment directory at all rather
   // than one that silently resolves to nothing over there.
-  const config = buildUmbraticRunnerConfig(task, model, undefined, capabilityReport);
-  assertUmbraticRunnerConfig(config, model, app.getPath("userData"));
 
   let lastOutput = "";
   for (let attemptIndex = 0; attemptIndex < portAttempts; attemptIndex += 1) {
     const localPort = await freeLocalPort();
-    const child = startAttempt(connection, localPort, candidateRemotePort(), veilForward, remote.directory);
-    // Stdin carries the configuration and then stays open for the life of the
-    // run. Its close is how the remote runner learns the session ended.
-    child.stdin?.write(`${JSON.stringify({ ...config, password })}\n`);
-    const started = await awaitRemoteListener(child);
-    if (started.ok) {
-      return {
-        taskId: task.id,
-        url: `http://127.0.0.1:${localPort}`,
-        password,
-        directory: remote.directory,
-        remote,
-        child,
-        abortController: new AbortController(),
-      };
-    }
+    const remotePort = candidateRemotePort();
+    let veilPort = candidateRemotePort();
+    while (veilPort === remotePort || veilPort === localPort) veilPort = candidateRemotePort();
+    const veilForward = veilReverseForward(veilPort);
+    const tunneledModel = { ...model, baseUrl: `http://127.0.0.1:${veilPort}` };
+    const config = buildUmbraticRunnerConfig(task, tunneledModel, undefined, capabilityReport);
+    assertUmbraticRunnerConfig(config, tunneledModel, app.getPath("userData"));
+    const child = startAttempt(connection, localPort, remotePort, veilForward, remote.directory);
+    const run: RunnerProcess = {
+      taskId: task.id,
+      url: `http://127.0.0.1:${localPort}`,
+      password,
+      directory: remote.directory,
+      remote,
+      child,
+      abortController: new AbortController(),
+    };
+    const started = await awaitRunnerListener(child, `http://127.0.0.1:${remotePort}`, { ...config, password }, startupTimeoutMs);
+    if (started.ok) return run;
     lastOutput = started.output;
-    child.stdin?.end();
-    child.kill();
+    stopRunnerProcess(run);
     // A port collision on the remote host is the one failure worth retrying:
     // the port was chosen here without being able to see what is already bound
     // over there.

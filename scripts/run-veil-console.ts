@@ -44,12 +44,13 @@ function parsePort(name, value, fallback) {
   return port;
 }
 
+const releasePlatformOptions = ["--console-port", "--customer", "--os", "--arch", "--profile", "--dependency-dir"].flatMap((name) => { const value = takeOption(name); return value ? [name, value] : []; });
+
 const explicitStateDir = takeOption("--state-dir");
 const explicitVersion = takeOption("--version");
 const explicitSeats = takeOption("--seats");
 const explicitDevicesPerUser = takeOption("--devices-per-user");
 const explicitSigningKeyFile = takeOption("--signing-key-file");
-const explicitFeedKeyFile = takeOption("--feed-key-file");
 const explicitSearchesPerMonth = takeOption("--searches-per-month");
 const explicitOrgUid = takeOption("--org-uid");
 const explicitConsolePort = takeOption("--port");
@@ -104,13 +105,12 @@ if (
   (explicitSeats
     || explicitDevicesPerUser
     || explicitSigningKeyFile
-    || explicitFeedKeyFile
     || explicitSearchesPerMonth
     || explicitOrgUid)
   && action !== "release"
 ) {
   console.error(
-    "--seats, --devices-per-user, --signing-key-file, --feed-key-file, --searches-per-month, and --org-uid "
+    "--seats, --devices-per-user, --signing-key-file, --searches-per-month, and --org-uid "
     + "are available only for a release.",
   );
   process.exit(2);
@@ -120,14 +120,6 @@ const releaseDevicesPerUser =
   action === "release" ? parsePositiveInteger("--devices-per-user", explicitDevicesPerUser || "2", 32) : 0;
 const releaseSearchesPerMonth =
   action === "release" ? parseAllowance("--searches-per-month", explicitSearchesPerMonth, 100000000) : 0;
-if (action === "release" && !explicitSigningKeyFile) {
-  console.error("--signing-key-file is required for a release.");
-  process.exit(2);
-}
-if (action === "release" && !explicitFeedKeyFile) {
-  console.error("--feed-key-file is required for a release.");
-  process.exit(2);
-}
 
 function windowsPathToWSL(value) {
   const resolved = path.resolve(value);
@@ -255,17 +247,20 @@ try {
         String(releaseSeats),
         "--devices-per-user",
         String(releaseDevicesPerUser),
-        "--signing-key-file",
-        keyFilePathForLinux(explicitSigningKeyFile),
-        "--feed-key-file",
-        keyFilePathForLinux(explicitFeedKeyFile),
         "--searches-per-month",
         String(releaseSearchesPerMonth),
       ];
+      if (explicitSigningKeyFile) releaseArguments.push("--signing-key-file", keyFilePathForLinux(explicitSigningKeyFile));
       if (explicitOrgUid) {
         releaseArguments.push("--org-uid", explicitOrgUid);
       }
-      await runLinuxWorkflow("release", releaseArguments);
+      releaseArguments.push(...releasePlatformOptions);
+      if (explicitVeilPort) releaseArguments.push("--veil-port", explicitVeilPort);
+      if (process.platform === "win32") {
+        await runLinuxWorkflow("release", releaseArguments);
+      } else {
+        await run("bash", [path.join(root, "infrastructure/veil-console/deploy/build-release-zip.sh"), ...releaseArguments]);
+      }
       break;
     }
   }

@@ -128,31 +128,20 @@ func recordOrientSentenceDropped(route prompts.Route, bucket string) {
 		"reason": "sentence failed validation: needs one line, at most 240 runes, and no bucket id",
 	}
 	if encoded, err := json.Marshal(record); err == nil {
-		log.Printf("VEIL_DIAGNOSTIC %s", encoded)
+		log.Printf("VEIL_DIAGNOSTIC %s", strings.ReplaceAll(strings.ReplaceAll(string(encoded), "\r", "\\r"), "\n", "\\n"))
 	}
 }
 
-// recordOrientInvalidOutput logs a bounded sample of the unparseable classifier
-// output to local diagnostics. Three live sessions degraded with the same
-// static reason before the actual cause — thinking-by-default local models
-// returning an empty content — could only be found by reproducing the request
-// by hand. The sample is the operator's own model output about the user's own
-// request, whitespace-collapsed and capped, and it never reaches a client
-// response.
+// recordOrientInvalidOutput records shape and size, never model output.
 func recordOrientInvalidOutput(route prompts.Route, reason string, raw string) {
-	sample := strings.Join(strings.Fields(raw), " ")
-	if runes := []rune(sample); len(runes) > 160 {
-		sample = string(runes[:160])
-	}
 	record := map[string]any{
 		"level":    "warn",
 		"event":    "orient.invalid_output",
 		"route":    string(route),
 		"reason":   reason,
 		"rawChars": len([]rune(raw)),
-		"sample":   sample,
 	}
 	if encoded, err := json.Marshal(record); err == nil {
-		log.Printf("VEIL_DIAGNOSTIC %s", encoded)
+		log.Printf("VEIL_DIAGNOSTIC %s", strings.ReplaceAll(strings.ReplaceAll(string(encoded), "\r", "\\r"), "\n", "\\n"))
 	}
 }

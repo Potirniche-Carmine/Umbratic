@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
-  <link rel="stylesheet" href="/assets/style.css?v=13">
-  <link rel="stylesheet" href="/assets/controls.css?v=3">
+  <link rel="stylesheet" href="/assets/style.css?v=17">
+  <link rel="stylesheet" href="/assets/controls.css?v=5">
   <link rel="stylesheet" href="/assets/documents.css?v=4">
-  <script defer src="/assets/console.js?v=14"></script>
+  <script defer src="/assets/console.js?v=17"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -16,7 +16,7 @@
   <div class="page">
     <header class="page-header">
       <h1>Documents</h1>
-      <p class="page-subtitle">What Veil answers from, beyond the model's own training.</p>
+      <p class="page-subtitle">Manage the company documents used in answers.</p>
     </header>
 
     {{template "banners" .}}
@@ -79,7 +79,7 @@
 
     <section class="panel corpus-panel">
       <div class="section-heading">
-        <h2>Corpus</h2>
+        <h2>Document library</h2>
         <span class="corpus-counts">{{.Corpus.Documents}} of {{.Corpus.MaxDocs}} documents</span>
       </div>
 
@@ -144,7 +144,7 @@
         </tbody>
       </table>
       {{else}}
-      <p class="empty-state">Nothing uploaded yet. Anything added above is chunked, embedded, and searched on every question.</p>
+      <p class="empty-state">No documents yet. Upload a document to add it to company search.</p>
       {{end}}
     </section>
 
@@ -178,36 +178,17 @@
             </div>
           </div>
 
-          <div class="field">
-            <span id="embedding-label">Embedding model</span>
-            <div class="choice" data-choice>
-              <input type="hidden" name="embedding_model" value="{{.RAG.EmbeddingModel}}" data-choice-input>
-              <button class="choice-trigger" type="button" aria-labelledby="embedding-label embedding-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
-                <span id="embedding-value" data-choice-label>{{.RAG.EmbeddingLabel}}</span>
-                <span class="choice-chevron" aria-hidden="true"></span>
-              </button>
-              <div class="choice-menu" role="listbox" aria-labelledby="embedding-label" data-choice-menu hidden>
-                {{range .EmbeddingChoices}}
-                <button type="button" role="option" data-choice-value="{{.Model}}" aria-selected="{{eq .Model $.RAG.EmbeddingModel}}">
-                  <span class="option-row">
-                    <span class="option-title">{{.Label}}</span>
-                    <span class="option-size">{{printf "%.1f" .SizeGB}} GB</span>
-                  </span>
-                  <span class="option-detail">{{.Detail}}</span>
-                </button>
-                {{end}}
-              </div>
-            </div>
-          </div>
+          <label class="field"><span>Embedding model</span>
+            <span class="select-control"><select name="embedding_model">
+              <option value="">Choose a local model</option>
+              {{range .EmbeddingChoices}}<option value="{{.Model}}" {{if eq .Model $.RAG.EmbeddingModel}}selected{{end}}>{{.Label}}</option>{{end}}
+            </select><span class="select-mark" aria-hidden="true"></span></span>
+            <small><a href="/models?kind=embedding">Add or start an embedding model</a> before enabling document search.</small>
+          </label>
         </div>
       </section>
 
       <section class="panel apply-panel">
-        <label class="field password-field">
-          <span>Owner password</span>
-          <input type="password" name="password" autocomplete="current-password" required {{if .PasswordError}}aria-invalid="true" aria-describedby="password-error"{{end}} data-retrieval-password>
-          {{if .PasswordError}}<small class="field-error" id="password-error" role="alert">Owner password is incorrect.</small>{{end}}
-        </label>
         <div class="apply-actions">
           <button class="button primary" type="submit">Save and restart</button>
         </div>

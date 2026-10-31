@@ -536,22 +536,24 @@ test("only the prose nothing follows is the turn's answer", () => {
   ];
   const settled = JSON.parse(JSON.stringify(composerTimelineFromEvents(turn, undefined, "completed")));
   const assistants = settled.filter((item) => item.type === "assistant");
-  // The opening sentence is narration, however much it reads like a reply, so
-  // it is inside the block and the answer is the only message on the page.
-  assert.equal(assistants.length, 1);
-  assert.equal(assistants[0].text, "This is a website project.");
-  assert.equal(assistants[0].final, true);
-  assert.deepEqual(settled.map((item) => item.type), ["user", "activity", "assistant"]);
-  assert.equal(settled[1].segments[0].text, "I will explore the project layout.");
+  // Every passage stays where it streamed — the opening sentence stands, the
+  // work follows it as a block — and only the passage nothing follows carries
+  // the answer affordances.
+  assert.equal(assistants.length, 2);
+  assert.equal(assistants[0].text, "I will explore the project layout.");
+  assert.equal(assistants[0].final, undefined);
+  assert.equal(assistants[1].text, "This is a website project.");
+  assert.equal(assistants[1].final, true);
+  assert.deepEqual(settled.map((item) => item.type), ["user", "assistant", "activity", "assistant"]);
 
   // After tools, live prose streams as the answer from its first token — the
   // same page the settled derivation produces, so the end of the stream moves
   // nothing.
   const midStream = JSON.parse(JSON.stringify(composerTimelineFromEvents(turn, undefined, "running")));
-  assert.deepEqual(midStream.map((item) => item.type), ["user", "activity", "assistant"]);
-  assert.equal(midStream[2].text, "This is a website project.");
-  assert.equal(midStream[2].streaming, true);
-  assert.equal(midStream[2].final, true);
+  assert.deepEqual(midStream.map((item) => item.type), ["user", "assistant", "activity", "assistant"]);
+  assert.equal(midStream[3].text, "This is a website project.");
+  assert.equal(midStream[3].streaming, true);
+  assert.equal(midStream[3].final, true);
 
   // And a turn that answers without doing any work has an answer, not an
   // opening sentence.
@@ -561,21 +563,27 @@ test("only the prose nothing follows is the turn's answer", () => {
   ], undefined, "completed")));
   assert.equal(direct.at(-1).final, true);
 
-  // An opening sentence with the work still open is inside that work, so there
-  // is no assistant message on the page yet at all.
+  // An opening sentence with the work still open stays standing above the
+  // open block: text the reader has seen never moves into it.
   const working = JSON.parse(JSON.stringify(composerTimelineFromEvents(turn.slice(0, 3), undefined, "running")));
-  assert.deepEqual(working.map((item) => item.type), ["user", "activity"]);
-  assert.equal(working[1].segments[0].text, "I will explore the project layout.");
+  assert.deepEqual(working.map((item) => item.type), ["user", "assistant", "activity"]);
+  assert.equal(working[1].text, "I will explore the project layout.");
+  assert.equal(working[2].finished, false);
 
   // "Nothing follows" stops at the next user message. A finished answer stays
   // the answer once the conversation moves on — it must not shrink into
   // narration the moment the reader sends the next message.
+  // The turn boundary is part of the real stream: every turn settles with a
+  // turn.outcome before a queued follow-up's message is appended. Without it
+  // a user message beside still-buffered prose reads as a steer that
+  // interrupted the stream, which is a different display.
   const twoTurns = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     ...turn,
+    { type: "turn.outcome", taskId: "task-1", outcome: "completed", at: at(5) },
     { type: "user.message", taskId: "task-1", text: "and the tests?", at: at(5) },
     { type: "assistant.delta", taskId: "task-1", text: "There are none yet.", at: at(6) },
   ], undefined, "completed")));
   const answers = twoTurns.filter((item) => item.type === "assistant");
-  assert.deepEqual(answers.map((item) => item.final), [true, true]);
-  assert.equal(answers[0].text, "This is a website project.");
+  assert.deepEqual(answers.map((item) => item.final), [undefined, true, true]);
+  assert.equal(answers[1].text, "This is a website project.");
 });

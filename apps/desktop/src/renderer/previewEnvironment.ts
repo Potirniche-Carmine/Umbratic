@@ -189,28 +189,6 @@ let previewLocalMtp = true;
   getNotes: async () => readPreviewNotes(),
   updateNotes: async (input) => writePreviewNotes(input.content),
   getTask: async () => null,
-  listTaskCheckpoints: async () => ({
-    supported: true,
-    changedFileCount: composerTestReviewFiles.length,
-    checkpoints: [],
-  }),
-  createTaskCheckpoint: async () => ({
-    id: "preview-checkpoint",
-    source: "manual",
-    createdAt: new Date().toISOString(),
-    state: "ready",
-    pinned: false,
-  }),
-  setTaskCheckpointPinned: async (input) => ({
-    id: input.checkpointId,
-    source: "manual",
-    createdAt: new Date().toISOString(),
-    state: "ready",
-    pinned: input.pinned,
-  }),
-  deleteTaskCheckpoint: async () => undefined,
-  forkTaskCheckpoint: async () => composerTestTask,
-  restoreTaskCheckpoint: async () => composerTestTask,
   refreshTaskReview: async (input) => {
     const scope = input.scope === "worktree" ? "worktree" : "task";
     const reviewFiles = scope === "worktree" ? composerTestWholeDiffFiles : composerTestReviewFiles;
@@ -334,14 +312,7 @@ let previewLocalMtp = true;
       commandClassifier: "enabled",
       runnerDiagnosticsDirectory: "Umbratic/logs/runner",
       localLogs: { bytes: 0, entries: 0 },
-      telemetry: {
-        mode: readPreviewEndpointSettings().mode === "local" ? "managed_disabled" : "managed_required",
-        localEnabled: false,
-        syncEnabled: readPreviewEndpointSettings().mode === "server",
-        retentionDays: readPreviewEndpointSettings().mode === "server" ? 30 : 0,
-        exportFormat: "redacted-json",
-        storage: readPreviewEndpointSettings().mode === "server" ? "company-managed-telemetry" : "task-event-snapshots",
-      },
+
       runtimes: {
         python: {
           runtimeVersion: "python-uv-venv-1",
@@ -368,6 +339,7 @@ let previewLocalMtp = true;
     contextLength: readPreviewContextLength(),
     reasoningEffort: readPreviewReasoningEffort(),
     showThinking: readPreviewShowThinking(),
+    sendOnEnter: true,
     webTools: previewWebTools,
   }),
   getCapabilityProbes: async () => previewCapabilityReport(),
@@ -393,6 +365,10 @@ let previewLocalMtp = true;
     writePreviewShowThinking(input === true);
     return readPreviewShowThinking();
   },
+  saveSendOnEnter: async (input) => input !== false,
+  // The preview has no OS session to attach to.
+  getLaunchAtLogin: async () => ({ enabled: false, available: false }),
+  saveLaunchAtLogin: async () => ({ enabled: false, available: false }),
   getContextLength: async () => readPreviewContextLength(),
   saveContextLength: async (input) => {
     const contextLength = normalizeContextLength(input);
@@ -409,6 +385,9 @@ let previewLocalMtp = true;
   saveDictationSettings: async (input) => ({ dictation: input, status: await previewApi.getBackendStatus() }),
   getKeyBindings: async () => ({}),
   saveKeyBindings: async (input) => input,
+  readGeneratedImage: async () => ({ dataUrl: null }),
+  getImageSettings: async () => ({ model: "qwen-image-2.1", runtimeAvailable: true }),
+  saveImageSettings: async ({ model }) => ({ model, runtimeAvailable: true }),
   listLocalModels: async ({ kind }) => previewCatalog(kind),
   downloadLocalModel: async () => ({ ok: true as const }),
   cancelLocalModelDownload: async () => ({ ok: true as const }),
@@ -476,10 +455,8 @@ let previewLocalMtp = true;
       status: await previewApi.getBackendStatus(),
     };
   },
-  exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
   exportLocalDiagnostics: async () => ({ ok: false, message: "Electron preload is not available." }),
   clearLocalDiagnostics: async () => ({ bytes: 0, entries: 0 }),
-  recordProductEvent: async () => undefined,
   listSkills: async () => ({ skills: previewSkills, directory: "~/.umbratic/skills" }),
   saveSkillSettings: async (input) => {
     previewSkills = previewSkills.map((skill) => ({ ...skill, enabled: input[skill.id] ?? skill.enabled }));
@@ -516,10 +493,9 @@ let previewLocalMtp = true;
   respondToToolPermission: async () => undefined,
   openRepositoryInIde: async () => ({ ok: false, message: "Electron preload is not available." }),
   openTaskInIde: async () => ({ ok: false, message: "Electron preload is not available." }),
-  revertReviewFile: async () => null,
+  undoTaskChanges: async () => null,
   keepWorktree: async () => undefined,
   cancelTask: async () => undefined,
-  setResponseFeedback: async () => undefined,
   setWindowChromeTheme: async () => ({ ok: true }),
   // The preview has no main process to hand a URL to, so a link click is a
   // no-op rather than a broken promise.
@@ -528,7 +504,10 @@ let previewLocalMtp = true;
   requestMicrophoneAccess: async () => ({ granted: true }),
   startDictation: async () => previewDictation.start(),
   sendDictationAudio: async () => undefined,
-  stopDictation: async () => previewDictation.stop(),
+  stopDictation: async () => {
+    previewDictation.stop();
+    return { stopping: true };
+  },
   cancelDictation: async () => previewDictation.cancel(),
   onDictationEvent: (callback) => previewDictation.subscribe(callback),
   // `?indexing` holds the first-index status on so it can be seen without

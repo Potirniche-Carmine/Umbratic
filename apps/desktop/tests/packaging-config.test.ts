@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+const { load } = createRequire(import.meta.url)("js-yaml");
 
 const configUrl = new URL("../electron-builder.yml", import.meta.url);
 const preparePackageUrl = new URL("../scripts/prepare-package.ts", import.meta.url);
@@ -80,23 +83,39 @@ test("desktop builds llama-server from the pinned commit and packages it", () =>
   const pin = fs.readFileSync(new URL("../../../third_party/llama.cpp.pin", import.meta.url), "utf8");
 
   assert.match(pin, /^repository=https:\/\/github\.com\/ggml-org\/llama\.cpp\.git$/m);
-  assert.match(pin, /^tag=b\d+$/m);
+  assert.match(pin, /^tag=v\d+\.\d+\.\d+$/m);
   assert.match(pin, /^commit=[0-9a-f]{40}$/m);
 
   assert.match(config, /- from: \.package\/llama-server\r?\n\s+to: llama-server/);
   // Cloning a tag is not enough: a tag can be moved, a commit cannot.
   assert.match(preparePackage, /head !== pin\.commit/);
-  // No libcurl, and with it no `-hf` remote-download path.
-  assert.match(preparePackage, /"-DLLAMA_CURL=OFF"/);
+  // No platform-dependent TLS library discovery or extra source downloads.
+  for (const flag of ["LLAMA_OPENSSL", "LLAMA_BUILD_BORINGSSL", "LLAMA_BUILD_LIBRESSL"]) {
+    assert.ok(preparePackage.includes(`"-D${flag}=OFF"`));
+  }
+  assert.match(preparePackage, /"-DGGML_RPC=OFF"/);
+  for (const flag of ["LLAMA_SUBPROCESS", "LLAMA_BUILD_APP", "LLAMA_BUILD_UI", "LLAMA_USE_PREBUILT_UI", "LLAMA_CONNECT", "LLAMA_LLGUIDANCE"]) {
+    assert.ok(preparePackage.includes(`"-D${flag}=OFF"`));
+  }
+  assert.match(preparePackage, /llama\.cpp-disable-remote-downloads\.patch/);
+  const noDownloads = fs.readFileSync(new URL("../../../third_party/llama.cpp-disable-remote-downloads.patch", import.meta.url), "utf8");
+  assert.match(noDownloads, /\+\s+throw std::runtime_error\("Remote downloads are disabled in the Umbratic runtime\."\);/);
+  assert.doesNotMatch(noDownloads.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).join("\n"), /httplib::Client cli|common_http_parse_url\(/);
+  assert.match(verifyPackage, /verifyLlamaDownloads\(path.join\(resources/);
+  const downloadProbe = fs.readFileSync(new URL("../scripts/verify-llama-downloads.ts", import.meta.url), "utf8");
+  assert.match(downloadProbe, /for \(const scheme of \["http", "https"\]\)/);
+  assert.match(downloadProbe, /"--model-url"/);
   // Never -march=native: a release binary must run on CPUs older than the one
   // that built it, and macOS older than the SDK that built it.
-  assert.match(preparePackage, /"-DGGML_NATIVE=OFF"/);
+  const cpuBuild = fs.readFileSync(new URL("../scripts/llama-build-config.ts", import.meta.url), "utf8");
+  assert.match(cpuBuild, /"-DGGML_NATIVE=OFF"/);
+  assert.match(preparePackage, /llamaCpuBuildFlags\(process\.platform, process\.arch\)/);
   assert.match(preparePackage, /-DCMAKE_OSX_DEPLOYMENT_TARGET=12\.0/);
   // One build serves every machine because the backends are chosen on the
   // user's machine: a missing Vulkan loader is a skipped backend, not a
   // process that will not start.
   assert.match(preparePackage, /"-DGGML_BACKEND_DL=ON"/);
-  assert.match(preparePackage, /"-DGGML_CPU_ALL_VARIANTS=ON"/);
+  assert.match(cpuBuild, /"-DGGML_CPU_ALL_VARIANTS=ON"/);
   // Backend libraries are loaded, not linked, so a targeted build would leave
   // them unbuilt and ship an app with nothing to run on.
   assert.doesNotMatch(preparePackage, /"--target", "llama-server"/);
@@ -153,31 +172,85 @@ test("the Windows uninstaller offers an explicit local-data removal option", () 
   assert.match(include, /\$\{NSD_Uncheck\}/);
 });
 
-test("pull-request audit does not package or run the full suite", () => {
-  const verifyWorkflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
-  const verifyTriggers = verifyWorkflow.slice(
-    verifyWorkflow.indexOf("on:"),
-    verifyWorkflow.indexOf("\npermissions:"),
-  );
-
-  assert.match(verifyTriggers, /branches:\r?\n\s+- main/);
-  assert.match(verifyTriggers, /pull_request:/);
-  assert.doesNotMatch(verifyTriggers, /push:/);
-  assert.doesNotMatch(verifyWorkflow, /run package|electron-builder/);
-  assert.doesNotMatch(verifyWorkflow, /test:all|release:check/);
+test("CI verifies every native platform on pull requests and main without release secrets", () => {
+  const source = fs.readFileSync(verifyWorkflowUrl, "utf8");
+  const workflow = load(source);
+  assert.deepEqual(workflow.on.push.branches, ["main"]);
+  assert.deepEqual(workflow.on.pull_request.branches, ["main"]);
+  assert.deepEqual(workflow.jobs.verify.strategy.matrix.os, ["macos-15", "windows-2025", "windows-11-arm"]);
+  const commands = workflow.jobs.verify.steps.map((step) => step.run ?? "");
+  assert.ok(commands.includes("npm run test:all"));
+  assert.ok(commands.includes("npm run desktop:release -- --unsigned"));
+  assert.ok(commands.includes("node scripts/check-release-version.ts"));
+  assert.ok(commands.includes("node scripts/ci/verify-installer-artifacts.ts"));
+  const vulkan = workflow.jobs.verify.steps.find((step) => step.run === "./scripts/ci/install-vulkan.ps1");
+  assert.equal(vulkan.if, "${{ !cancelled() && steps.electron.outcome == 'success' && matrix.os == 'windows-2025' }}");
+  assert.ok(commands.includes("./scripts/ci/install-windows-signing.ps1"));
+  assert.doesNotMatch(source, /UMBRATIC_LLAMA_CPU_ONLY/);
+  assert.doesNotMatch(source, /secrets\./);
+  assert.deepEqual(workflow.jobs.required.needs, ["verify", "audit"]);
+  assert.equal(workflow.jobs.required.if, "always()");
 });
 
-test("pull-request audit omits the unused Squirrel peer dependency", () => {
-  const verifyWorkflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
-  assert.doesNotMatch(verifyWorkflow, /npm ci/);
-  assert.match(verifyWorkflow, /npm audit --package-lock-only --ignore-scripts --omit=peer/);
+test("CI installs locked dependencies without lifecycle scripts and retains vulnerability auditing", () => {
+  const workflow = load(fs.readFileSync(verifyWorkflowUrl, "utf8"));
+  for (const name of ["verify", "audit"]) {
+    const commands = workflow.jobs[name].steps.map((step) => step.run ?? "");
+    assert.ok(commands.includes("npm ci --ignore-scripts --omit=peer"));
+  }
+  assert.ok(workflow.jobs.audit.steps.some((step) => step.run === "npm run supply-chain:audit"));
+  assert.ok(workflow.jobs.audit.steps.some((step) => step.run === "npm run supply-chain:sbom"));
+  const linuxRace = workflow.jobs.audit.steps.find((step) => step.name === "Race-test Go services and Caddy on Linux");
+  assert.equal(linuxRace.env.CGO_ENABLED, "1");
+  assert.match(linuxRace.run, /go -C infrastructure\/veil test -race \.\/\.\.\./);
+  assert.match(linuxRace.run, /go -C infrastructure\/veil-console test -race \.\/\.\.\./);
+  assert.match(linuxRace.run, /go -C infrastructure\/veil-console\/deploy\/caddy test -race \.\/\.\.\. github\.com\/go-jose\/go-jose\/v3\/\.\.\./);
 });
 
-test("pull-request audit pins actions and stays read-only", () => {
-  const workflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
-  const actionReferences = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)/gm)].map((match) => match[1]);
+test("CI pins actions and stays read-only", () => {
+  const workflow = load(fs.readFileSync(verifyWorkflowUrl, "utf8"));
+  const actionReferences = Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])
+    .map((step) => step.uses).filter(Boolean);
   assert.ok(actionReferences.length >= 2);
   assert.ok(actionReferences.every((reference) => /@[0-9a-f]{40}$/.test(reference)));
-  assert.match(workflow, /^permissions:\r?\n  contents: read$/m);
-  assert.doesNotMatch(workflow, /contents: write/);
+  assert.deepEqual(workflow.permissions, { contents: "read" });
+  for (const job of Object.values(workflow.jobs)) assert.notEqual(job.permissions?.contents, "write");
+});
+
+test("release publication waits for every signed platform and scopes write access to publication", () => {
+  const workflow = load(fs.readFileSync(new URL("../../../.github/workflows/release.yml", import.meta.url), "utf8"));
+  assert.deepEqual(workflow.on.workflow_run.workflows, ["CI"]);
+  assert.match(workflow.jobs.source.if, /workflow_run\.event == 'push'/);
+  assert.match(workflow.jobs.source.if, /head_repository\.full_name == github\.repository/);
+  assert.deepEqual(workflow.jobs.publish.needs, ["source", "package"]);
+  assert.deepEqual(workflow.jobs.package.strategy.matrix.os, ["macos-15", "windows-2025", "windows-11-arm"]);
+  assert.equal(workflow.permissions.contents, "read");
+  assert.equal(workflow.jobs.publish.permissions.contents, "write");
+  for (const name of ["package", "publish"]) {
+    const checkout = workflow.jobs[name].steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+    assert.equal(checkout.with.ref, "${{ github.sha }}");
+    for (const step of workflow.jobs[name].steps) {
+      if (step.uses?.startsWith("actions/setup-node@")) assert.equal(step.with["package-manager-cache"], false);
+      if (step.uses?.startsWith("actions/setup-go@")) assert.equal(step.with.cache, false);
+    }
+  }
+  assert.ok(workflow.jobs.package.steps.some((step) => step.run === "node scripts/ci/verify-release.ts"));
+  assert.ok(workflow.jobs.publish.steps.some((step) => step.run === "node scripts/ci/publish-release.ts"));
+});
+
+test("credential-free installer qualification still runs after suite failure without hiding it", () => {
+  const source = fs.readFileSync(verifyWorkflowUrl, "utf8");
+  const workflow = load(source);
+  const steps = workflow.jobs.verify.steps;
+  const suite = steps.find((step) => step.run === "npm run test:all");
+  const electron = steps.find((step) => step.id === "electron");
+  const installers = steps.find((step) => step.id === "installers");
+  const archives = steps.find((step) => step.run === "node scripts/ci/verify-installer-artifacts.ts");
+  assert.equal(electron.run, "npm run dependencies:provision");
+  assert.equal(installers.if, "${{ !cancelled() && steps.electron.outcome == 'success' }}");
+  assert.equal(archives.if, "${{ !cancelled() && steps.installers.outcome == 'success' }}");
+  assert.equal(suite["continue-on-error"], undefined);
+  assert.doesNotMatch(source, /continue-on-error/);
+  assert.equal(workflow.jobs.required.if, "always()");
+  assert.match(workflow.jobs.required.steps[0].run, /all\(\. == "success"\)/);
 });

@@ -74,13 +74,6 @@ impl ArtifactBroker {
     ) -> Result<Value, ArtifactFailure> {
         let id = format!("artifact-{}", Uuid::new_v4());
         let (sender, receiver) = oneshot::channel();
-        self.pending.lock().unwrap().insert(
-            id.clone(),
-            PendingArtifact {
-                task_id: task_id.to_owned(),
-                sender,
-            },
-        );
         let mut event = json!({
             "type": "artifact.requested",
             "taskId": task_id,
@@ -92,7 +85,18 @@ impl ArtifactBroker {
                 fields.insert(key.clone(), value.clone());
             }
         }
-        sink.emit(event);
+        {
+            let mut pending = self.pending.lock().unwrap();
+            pending.insert(
+                id.clone(),
+                PendingArtifact {
+                    task_id: task_id.to_owned(),
+                    sender,
+                },
+            );
+            // Replies and aborts must observe the request before resolving it.
+            sink.emit(event);
+        }
         match timeout(wait, receiver).await {
             Ok(Ok(reply)) => Ok(reply),
             // The sender was dropped: abort_all took it, or the store shut down.
@@ -112,7 +116,6 @@ impl ArtifactBroker {
         };
         let task_id = pending.task_id.clone();
         let ok = result.get("ok").and_then(Value::as_bool).unwrap_or(false);
-        let _ = pending.sender.send(result);
         sink.emit(json!({
             "type": "artifact.resolved",
             "taskId": task_id,
@@ -120,22 +123,17 @@ impl ArtifactBroker {
             "ok": ok,
             "at": now_iso(),
         }));
+        let _ = pending.sender.send(result);
         true
     }
 
     /// Drops every job belonging to an aborted task. The waiting tool call sees
     /// its sender vanish and reports `transport`.
     pub fn abort_all(&self, sink: &EventSink, task_id: &str) {
-        let ids: Vec<_> = self
-            .pending
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(_, pending)| pending.task_id == task_id)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in ids {
-            self.forget(&id);
+        self.pending.lock().unwrap().retain(|id, pending| {
+            if pending.task_id != task_id {
+                return true;
+            }
             sink.emit(json!({
                 "type": "artifact.resolved",
                 "taskId": task_id,
@@ -144,7 +142,9 @@ impl ArtifactBroker {
                 "reason": "aborted",
                 "at": now_iso(),
             }));
-        }
+            // Dropping the sender resumes the tool, after the resolved event.
+            false
+        });
     }
 
     fn forget(&self, artifact_id: &str) {
@@ -166,6 +166,53 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn immediate_replies_and_aborts_resolve_before_the_tool_resumes() {
+        let directory = tempfile::tempdir().unwrap();
+        let sink = crate::session::test_sink(directory.path());
+        let mut events = sink.subscribe();
+        let broker = Arc::new(ArtifactBroker::default());
+        for iteration in 0..1_000 {
+            let job = {
+                let broker = broker.clone();
+                let sink = sink.clone();
+                tokio::spawn(async move {
+                    let result = broker
+                        .request(
+                            &sink,
+                            "task-a",
+                            json!({"action":"create"}),
+                            Duration::from_secs(5),
+                        )
+                        .await;
+                    sink.emit(json!({"type":"tool.resumed"}));
+                    result
+                })
+            };
+            let requested = events.recv().await.unwrap();
+            assert_eq!(requested["type"], "artifact.requested");
+            let id = requested["artifactId"].as_str().unwrap();
+            let abort = iteration % 2 == 0;
+            if abort {
+                broker.abort_all(&sink, "task-a");
+            } else {
+                assert!(broker.reply(&sink, id, json!({"ok":true})));
+            }
+            let resolved = events.recv().await.unwrap();
+            assert_eq!(resolved["type"], "artifact.resolved");
+            assert_eq!(resolved["artifactId"], id);
+            assert_eq!(resolved["ok"], !abort);
+            assert_eq!(events.recv().await.unwrap()["type"], "tool.resumed");
+            let result = job.await.unwrap();
+            if abort {
+                assert_eq!(result, Err(ArtifactFailure::Transport));
+            } else {
+                assert_eq!(result.unwrap(), json!({"ok":true}));
+            }
+            assert!(!broker.reply(&sink, id, json!({"ok":true})));
+        }
+    }
 
     #[tokio::test]
     async fn a_reply_resolves_exactly_one_job() {

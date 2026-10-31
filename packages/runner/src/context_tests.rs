@@ -399,3 +399,201 @@ fn breakdown_rows_reconcile_to_the_reported_headline() {
     .sum::<u64>();
     assert_eq!(rows, event["contentTokens"].as_u64().unwrap());
 }
+
+#[test]
+fn json_string_byte_accounting_matches_serde_for_controls_escapes_and_unicode() {
+    let ascii = (0..=127).map(char::from).collect::<String>();
+    for text in [
+        "",
+        "plain text",
+        "quotes \" and backslashes \\",
+        "é你好🙂\u{2028}\u{2029}",
+        "\u{7f}\u{80}\u{7ff}\u{800}\u{ffff}\u{10000}\u{10ffff}",
+        ascii.as_str(),
+    ] {
+        assert_eq!(
+            encoded_json_string_len(text),
+            serde_json::to_vec(text).unwrap().len(),
+            "JSON length for {text:?}"
+        );
+        let object = json!({(text): "value"});
+        assert_eq!(
+            encoded_json_len(&object),
+            serde_json::to_vec(&object).unwrap().len()
+        );
+    }
+}
+
+#[test]
+fn reused_context_counts_match_wire_encoding_rows_images_and_anchors() {
+    fn wire_bytes(value: &impl serde::Serialize) -> u64 {
+        serde_json::to_vec(value).unwrap().len() as u64
+    }
+    fn elided(value: &Value) -> Value {
+        match value {
+            Value::Object(fields) if fields.get("type") == Some(&json!("image_url")) => {
+                // The existing breakdown prices one image node as24 JSON bytes.
+                Value::String("x".repeat(22))
+            }
+            Value::Object(fields) => Value::Object(
+                fields
+                    .iter()
+                    .map(|(key, value)| (key.clone(), elided(value)))
+                    .collect(),
+            ),
+            Value::Array(values) => Value::Array(values.iter().map(elided).collect()),
+            other => other.clone(),
+        }
+    }
+    let text_messages = vec![
+        (json!({"role":"user","content":""}), 0),
+        (json!({"role":"tool","content":"a"}), 0),
+        (json!({"role":"user","content":"aa"}), 0),
+        (json!({"role":"tool","content":"aaa"}), 0),
+        (
+            json!({"role":"assistant","content":"\"\\\n\u{0001}中🙂"}),
+            0,
+        ),
+        (json!({"role":"tool","content":{"\u{0000}中":"value"}}), 0),
+        (json!(null), 0),
+    ];
+    let images = vec![
+        (
+            json!({"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}),
+            1,
+        ),
+        (
+            json!({"role":"tool","content":{"type":"image_url","image_url":{"url":"image","nested":{"type":"image_url","image_url":{"url":"nested"}}}}}),
+            2,
+        ),
+    ];
+    let views = [
+        vec![],
+        text_messages.clone(),
+        images.clone(),
+        [text_messages, images].concat(),
+    ];
+    let tool_sets = [
+        vec![],
+        vec![json!({"name":"read","description":"中\n","parameters":{"type":"object"}})],
+    ];
+    let skill_sets = [vec![], vec![json!({"id":"skill","description":"\"🙂"})]];
+    for view in views {
+        let messages = view
+            .iter()
+            .map(|(message, _)| message.clone())
+            .collect::<Vec<_>>();
+        let image_tokens = view.iter().map(|(_, count)| count).sum::<u64>() * 1_600;
+        for tools in &tool_sets {
+            for skills in &skill_sets {
+                for measured_system in [
+                    None,
+                    Some(SystemPromptSize {
+                        tokens: 333,
+                        exact: true,
+                    }),
+                ] {
+                    let system = measured_system.unwrap_or(SystemPromptSize {
+                        tokens: 2_048,
+                        exact: false,
+                    });
+                    let mut row_bytes = [0u64; 2];
+                    let mut row_counts = [0u64; 2];
+                    for message in &messages {
+                        let row = usize::from(message.get("role") == Some(&json!("tool")));
+                        row_bytes[row] += wire_bytes(&elided(message));
+                        row_counts[row] += 1;
+                    }
+                    let row_tokens = |row: usize| row_bytes[row].div_ceil(3) + row_counts[row] * 10;
+                    let tool_tokens = if tools.is_empty() {
+                        0
+                    } else {
+                        wire_bytes(tools).div_ceil(3)
+                    };
+                    let skill_tokens = if skills.is_empty() {
+                        0
+                    } else {
+                        wire_bytes(skills).div_ceil(3)
+                    };
+                    let breakdown = ContextBreakdown {
+                        system_prompt_tokens: system.tokens,
+                        system_prompt_exact: system.exact,
+                        tool_definition_tokens: tool_tokens,
+                        skill_tokens,
+                        conversation_tokens: row_tokens(0),
+                        tool_result_tokens: row_tokens(1),
+                        image_tokens,
+                    };
+                    assert_eq!(
+                        context_breakdown(&messages, tools, skills, system),
+                        breakdown
+                    );
+                    let heuristic = wire_bytes(&messages).div_ceil(3)
+                        + wire_bytes(tools).div_ceil(3)
+                        + skill_tokens
+                        + messages.len() as u64 * 10
+                        + image_tokens
+                        + system.tokens;
+                    for anchor_len in [
+                        None,
+                        Some(0),
+                        Some(messages.len() / 2),
+                        Some(messages.len()),
+                        Some(messages.len() + 1),
+                    ] {
+                        let anchor = anchor_len.map(|anchor_len| UsageAnchor {
+                            prompt_tokens: 900,
+                            completion_tokens: 40,
+                            anchor_len,
+                        });
+                        let (prompt_tokens, anchored) = match anchor {
+                            Some(anchor) if anchor.anchor_len <= messages.len() => {
+                                let tail = &messages[anchor.anchor_len..];
+                                let tail_tokens = if tail.is_empty() {
+                                    0
+                                } else {
+                                    wire_bytes(&tail).div_ceil(3)
+                                        + tail.len() as u64 * 10
+                                        + view[anchor.anchor_len..]
+                                            .iter()
+                                            .map(|(_, count)| count)
+                                            .sum::<u64>()
+                                            * 1_600
+                                };
+                                (940 + tail_tokens, true)
+                            }
+                            _ => (heuristic, false),
+                        };
+                        let actual = estimate_context_usage(ContextEstimateInput {
+                            messages: &messages,
+                            tools,
+                            skills,
+                            context_length: 64_000,
+                            max_response_tokens: 8_192,
+                            protected_prompt_reserve_tokens: 2_048,
+                            system_prompt: measured_system,
+                            anchor,
+                        });
+                        assert_eq!(
+                            actual,
+                            ContextUsageEstimate {
+                                context_length: 64_000,
+                                heuristic_prompt_tokens: heuristic,
+                                calibrated_prompt_tokens: prompt_tokens,
+                                reserve_tokens: adaptive_output_reserve(
+                                    64_000,
+                                    8_192,
+                                    prompt_tokens
+                                ),
+                                protected_tokens: system.tokens,
+                                anchored,
+                                breakdown,
+                            },
+                            "messages={messages:?} tools={tools:?} skills={skills:?} anchor={anchor:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

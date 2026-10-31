@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import type { DiffCell, DiffSide, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
+import type { DiffCell, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
 import { alignHunk, emptyCell, hiddenLinesBeforeHunk } from "../../shared/reviewDiff";
 import { DiffRow, type ReviewLineSelection } from "./DiffRow";
 
@@ -12,10 +12,6 @@ const diffRowEstimatedHeight = 22;
 
 type DiffRowEntry = {
   key: string;
-  // The aligned row this entry came from, so the inline comment editor can be
-  // anchored under it in both layouts.
-  sourceRowId: string;
-  side: DiffSide | null;
   row: SideBySideRow;
 };
 
@@ -31,8 +27,6 @@ function unifiedEntries(row: SideBySideRow): DiffRowEntry[] {
   const cells = row.kind === "context" ? [row.right] : [row.left, row.right].filter((cell) => cell.origin !== "empty");
   return cells.map((cell) => ({
     key: `${row.id}-${cell.side}`,
-    sourceRowId: row.id,
-    side: cell.side,
     row: cell.side === "old"
       ? { ...row, left: cell, right: emptyCell("new") }
       : { ...row, left: emptyCell("old"), right: cell },
@@ -46,7 +40,6 @@ export function DiffFileView({
   commenting,
   selection,
   onSelect,
-  editor,
 }: {
   file: ReviewFile;
   viewMode: "split" | "unified";
@@ -54,7 +47,6 @@ export function DiffFileView({
   commenting: boolean;
   selection: ReviewLineSelection | null;
   onSelect(event: React.MouseEvent | React.KeyboardEvent, cell: DiffCell, row: SideBySideRow): void;
-  editor: React.ReactNode;
 }) {
   const aligned = useMemo(
     () => file.hunks.map((hunk) => ({ hunk, rows: alignHunk(hunk) })),
@@ -67,7 +59,7 @@ export function DiffFileView({
     let nextChunkIndex = 0;
     return aligned.map(({ hunk, rows }) => {
       const entries = viewMode === "split"
-        ? rows.map((row) => ({ key: row.id, sourceRowId: row.id, side: null, row }))
+        ? rows.map((row) => ({ key: row.id, row }))
         : rows.flatMap(unifiedEntries);
       const chunks = chunkEntries(entries).map((chunk) => ({ chunk, index: nextChunkIndex++ }));
       return { hunk, chunks };
@@ -98,8 +90,6 @@ export function DiffFileView({
       </div>
     );
   }
-  const editorVisibleFor = (entry: DiffRowEntry) =>
-    selection?.rowId === entry.sourceRowId && (entry.side === null || selection.side === entry.side);
   return (
     <div className={`reviewDiffCanvas mode-${viewMode} ${wrap ? "isWrapped" : ""} ${commenting ? "isCommenting" : ""}`}>
       <div className="reviewDiffColumnHeaders" aria-hidden="true">
@@ -118,18 +108,12 @@ export function DiffFileView({
               {chunks.map(({ chunk, index }) => (
                 index < mountedChunks ? (
                   <div
-                    // A chunk's content-visibility brings paint containment with
-                    // it, which would clip the floating editor at the chunk
-                    // boundary. The one chunk holding it opts out.
-                    className={`reviewDiffChunk ${chunk.some(editorVisibleFor) ? "hasEditor" : ""}`}
+                    className="reviewDiffChunk"
                     style={{ containIntrinsicSize: `auto ${chunk.length * diffRowEstimatedHeight}px` }}
                     key={`${hunk.id}-chunk-${index}`}
                   >
                     {chunk.map((entry) => (
-                      <React.Fragment key={entry.key}>
-                        <DiffRow row={entry.row} selection={selection} commenting={commenting} newSideOnly={viewMode === "split"} onSelect={onSelect} />
-                        {editorVisibleFor(entry) ? editor : null}
-                      </React.Fragment>
+                      <DiffRow key={entry.key} row={entry.row} selection={selection} commenting={commenting} onSelect={onSelect} />
                     ))}
                   </div>
                 ) : (

@@ -23,15 +23,17 @@ import (
 type ManagedModel struct {
 	// ID is the served model name — what a client sends as `model`, what
 	// `/v1/models` reports, and what `--served-model-name` must say.
-	ID          string
-	DisplayName string
-	Command     string
+	ID               string
+	Command          string
+	ReasoningEfforts string
+	SamplingJSON     string
 	// Role decides which Veil setting this process feeds. Both roles are the
 	// same kind of child — one vLLM serving one model on one loopback port —
 	// but a transcription runtime answers /v1/audio/transcriptions rather than
 	// /v1/chat/completions, so putting it in the chat registry would publish a
 	// model that fails every request a client could send it.
-	Role string
+	Role    string
+	Enabled bool
 }
 
 const (
@@ -40,7 +42,8 @@ const (
 	RoleChat = "chat"
 	// RoleSpeech is the transcription runtime that backs dictation. Veil takes
 	// one speech endpoint, so at most one model may hold this role.
-	RoleSpeech = "speech"
+	RoleSpeech    = "speech"
+	RoleEmbedding = "embedding"
 )
 
 // IsSpeech reports whether this model backs dictation rather than chat.
@@ -49,6 +52,9 @@ func (m ManagedModel) IsSpeech() bool { return NormalizeRole(m.Role) == RoleSpee
 // NormalizeRole maps an empty or unknown role onto chat. The value arrives from
 // a form, and a typo must not silently promote a model into the speech slot.
 func NormalizeRole(value string) string {
+	if strings.TrimSpace(value) == RoleEmbedding {
+		return RoleEmbedding
+	}
 	if strings.TrimSpace(value) == RoleSpeech {
 		return RoleSpeech
 	}
@@ -71,7 +77,6 @@ const (
 	maxCommandBytes  = 4096
 	maxCommandTokens = 64
 	maxTokenBytes    = 512
-	maxDisplayBytes  = 120
 )
 
 // A served id travels in URLs, in argv, and in a JSON environment variable. The
@@ -88,8 +93,7 @@ var managedModelID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 // tokenizer a newline is whitespace, exactly like a space.
 const shellMetacharacters = ";&|<>$`"
 
-// DefaultCommand is what a new model's command box is prefilled with. fp8 is
-// vLLM's 8-bit KV cache and the default here; there is no literal "q8".
+// DefaultCommand leaves precision and cache dtype to the selected runtime.
 func DefaultCommand(modelPath, servedID string, port int) string {
 	if strings.TrimSpace(modelPath) == "" {
 		modelPath = "org/model"
@@ -102,9 +106,7 @@ func DefaultCommand(modelPath, servedID string, port int) string {
 		"--host", "127.0.0.1",
 		"--port", strconv.Itoa(port),
 		"--served-model-name", servedID,
-		"--max-model-len", "32768",
-		"--gpu-memory-utilization", "0.45",
-		"--kv-cache-dtype", "fp8",
+		"--max-model-len", "16384",
 	})
 }
 
@@ -139,20 +141,19 @@ func FormatCommand(args []string) string {
 	return strings.Join(lines, "\n")
 }
 
-// quoteIfNeeded puts a token back in quotes when it contains the whitespace
-// that would otherwise split it in two on the next read.
+// quoteIfNeeded preserves whitespace and literal quotes on the next read.
 func quoteIfNeeded(token string) string {
 	if token == "" {
 		return `""`
 	}
-	if !strings.ContainsAny(token, " \t\n\r") {
+	if !strings.ContainsAny(token, " \t\n\r'\"") {
 		return token
 	}
 	// A JSON value is the common case here, so single quotes are the ones that
 	// survive: wrapping `{"enable_thinking": false}` in double quotes would end
 	// the quote on its first inner one.
 	if strings.Contains(token, `"`) {
-		return `'` + token + `'`
+		return `'` + strings.ReplaceAll(token, `'`, `'"'"'`) + `'`
 	}
 	return `"` + token + `"`
 }
@@ -297,15 +298,21 @@ func clampToken(token string) string {
 }
 
 func (m ManagedModel) Validate() error {
+	if _, err := m.Sampling(); err != nil {
+		return err
+	}
+	if m.SamplingJSON != "" && NormalizeRole(m.Role) != RoleChat {
+		return errors.New("sampling settings require a chat model")
+	}
+	seen := map[string]bool{}
+	for _, effort := range m.Efforts() {
+		if !supportedEffort(effort) || seen[effort] || NormalizeRole(m.Role) != RoleChat {
+			return errors.New("choose distinct chat reasoning options: on, off, low, medium, high, xhigh, max")
+		}
+		seen[effort] = true
+	}
 	if !managedModelID.MatchString(m.ID) {
-		return errors.New("served id must start with a letter or digit and use only letters, digits, dots, dashes, or underscores")
-	}
-	display := strings.TrimSpace(m.DisplayName)
-	if display == "" || len(display) > maxDisplayBytes {
-		return fmt.Errorf("display name is required and must be %d characters or fewer", maxDisplayBytes)
-	}
-	if strings.ContainsAny(display, "\r\n\x00") {
-		return errors.New("display name must not contain control characters")
+		return errors.New("model name must be at most 128 characters, start with a letter or digit, and use only letters, digits, dots, dashes, or underscores")
 	}
 	_, err := m.Parse()
 	return err
@@ -368,11 +375,13 @@ func (m ManagedModel) ProviderBaseURL() string {
 // declared here rather than shared through a package because Console and Veil
 // are released separately: the contract is the JSON, not a Go type.
 type modelEnvEntry struct {
-	ID              string `json:"id"`
-	ProviderBaseURL string `json:"provider_base_url"`
-	Display         string `json:"display"`
-	Reasoning       bool   `json:"reasoning"`
-	ContextLength   int    `json:"context_length"`
+	ID               string            `json:"id"`
+	ProviderBaseURL  string            `json:"provider_base_url"`
+	Display          string            `json:"display"`
+	Reasoning        bool              `json:"reasoning"`
+	ReasoningEfforts []string          `json:"reasoning_efforts"`
+	SamplingProfiles *SamplingProfiles `json:"sampling_profiles,omitempty"`
+	ContextLength    int               `json:"context_length"`
 }
 
 // ModelsEnvJSON renders VEIL_MODELS. Empty when there are no chat models, so
@@ -391,20 +400,18 @@ func ModelsEnvJSON(models []ManagedModel) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		sampling, err := model.Sampling()
+		if err != nil {
+			return "", err
+		}
 		entries = append(entries, modelEnvEntry{
-			ID:              model.ID,
-			ProviderBaseURL: fmt.Sprintf("http://127.0.0.1:%d/v1", facts.Port),
-			Display:         strings.TrimSpace(model.DisplayName),
-			// Console does not claim to know whether this model thinks. The
-			// chat-template kwarg that controls it is named differently per
-			// family — `enable_thinking` for Qwen3 and Gemma 4, `thinking` for
-			// Granite 3.2, DeepSeek-V3.1, and Holo2 — and the defaults go both
-			// ways, so guessing from the command would be wrong as often as
-			// right. The administrator sets the server default with
-			// `--default-chat-template-kwargs`; the client may still override
-			// it per request, which is vLLM's own precedence.
-			Reasoning:     true,
-			ContextLength: facts.MaxModelLen,
+			SamplingProfiles: sampling,
+			ID:               model.ID,
+			ProviderBaseURL:  fmt.Sprintf("http://127.0.0.1:%d/v1", facts.Port),
+			Display:          model.ID,
+			Reasoning:        len(model.Efforts()) > 0,
+			ReasoningEfforts: model.Efforts(),
+			ContextLength:    facts.MaxModelLen,
 		})
 	}
 	if len(entries) == 0 {

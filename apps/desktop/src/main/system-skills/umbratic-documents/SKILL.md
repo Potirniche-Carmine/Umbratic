@@ -9,6 +9,12 @@ Everything goes through the `artifact` tool. You send JSON; the engine writes
 the file and checks it. Never write `docx`, `python-docx`, or any other library
 code, and never shell out to Word or LibreOffice.
 
+Before each create, read `references/spec.md` with `read_skill`, using this
+skill's id and `resource: "references/spec.md"`. Before each edit, read
+`references/ops.md` the same way. These are skill resources, not workspace
+files. Read the applicable reference completely before constructing the
+spec or ops; examples in this file do not replace that reference.
+
 ## Before you build anything
 
 **A file the user named or attached: `inspect` it first.** It returns `origin`,
@@ -40,7 +46,10 @@ not renumber headings, do not rewrite blocks.
   "blocks":[
     {"type":"title","text":"Q3 Brief","subtitle":"EMEA"},
     {"type":"heading","level":1,"text":"Summary"},
-    {"type":"paragraph","text":"Revenue grew **12%**."}
+    {"type":"paragraph","text":"Revenue grew **12%**."},
+    {"type":"table","columns":["Region","Growth"],
+     "rows":[["EMEA","12%"],["Americas","8%"]]},
+    {"type":"callout","style":"note","text":"Forecasts remain provisional."}
   ]}}
 ```
 
@@ -53,6 +62,11 @@ in).
 Fifteen block types — `title`, `heading`, `paragraph`, `bullets`, `numbered`,
 `checklist`, `definitions`, `callout`, `table`, `image`, `chart`, `quote`,
 `pageBreak`, `signature`, `formField`. `references/spec.md` has every field.
+
+Tables use `columns`, an array of header strings or `{header, width, align}`
+objects, and `rows`, an array of string arrays with one cell per column.
+Callouts are separate blocks with `style` and `text`. When converting an
+existing document, preserve its content, headings, lists, and tables.
 
 The preset owns all typography. You never send a font, a size, a margin, or a
 colour. A document has exactly one `title`; everything else is a `heading`.
@@ -102,7 +116,7 @@ Fix every `qa` error; judge each warning. At most three rounds. The common
 warnings are `narrow-column` (a table column narrower than its longest word)
 and `empty-section` (a heading with nothing under it).
 
-Files land in `.umbratic/artifacts/docx/` unless the user gave a path.
+Files land in `artifacts/docx/` unless the user gave a path.
 
 Report: the path, `origin` and `editSurface`, rounds, remaining warnings, and
 your assumptions. If you wrote a redline, say how many revisions and under whose

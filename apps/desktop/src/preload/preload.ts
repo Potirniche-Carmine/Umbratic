@@ -15,7 +15,6 @@ import type {
   RemoteConnectionDraft,
   WorkspaceIndexEvent,
 } from "../shared/desktopApi";
-import type { ResponseFeedbackReason, ResponseRating } from "../shared/responseFeedback";
 
 type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string };
 
@@ -70,16 +69,6 @@ const umbraticApi = {
   getNotes: () => invoke("umbratic:get-notes"),
   updateNotes: (input: { content: string }) => invoke("umbratic:update-notes", input),
   getTask: (input: { taskId: string }) => invoke("umbratic:get-task", input),
-  listTaskCheckpoints: (input: { taskId: string }) => invoke("umbratic:list-task-checkpoints", input),
-  createTaskCheckpoint: (input: { taskId: string; label?: string }) => invoke("umbratic:create-task-checkpoint", input),
-  setTaskCheckpointPinned: (input: { taskId: string; checkpointId: string; pinned: boolean }) =>
-    invoke("umbratic:set-task-checkpoint-pinned", input),
-  deleteTaskCheckpoint: (input: { taskId: string; checkpointId: string }) =>
-    invoke("umbratic:delete-task-checkpoint", input),
-  forkTaskCheckpoint: (input: { taskId: string; checkpointId: string }) =>
-    invoke("umbratic:fork-task-checkpoint", input),
-  restoreTaskCheckpoint: (input: { taskId: string; checkpointId: string; confirmed: boolean }) =>
-    invoke("umbratic:restore-task-checkpoint", input),
   refreshTaskReview: (input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }) => invoke("umbratic:refresh-task-review", input),
   refreshWorkspaceReview: (input: { repositoryPath: string }) => invoke("umbratic:refresh-workspace-review", input),
   readArtifactPreview: (input: { taskId: string; documentPath: string }) => invoke("umbratic:read-artifact-preview", input),
@@ -124,6 +113,9 @@ const umbraticApi = {
   getReasoningEffort: () => invoke("umbratic:get-reasoning-effort"),
   saveReasoningEffort: (input: ReasoningEffort) => invoke("umbratic:save-reasoning-effort", input),
   saveShowThinking: (input: boolean) => invoke("umbratic:save-show-thinking", input),
+  saveSendOnEnter: (input: boolean) => invoke("umbratic:save-send-on-enter", input),
+  getLaunchAtLogin: () => invoke("umbratic:get-launch-at-login", undefined),
+  saveLaunchAtLogin: (input: boolean) => invoke("umbratic:save-launch-at-login", input),
   getModelEndpointSettings: (input?: { mode?: "local" | "server" }) =>
     invoke("umbratic:get-model-endpoint-settings", input),
   getDictationSettings: () => invoke("umbratic:get-dictation-settings"),
@@ -131,7 +123,10 @@ const umbraticApi = {
     invoke("umbratic:save-dictation-settings", input),
   getKeyBindings: () => invoke("umbratic:get-key-bindings"),
   saveKeyBindings: (input: KeyBindingSettings) => invoke("umbratic:save-key-bindings", input),
-  listLocalModels: (input: { kind: "chat" | "dictation" }) =>
+  readGeneratedImage: (input: { taskId: string; path: string }) => invoke("umbratic:read-generated-image", input),
+  getImageSettings: () => invoke("umbratic:get-image-settings"),
+  saveImageSettings: (input: { model: string }) => invoke("umbratic:save-image-settings", input),
+  listLocalModels: (input: { kind: "chat" | "dictation" | "image" }) =>
     invoke("umbratic:list-local-models", input),
   downloadLocalModel: (input: { id: string }) =>
     invoke("umbratic:download-local-model", input),
@@ -160,18 +155,8 @@ const umbraticApi = {
   connectCompanyConnection: () => invoke("umbratic:connect-company-connection"),
   disconnectCompanySession: () => invoke("umbratic:disconnect-company-session"),
   disconnectCompanyConnection: () => invoke("umbratic:disconnect-company-connection"),
-  exportTelemetry: () => invoke("umbratic:export-telemetry"),
   exportLocalDiagnostics: () => invoke("umbratic:export-local-diagnostics"),
   clearLocalDiagnostics: () => invoke("umbratic:clear-local-diagnostics"),
-  recordProductEvent: (input: {
-    type: "review.opened" | "ide.selected";
-    taskId?: string;
-    repositoryId?: string;
-    scope?: "task" | "worktree";
-    target?: "task" | "project";
-    ideId?: string;
-    surface?: "composer" | "review";
-  }) => invoke("umbratic:record-product-event", input),
   listSkills: () => invoke("umbratic:list-skills"),
   saveSkillSettings: (input: Record<string, boolean>) => invoke("umbratic:save-skill-settings", input),
   openSkillsFolder: () => invoke("umbratic:open-skills-folder"),
@@ -212,11 +197,9 @@ const umbraticApi = {
     invoke("umbratic:open-repository-in-ide", input),
   openTaskInIde: (input: { taskId: string; ideId: string; filePath?: string }) =>
     invoke("umbratic:open-task-in-ide", input),
-  revertReviewFile: (input: { taskId: string; path: string }) => invoke("umbratic:revert-review-file", input),
+  undoTaskChanges: (input: { taskId: string; path?: string }) => invoke("umbratic:undo-task-changes", input),
   keepWorktree: (input: { taskId: string }) => invoke("umbratic:keep-worktree", input),
   cancelTask: (input: { taskId: string }) => invoke("umbratic:cancel-task", input),
-  setResponseFeedback: (input: { taskId: string; messageId: string; rating: ResponseRating | null; reason?: ResponseFeedbackReason; comment?: string }) =>
-    invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => invoke("umbratic:set-window-chrome-theme", theme),
   openExternal: (input: { url: string }) => invoke("umbratic:open-external", input),
   requestMicrophoneAccess: () => invoke("umbratic:request-microphone-access", undefined),

@@ -339,6 +339,8 @@
  * the local runtime's refresh affordance so the two modes read the same.
  */
 .connectionServerModelRow {
+  grid-column: 1 / -1;
+  order: 1;
   display: flex;
   align-items: flex-end;
   gap: 8px;

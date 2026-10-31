@@ -17,16 +17,16 @@ regex = "1.11.1"
 reqwest = { version = "0.12.22", default-features = false, features = ["json", "rustls-tls", "stream"] }
 # Already in the tree through reqwest. Direct so certificate pinning can run
 # inside the TLS handshake rather than after the request body is sent.
-rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = { version = "1.15.0", features = ["std"] }
-webpki-roots = "1.0.9"
+webpki-roots = "1.0.10"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 sha2 = "0.10.9"
 tokio = { version = "1.46.1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 umbratic-pdf = { path = "../pdf" }
 url = "2.5.4"
-uuid = { version = "1.17.0", features = ["v4"] }
+uuid = { version = "1.28.0", features = ["v4"] }
 walkdir = "2.5.0"
 
 [dev-dependencies]

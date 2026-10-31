@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { app } from "electron";
 
+import { readRegularFileSync } from "./readFile";
 import { skillsDirectory } from "./appPaths";
 import { readHarnessProfileSetting, readSkillSettings, writeSkillSettings } from "./storage";
 import { isRecord, pathInside } from "./utils";
@@ -95,7 +96,7 @@ function readSkillManifest(directory: string): SkillManifest {
     if (isRecord(parsed.systemSkills)) {
       for (const [id, value] of Object.entries(parsed.systemSkills)) {
         if (
-          isValidSkillId(id) &&
+          isValidSkillId(id.split("/")[0]) && safeZipEntryName(id) === id &&
           isRecord(value) &&
           typeof value.installedChecksum === "string" &&
           /^sha256:[a-f0-9]{64}$/i.test(value.installedChecksum) &&
@@ -132,13 +133,11 @@ function checksumPath(targetPath: string): string | undefined {
     const hash = crypto.createHash("sha256");
     let totalBytes = 0;
     const addFile = (filePath: string, rootPath: string) => {
-      const fileStat = fs.statSync(filePath);
-      if (!fileStat.isFile()) return;
-      totalBytes += fileStat.size;
-      if (totalBytes > skillImportTotalByteLimit) throw new Error("skill checksum input too large");
+      const bytes = readRegularFileSync(filePath, skillImportTotalByteLimit - totalBytes);
+      totalBytes += bytes.length;
       const relative = path.relative(rootPath, filePath).replace(/\\/g, "/");
       hash.update(`file:${relative}\0`);
-      hash.update(fs.readFileSync(filePath));
+      hash.update(bytes);
       hash.update("\0");
     };
     if (stat.isFile()) {
@@ -263,57 +262,63 @@ function isReservedSkillId(id: string): boolean {
   return id === "system" || systemSkillDefinitions.some((skill) => skill.id === id);
 }
 
-/**
- * Writes any missing system skill, and refreshes any whose on-disk copy is still
- * byte-for-byte the one we installed. Without the refresh, a user who installed
- * the app once kept the original wording of every system skill forever, and an
- * improved skill only ever reached new installs.
- *
- * A copy the user has edited is never touched — the install record no longer
- * matches, so the file is theirs. `resetSystemSkill` remains the way to discard
- * such an edit deliberately.
+/** Install complete skill folders, refreshing only files the user has not edited.
+ * Root SKILL.md records use the skill id; resources use id/relative/path.
  */
 function ensureSystemSkillFiles(directory = skillsDirectoryPath()) {
   const root = path.resolve(directory);
+  const systemRoot = fs.lstatSync(systemSkillsDirectory(root), { throwIfNoEntry: false });
+  if (systemRoot && (!systemRoot.isDirectory() || systemRoot.isSymbolicLink())) {
+    throw new Error("The system skills directory must be a real directory.");
+  }
   fs.mkdirSync(systemSkillsDirectory(root), { recursive: true });
   const manifest = readSkillManifest(root);
   let manifestChanged = false;
-
   for (const skill of systemSkillDefinitions) {
-    const skillDir = systemSkillDirectory(skill, root);
-    const skillFile = systemSkillFilePath(skill, root);
-    fs.mkdirSync(skillDir, { recursive: true });
-
-    const bundled = bundledSystemSkillContent(skill.id);
-    const bundledChecksum = sha256Hex(bundled);
-    const onDisk = fs.existsSync(skillFile) ? readTextFileIfSafe(skillFile) : null;
-
-    if (onDisk === null) {
-      fs.writeFileSync(skillFile, bundled, "utf8");
-      manifest.systemSkills[skill.id] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
-      manifestChanged = true;
-      continue;
-    }
-    if (sha256Hex(onDisk) === bundledChecksum) {
-      // Already current. Record it if this install predates the record, so the
-      // next bundled change can tell an untouched copy from an edited one.
-      if (manifest.systemSkills[skill.id]?.installedChecksum !== bundledChecksum) {
-        manifest.systemSkills[skill.id] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
-        manifestChanged = true;
-      }
-      continue;
-    }
-    const installed = manifest.systemSkills[skill.id]?.installedChecksum;
-    if (installed && sha256Hex(onDisk) === installed) {
-      fs.writeFileSync(skillFile, bundled, "utf8");
-      manifest.systemSkills[skill.id] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
-      manifestChanged = true;
-    }
-    // Otherwise the copy differs from both the bundle and what we installed:
-    // the user edited it, and it stays until they reset it.
+    const source = path.join(bundledSystemSkillsDirectory(), skill.id);
+    const target = systemSkillDirectory(skill, root);
+    manifestChanged = installSystemSkillFolder(source, target, skill.id, manifest) || manifestChanged;
   }
-
   if (manifestChanged) writeSkillManifest(root, manifest);
+}
+
+function installSystemSkillFolder(source: string, target: string, key: string, manifest: SkillManifest): boolean {
+  const existing = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (existing && (!existing.isDirectory() || existing.isSymbolicLink())) return false;
+  fs.mkdirSync(target, { recursive: true });
+  let changed = false;
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const from = path.join(source, entry.name);
+    const to = path.join(target, entry.name);
+    const recordKey = !key.includes("/") && entry.name === "SKILL.md" ? key : `${key}/${entry.name}`;
+    if (entry.isDirectory()) {
+      changed = installSystemSkillFolder(from, to, recordKey, manifest) || changed;
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const stat = fs.lstatSync(to, { throwIfNoEntry: false });
+    if (stat && (!stat.isFile() || stat.isSymbolicLink())) continue;
+    const bundled = fs.readFileSync(from);
+    const bundledChecksum = sha256Hex(bundled);
+    const onDiskChecksum = stat ? sha256Hex(readRegularFileSync(to, skillImportTotalByteLimit)) : null;
+    const installed = manifest.systemSkills[recordKey]?.installedChecksum;
+    if (onDiskChecksum !== null && onDiskChecksum !== bundledChecksum && onDiskChecksum !== installed) continue;
+    if (onDiskChecksum !== bundledChecksum) {
+      const staging = fs.mkdtempSync(path.join(target, ".install-"));
+      try {
+        const staged = path.join(staging, entry.name);
+        fs.writeFileSync(staged, bundled, { flag: "wx", mode: 0o600 });
+        fs.renameSync(staged, to);
+      } finally {
+        fs.rmSync(staging, { recursive: true, force: true });
+      }
+    }
+    if (installed !== bundledChecksum) {
+      manifest.systemSkills[recordKey] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 export function installBundledSystemSkills(directory = skillsDirectoryPath()): string {
@@ -324,9 +329,7 @@ export function installBundledSystemSkills(directory = skillsDirectoryPath()): s
 
 function textFileIfSafe(filePath: string, byteLimit: number): string | null {
   try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile() || stat.size > byteLimit) return null;
-    const buffer = fs.readFileSync(filePath);
+    const buffer = readRegularFileSync(filePath, byteLimit);
     if (buffer.includes(0)) return null;
     return buffer.toString("utf8");
   } catch {
@@ -662,11 +665,7 @@ function safeZipEntryName(name: string): string | null {
 }
 
 function extractZipToDirectory(zipFile: string, outputDir: string) {
-  const archiveStat = fs.lstatSync(zipFile);
-  if (archiveStat.isSymbolicLink()) throw new Error("Skill zip path must not be a symbolic link.");
-  if (!archiveStat.isFile()) throw new Error("Skill zip path must be a regular file.");
-  if (archiveStat.size > skillImportArchiveByteLimit) throw new Error("Skill import archive is too large.");
-  const data = fs.readFileSync(zipFile);
+  const data = readRegularFileSync(zipFile, skillImportArchiveByteLimit);
   let eocd = -1;
   const min = Math.max(0, data.length - 0xffff - 22);
   for (let index = data.length - 22; index >= min; index -= 1) {

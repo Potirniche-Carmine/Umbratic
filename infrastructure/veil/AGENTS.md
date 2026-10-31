@@ -2,7 +2,7 @@
 
 ## Veil Service
 
-Veil is the Go security and model-policy boundary between Umbratic clients and an admin-configured private model runtime. Electron and the Rust runner send requests to purpose-built Veil APIs; Veil owns authentication, protected prompts, route/model policy, health checks, telemetry boundaries, and the final runtime call.
+Veil is the Go security and model-policy boundary between Umbratic clients and an admin-configured private model runtime. Electron and the Rust runner send requests to purpose-built Veil APIs; Veil owns authentication, protected prompts, route/model policy, health checks, and the final runtime call.
 
 Cloudflare Tunnel may expose Veil, but it must point to Veil rather than Ollama, vLLM, or another runtime directly.
 
@@ -14,13 +14,12 @@ Keep package boundaries simple:
 
 - `cmd/veil` starts the service.
 - `internal/config` loads and validates trusted server configuration, including the `VEIL_MODELS` registry.
-- `internal/http` owns routes, authentication, middleware, limits, and response contracts.
+- `internal/http` owns routes, authentication, middleware, limits, response contracts, and operator-owned runtime metrics.
 - `internal/model` owns outbound private-runtime calls and streaming. One `Client` per registry entry, behind a `Registry` that routes by model id.
 - `internal/prompts` owns protected global and route prompt assembly.
 - `internal/policy` owns request validation and access rules.
 - `internal/identity` and `internal/entitlement` own company identity mode: signed entitlement, users, devices, sessions.
 - `internal/rag` owns optional retrieval of company documents into request-scoped untrusted context.
-- `internal/telemetry` owns redacted operational telemetry.
 - `internal/templates` owns built-in route/template definitions.
 
 Keep handlers small, pass `context.Context`, enforce timeouts and cancellation on outbound work, and return stable JSON errors without internal details. Add abstractions only when they remove real duplication or protect a trust boundary.

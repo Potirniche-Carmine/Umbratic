@@ -1,8 +1,8 @@
+import { imageMimeType, imagePreviewDataUrl } from "./imageAttachments";
 import { chatAttachmentFromRecord } from "./chatStore";
 import { PdfRenderWorkerResult, RunnerPromptPart, binarySnapshotPrefix, imageAttachmentByteLimit, missingSnapshotValue, ocrDigestPromptByteLimit, pdfAttachmentByteLimit, pdfImagePageLimit, pdfImageScale, pdfRenderTimeoutMs, textAttachmentByteLimit } from "./mainRuntime";
 import {
   app,
-  nativeImage,
   utilityProcess,
 } from "electron";
 import * as fs from "node:fs";
@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { type OcrInputKind } from "./artifactRuntime";
+import { readRegularFileSync } from "./readFile";
 import { attachmentContextTokens } from "./attachmentContext";
 import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
@@ -42,11 +43,7 @@ export const ignoredSnapshotDirectories = new Set([
 
 export function readTextFileIfSafe(filePath: string): string | null {
   try {
-    const stat = fs.lstatSync(filePath);
-    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > textAttachmentByteLimit) {
-      return null;
-    }
-    const buffer = fs.readFileSync(filePath);
+    const buffer = readRegularFileSync(filePath, textAttachmentByteLimit);
     if (buffer.includes(0)) {
       return null;
     }
@@ -104,22 +101,6 @@ export function isPdfFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".pdf";
 }
 
-export function imageMimeType(filePath: string): string | null {
-  switch (path.extname(filePath).toLowerCase()) {
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".webp":
-      return "image/webp";
-    case ".gif":
-      return "image/gif";
-    default:
-      return null;
-  }
-}
-
 export function ocrInputKindForPath(filePath: string): OcrInputKind | null {
   if (isPdfFile(filePath)) return "pdf";
   return imageMimeType(filePath) ? "image" : null;
@@ -143,35 +124,12 @@ export function ocrInputKindsForAttachments(attachments: ChatAttachment[]): OcrI
 
 export function imageDataUrlIfSafe(filePath: string): string | null {
   try {
-    const stat = fs.statSync(filePath);
     const mimeType = imageMimeType(filePath);
-    if (!mimeType || !stat.isFile() || stat.size > imageAttachmentByteLimit) {
-      return null;
-    }
-    const buffer = fs.readFileSync(filePath);
+    if (!mimeType) return null;
+    const buffer = readRegularFileSync(filePath, imageAttachmentByteLimit);
     return `data:${mimeType};base64,${buffer.toString("base64")}`;
   } catch {
     return null;
-  }
-}
-
-export function imagePreviewDataUrl(filePath: string): string | undefined {
-  try {
-    if (!imageMimeType(filePath)) return undefined;
-    const image = nativeImage.createFromPath(filePath);
-    if (image.isEmpty()) return undefined;
-    const size = image.getSize();
-    const longestSide = Math.max(size.width, size.height);
-    const thumbnail = longestSide > 220
-      ? image.resize({
-          width: size.width >= size.height ? 220 : undefined,
-          height: size.height > size.width ? 220 : undefined,
-          quality: "good",
-        })
-      : image;
-    return thumbnail.toDataURL();
-  } catch {
-    return undefined;
   }
 }
 

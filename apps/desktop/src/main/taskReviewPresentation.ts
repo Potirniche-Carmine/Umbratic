@@ -12,7 +12,7 @@ import {
 // sentinel no part of the runner or Veil emits any more. Nothing produced it,
 // and the only thing it could still match was a model whose real answer
 // happened to be that sentence — which then vanished from the transcript, the
-// telemetry, and the UI at once, with no trace anywhere.
+// diagnostics, and the UI at once, with no trace anywhere.
 export function visibleTaskEvents(events: BackendUiEvent[]): BackendUiEvent[] {
   return events.filter((event) => event.type !== "review.ready");
 }

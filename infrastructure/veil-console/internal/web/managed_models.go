@@ -1,10 +1,8 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"net"
 	"net/http"
 	"strconv"
@@ -42,16 +40,11 @@ type modelsView struct {
 	// Veil takes one speech endpoint, so the add form says so rather than
 	// letting the submission fail.
 	DictationTaken bool
-	// Catalog is the reviewed list the add form offers, and CatalogJSON is the
-	// same data for the script that keeps the served id, the context and the
-	// command in step with the menu. One source, rendered twice, rather than a
-	// list in Go and a copy of it in JavaScript.
-	Catalog     []config.ServingModel
-	CatalogJSON template.JS
-	// SuggestedPort is what a new model is offered, and what the browser
-	// rebuilds each catalog command around.
-	SuggestedPort int
-	CustomKey     string
+	Folders        []string
+	FolderIssues   map[string]string
+	FolderHints    map[string]string
+	ModelsDir      string
+	SuggestedPort  int
 }
 
 type modelRow struct {
@@ -70,57 +63,26 @@ type modelRow struct {
 	// Notice is the card's one reserved line. It is always rendered, empty or
 	// not, so a card never changes height when its state does.
 	Notice string
-	// Summary is the command in one readable line: what is being served, at
-	// what context, on which port. The card used to answer that with eight
-	// lines of monospace argv, which is the truth but not the answer.
-	Summary string
 }
 
 // modelForm is the add form. Editing happens on the card itself, so this is
 // only ever the three things a new model needs.
 type modelForm struct {
-	ID          string
-	DisplayName string
-	Command     string
-	Role        string
-	// CatalogKey names the catalog row this model is being created from, or
-	// CustomCatalogKey when the administrator is typing a command themselves.
-	CatalogKey string
-	// Variant is the precision chosen for that row.
-	Variant string
-	// Context is the context length chosen for it, in tokens.
-	Context int
+	ReasoningEfforts string
+	SamplingJSON     string
+	ID               string
+	Command          string
+	Role             string
+	Folder           string
 }
-
-// CustomCatalogKey is the "not on the list" option. It is what the add form was
-// before the catalog existed: three text fields and a command box. Nothing is
-// taken away by having a list — a repository this build has never reviewed is
-// still registrable, just deliberately rather than by default.
-const CustomCatalogKey = "custom"
-
-// Selected reports whether this catalog row is the chosen one, for the menu.
-func (f modelForm) Selected(key string) bool {
-	if strings.TrimSpace(f.CatalogKey) == "" {
-		return key == CustomCatalogKey
-	}
-	return f.CatalogKey == key
-}
-
-// IsCustom drives whether the form opens on the command box.
-func (f modelForm) IsCustom() bool {
-	return f.Selected(CustomCatalogKey)
-}
-
-// SpeechSelected drives the add form's role control, so a rejected submission
-// comes back with the role the administrator picked rather than the default.
-func (f modelForm) SpeechSelected() bool { return f.Role == config.RoleSpeech }
 
 func (s *Server) modelsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "models.html", s.modelsData(r, "", "", nil))
 }
 
 // IsChat and IsDictation drive the tab bar.
-func (v modelsView) IsChat() bool      { return v.Kind != config.KindDictation }
+func (v modelsView) IsChat() bool      { return v.Kind == config.KindChat }
+func (v modelsView) IsEmbedding() bool { return v.Kind == config.KindEmbedding }
 func (v modelsView) IsDictation() bool { return v.Kind == config.KindDictation }
 
 func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string, form *modelForm) pageData {
@@ -135,40 +97,37 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 	}
 
 	port := state.NextFreeManagedPort(models, s.startup.Port, s.veilPort())
-	catalog := config.CatalogFor(kind)
-	catalogJSON, _ := json.Marshal(catalog)
-	dictationTaken := false
+	folders, issues, folderErr := localModelFolders(s.modelsDirectory())
+	if folderErr != nil && errorMessage == "" {
+		errorMessage = folderErr.Error()
+	}
+	view := modelsView{
+		Configured: s.models.Configured(), Registered: len(models), Kind: kind,
+		Folders: folders, FolderIssues: issues, ModelsDir: s.modelsDirectory(), SuggestedPort: port,
+		FolderHints: make(map[string]string, len(folders)),
+	}
+	for _, folder := range folders {
+		resolved, err := resolveLocalModel(s.modelsDirectory(), folder)
+		if err != nil {
+			continue
+		}
+		metadata := supervisor.InspectModel(resolved)
+		view.FolderHints[folder] = map[string]string{config.RoleSpeech: "Dictation", config.RoleEmbedding: "Embedding"}[metadata.SuggestedRole]
+	}
 	for _, model := range models {
 		if model.IsSpeech() {
-			dictationTaken = true
+			view.DictationTaken = true
 		}
-	}
-	first := catalog[0]
-	view := modelsView{
-		Configured:     s.models.Configured(),
-		Registered:     len(models),
-		Kind:           kind,
-		DictationTaken: dictationTaken,
-		Catalog:        catalog,
-		CatalogJSON:    template.JS(catalogJSON),
-		SuggestedPort:  port,
-		CustomKey:      CustomCatalogKey,
-		Form: modelForm{
-			CatalogKey: first.Key,
-			Variant:    first.Variants[0].Key,
-			Context:    first.DefaultContext,
-			Command:    config.CatalogCommand(first, first.Variants[0], port, first.DefaultContext),
-		},
 	}
 	if form != nil {
 		view.Form = *form
 	}
 	for _, model := range models {
-		if (config.KindDictation == kind) != model.IsSpeech() {
+		if kind.Role() != config.NormalizeRole(model.Role) {
 			continue
 		}
 		status := s.models.Status(model.ID)
-		running := status.State == supervisor.ModelHealthy || status.State == supervisor.ModelStarting
+		running := status.PID > 0
 		stale := running && s.models.RunningCommand(model.ID) != strings.TrimSpace(model.Command)
 		row := modelRow{
 			ManagedModel: model,
@@ -180,12 +139,15 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 			Stale:        stale,
 			Notice:       modelNotice(model, running, stale),
 		}
-		row.Summary = modelSummary(model)
 		// Output is shown when it is the answer to a question the card raises.
 		// A model that is serving has nothing to explain; one that failed has
 		// exactly one thing, and it used to be behind a link.
-		if status.State == supervisor.ModelFailed {
+		if status.State == supervisor.ModelStarting || status.State == supervisor.ModelFailed {
 			row.Logs = s.models.Logs(model.ID)
+		}
+		if status.State == supervisor.ModelFailed {
+			row.StateText = "Failed to start"
+			row.Notice = status.Message
 		}
 		view.Rows = append(view.Rows, row)
 	}
@@ -218,31 +180,6 @@ func modelNotice(model config.ManagedModel, running, stale bool) string {
 	return ""
 }
 
-// modelSummary reads the command back as a sentence. Everything in it is
-// already in the argv below; this is the version someone can take in at a
-// glance, with the precision named when the repository is one the catalog
-// knows.
-func modelSummary(model config.ManagedModel) string {
-	facts, err := model.Parse()
-	if err != nil {
-		return ""
-	}
-	parts := []string{facts.ModelPath}
-	if entry, ok := config.CatalogByRepo(facts.ModelPath); ok {
-		for _, variant := range entry.Variants {
-			if strings.EqualFold(variant.Repo, facts.ModelPath) {
-				parts = append(parts, variant.Label)
-				break
-			}
-		}
-	}
-	if facts.MaxModelLen > 0 {
-		parts = append(parts, fmt.Sprintf("%dK context", facts.MaxModelLen/1024))
-	}
-	parts = append(parts, fmt.Sprintf("port %d", facts.Port))
-	return strings.Join(parts, " · ")
-}
-
 func modelStateText(status supervisor.ModelStatus) string {
 	if status.Message != "" {
 		return status.Message
@@ -272,11 +209,11 @@ func (s *Server) veilPort() int {
 	return parsed
 }
 
-// catalogPort is the port a catalog command is built around. It arrives from
+// suggestedModelPort is the port a catalog command is built around. It arrives from
 // the form because the page is what knows which ports are already taken, and it
 // is bounded here and collision-checked by ValidateManagedModels afterwards —
 // exactly the path a hand-typed --port takes.
-func catalogPort(r *http.Request) int {
+func suggestedModelPort(r *http.Request) int {
 	port, err := strconv.Atoi(strings.TrimSpace(r.FormValue("port")))
 	if err != nil || port < config.MinManagedPort || port > config.MaxManagedPort {
 		return config.SuggestedPortStart
@@ -285,37 +222,26 @@ func catalogPort(r *http.Request) int {
 }
 
 func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm) {
+	_ = r.ParseForm()
+	efforts := append([]string(nil), r.Form["reasoning_effort"]...)
 	form := modelForm{
-		ID:          strings.TrimSpace(r.FormValue("id")),
-		DisplayName: strings.TrimSpace(r.FormValue("display_name")),
-		Command:     strings.TrimSpace(r.FormValue("command")),
-		Role:        config.NormalizeRole(r.FormValue("role")),
-		CatalogKey:  strings.TrimSpace(r.FormValue("catalog_key")),
-		Variant:     strings.TrimSpace(r.FormValue("variant")),
+		ID:               strings.TrimSpace(r.FormValue("id")),
+		Command:          strings.TrimSpace(r.FormValue("command")),
+		ReasoningEfforts: strings.Join(efforts, ","),
+		SamplingJSON:     strings.TrimSpace(r.FormValue("sampling_json")),
+		Role:             config.NormalizeRole(r.FormValue("role")),
+		Folder:           strings.TrimSpace(r.FormValue("folder")),
 	}
-	// A catalog row decides the identity and the command. The browser fills the
-	// same three values into the form as the menu changes, but they arrive from
-	// a client and are rebuilt here rather than trusted: what gets executed is
-	// always assembled from the reviewed row on this side.
-	if entry, ok := config.CatalogEntry(form.CatalogKey); ok {
-		variant := entry.Variant(form.Variant)
-		context, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("context")))
-		context = entry.ClampContext(context)
-		form.Variant = variant.Key
-		form.Context = context
-		form.ID = entry.ServedID
-		form.DisplayName = entry.DisplayName
-		form.Command = config.CatalogCommand(entry, variant, catalogPort(r), context)
-		// The tab the form was submitted from decides the role. A dictation
-		// model registered as chat would be published in the model picker and
-		// fail every message sent to it.
-		form.Role = entry.Kind.Role()
+	if id == "" {
+		form.Role = requestKind(r).Role()
 	}
 	if id != "" {
 		form.ID = id
 	}
 	model := config.ManagedModel{
-		ID: form.ID, DisplayName: form.DisplayName, Command: form.Command, Role: form.Role,
+		ID: form.ID, Command: form.Command, Role: form.Role,
+		ReasoningEfforts: form.ReasoningEfforts,
+		SamplingJSON:     form.SamplingJSON,
 	}
 	// Store it laid out one flag per line however it arrived, so a pasted
 	// one-liner is readable the next time the card is opened.
@@ -327,6 +253,39 @@ func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm)
 
 func (s *Server) modelsCreate(w http.ResponseWriter, r *http.Request) {
 	model, form := parseModelForm(r, "")
+	folder, err := resolveLocalModel(s.modelsDirectory(), form.Folder)
+	if err != nil {
+		s.renderModelFormError(w, r, form, err)
+		return
+	}
+	if model.Role != config.RoleChat || model.ID == "" {
+		model.ID = localModelID(form.Folder)
+	}
+	model.ID = config.ModelNameForRole(model.ID, model.Role)
+	if model.Role != config.RoleChat {
+		model.Command, model.ReasoningEfforts, model.SamplingJSON = "", "", ""
+	}
+	if model.Command == "" {
+		model.Command = config.DefaultCommand(folder, model.ID, suggestedModelPort(r))
+		if model.Role != config.RoleChat {
+			// Speech and pooling models use the checkpoint's native context.
+			model.Command = strings.Replace(model.Command, "\n--max-model-len 16384", "", 1)
+		}
+		if model.Role == config.RoleEmbedding {
+			model.Command += "\n--runner pooling"
+		}
+		model, err = s.models.PrepareCommand(model)
+		if err != nil {
+			s.renderModelFormError(w, r, form, err)
+			return
+		}
+	}
+	model = config.WithLocalModelDefaults(model, folder)
+	facts, parseErr := model.Parse()
+	if parseErr != nil || facts.ModelPath != folder {
+		s.renderModelFormError(w, r, form, errors.New("the command must use the selected local model folder"))
+		return
+	}
 	if err := model.Validate(); err != nil {
 		s.renderModelFormError(w, r, form, err)
 		return
@@ -344,8 +303,7 @@ func (s *Server) modelsCreate(w http.ResponseWriter, r *http.Request) {
 		s.renderModelFormError(w, r, form, errors.New("the model could not be saved"))
 		return
 	}
-	s.handOffModels(r)
-	s.modelActionResult(w, r, nil, "model.create")
+	s.modelActionResult(w, r, s.handOffModels(r), "model.create")
 }
 
 // modelsDefault points Veil's default model at this card.
@@ -376,8 +334,8 @@ func (s *Server) modelsDefault(w http.ResponseWriter, r *http.Request) {
 		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.default")
 		return
 	}
-	if chosen.IsSpeech() {
-		s.modelActionResult(w, r, errors.New("a dictation model cannot answer chat requests"), "model.default")
+	if config.NormalizeRole(chosen.Role) != config.RoleChat {
+		s.modelActionResult(w, r, errors.New("only a chat model can be the chat default"), "model.default")
 		return
 	}
 	facts, err := chosen.Parse()
@@ -386,9 +344,16 @@ func (s *Server) modelsDefault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, ok, err := s.store.Configuration(r.Context(), "current")
-	if err != nil || !ok {
-		s.modelActionResult(w, r, errors.New("Veil is not configured yet"), "model.default")
+	if err != nil {
+		s.modelActionResult(w, r, errors.New("the active configuration could not be read"), "model.default")
 		return
+	}
+	if !ok {
+		// The first default on a fresh deployment. Settings can no longer name a
+		// model, so refusing here left no way to ever configure Veil: the
+		// baseline is the same defaults Settings starts from, and choosing the
+		// default is what creates the first configuration.
+		cfg = config.DefaultVeil()
 	}
 	cfg.Model = chosen.ID
 	cfg.ProviderBaseURL = fmt.Sprintf("http://127.0.0.1:%d/v1", facts.Port)
@@ -423,40 +388,14 @@ func (s *Server) modelsDefault(w http.ResponseWriter, r *http.Request) {
 // stored as typed and only becomes argv at start, so a model that is running
 // keeps running exactly as it was launched until it is restarted.
 func (s *Server) modelsUpdate(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("model_id")
-	model, _ := parseModelForm(r, id)
-	if err := model.Validate(); err != nil {
-		s.modelActionResult(w, r, err, "model.update")
-		return
-	}
-	existing, err := s.store.ManagedModels(r.Context())
-	if err != nil {
-		s.modelActionResult(w, r, errors.New("the model list could not be loaded"), "model.update")
-		return
-	}
-	fleet := make([]config.ManagedModel, 0, len(existing))
-	for _, candidate := range existing {
-		if candidate.ID == id {
-			continue
-		}
-		fleet = append(fleet, candidate)
-	}
-	if err := config.ValidateManagedModels(append(fleet, model), s.startup.Port, s.veilPort()); err != nil {
-		s.modelActionResult(w, r, err, "model.update")
-		return
-	}
-	if err := s.store.UpdateManagedModel(r.Context(), model); err != nil {
-		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.update")
-		return
-	}
-	s.handOffModels(r)
-	s.modelActionResult(w, r, nil, "model.update")
+	_, err := s.saveLaunchCommand(r)
+	s.modelActionResult(w, r, err, "model.update")
 }
 
 func (s *Server) modelsDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("model_id")
 	// Removing a running model would orphan its process and its GPU memory.
-	if state := s.models.Status(id).State; state == supervisor.ModelHealthy || state == supervisor.ModelStarting {
+	if status := s.models.Status(id); status.PID > 0 {
 		s.modelActionResult(w, r, errors.New("stop this model before removing it"), "model.delete")
 		return
 	}
@@ -464,48 +403,131 @@ func (s *Server) modelsDelete(w http.ResponseWriter, r *http.Request) {
 		s.modelActionResult(w, r, errors.New("the model could not be removed"), "model.delete")
 		return
 	}
-	s.handOffModels(r)
-	s.modelActionResult(w, r, nil, "model.delete")
+	s.modelActionResult(w, r, s.handOffModels(r), "model.delete")
 }
 
 func (s *Server) modelsStart(w http.ResponseWriter, r *http.Request) {
-	model, ok, err := s.store.ManagedModel(r.Context(), r.PathValue("model_id"))
-	if err != nil || !ok {
-		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.start")
+	model, err := s.saveLaunchCommand(r)
+	if err != nil {
+		s.modelActionResult(w, r, err, "model.start")
 		return
 	}
-	s.modelActionResult(w, r, s.models.Start(model), "model.start")
+	s.modelActionResult(w, r, s.startEnabledModel(r, model), "model.start")
 }
 
 func (s *Server) modelsStop(w http.ResponseWriter, r *http.Request) {
-	s.modelActionResult(w, r, s.models.Stop(r.PathValue("model_id")), "model.stop")
+	id := r.PathValue("model_id")
+	err := s.store.SetModelEnabled(r.Context(), id, false)
+	if err == nil {
+		err = s.models.Stop(id)
+	}
+	s.modelActionResult(w, r, err, "model.stop")
 }
 
 // modelsRestart is how an edited command takes effect: stop, then start from
 // the saved command.
 func (s *Server) modelsRestart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("model_id")
-	model, ok, err := s.store.ManagedModel(r.Context(), id)
-	if err != nil || !ok {
-		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.restart")
+	model, err := s.saveLaunchCommand(r)
+	if err != nil {
+		s.modelActionResult(w, r, err, "model.restart")
 		return
 	}
 	if err := s.models.Stop(id); err != nil {
 		s.modelActionResult(w, r, err, "model.restart")
 		return
 	}
-	s.modelActionResult(w, r, s.models.Start(model), "model.restart")
+	s.modelActionResult(w, r, s.startEnabledModel(r, model), "model.restart")
 }
 
-// handOffModels records the stored registry for the next Veil start. It does
-// not restart Veil: which models exist is configuration, and an administrator
-// applies it deliberately from the dashboard.
-func (s *Server) handOffModels(r *http.Request) {
+// Start and Restart submit the visible editor, just like Save. Validate before
+// stopping anything so an invalid edit leaves a serving model alone.
+func (s *Server) saveLaunchCommand(r *http.Request) (config.ManagedModel, error) {
+	model, _ := parseModelForm(r, r.PathValue("model_id"))
+	stored, exists, err := s.store.ManagedModel(r.Context(), model.ID)
+	if err != nil || !exists {
+		return model, errors.New("that model is not registered")
+	}
+	model.Role = stored.Role
+	if config.NormalizeRole(stored.Role) != config.RoleChat {
+		model = stored
+	}
+	if facts, err := model.Parse(); err == nil {
+		model = config.WithLocalModelDefaults(model, facts.ModelPath)
+	}
+	if err := model.Validate(); err != nil {
+		return model, err
+	}
+	fleet, err := s.store.ManagedModels(r.Context())
+	if err != nil {
+		return model, err
+	}
+	found := false
+	for i := range fleet {
+		if fleet[i].ID == model.ID {
+			fleet[i] = model
+			found = true
+		}
+	}
+	if !found {
+		return model, errors.New("that model is not registered")
+	}
+	if err := config.ValidateManagedModels(fleet, s.startup.Port, s.veilPort()); err != nil {
+		return model, err
+	}
+	if err := s.store.UpdateManagedModel(r.Context(), model); err != nil {
+		return model, errors.New("the model could not be saved")
+	}
+	return model, s.handOffModels(r)
+}
+
+// handOffModels applies registry changes through the existing Veil supervisor.
+// The first chat model becomes the default; removing it picks the next chat.
+func (s *Server) handOffModels(r *http.Request) error {
 	models, err := s.store.ManagedModels(r.Context())
 	if err != nil {
-		return
+		return err
+	}
+	cfg, ok, err := s.store.Configuration(r.Context(), "current")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		cfg = config.DefaultVeil()
+	}
+	var chosen *config.ManagedModel
+	for i := range models {
+		if config.NormalizeRole(models[i].Role) == config.RoleChat {
+			if chosen == nil || models[i].ID == cfg.Model {
+				chosen = &models[i]
+			}
+			if models[i].ID == cfg.Model {
+				break
+			}
+		}
+	}
+	if chosen == nil {
+		cfg.Model = ""
+		cfg.ProviderBaseURL = config.DefaultVeil().ProviderBaseURL
+		cfg.ContextLength = 0
+	} else {
+		facts, err := chosen.Parse()
+		if err != nil {
+			return err
+		}
+		cfg.Model = chosen.ID
+		cfg.ProviderBaseURL = chosen.ProviderBaseURL()
+		cfg.ContextLength = facts.MaxModelLen
+		cfg = config.WithModelDefaults(cfg, facts.ModelPath)
+	}
+	if err := s.store.SavePending(r.Context(), cfg, time.Now()); err != nil {
+		return err
+	}
+	if err := s.store.PromotePending(r.Context(), time.Now()); err != nil {
+		return err
 	}
 	s.supervisor.SetModels(models)
+	return s.restartVeilForChange(r.Context())
 }
 
 func (s *Server) renderModelFormError(w http.ResponseWriter, r *http.Request, form modelForm, err error) {
@@ -526,6 +548,9 @@ func requestKind(r *http.Request) config.ServingKind {
 
 // modelsPath is the page for one tab.
 func modelsPath(kind config.ServingKind) string {
+	if kind == config.KindEmbedding {
+		return "/models?kind=embedding"
+	}
 	if kind == config.KindDictation {
 		return "/models?kind=dictation"
 	}
@@ -540,4 +565,15 @@ func (s *Server) modelActionResult(w http.ResponseWriter, r *http.Request, err e
 	}
 	s.store.Audit(r.Context(), event, "success", time.Now())
 	http.Redirect(w, r, modelsPath(requestKind(r)), http.StatusSeeOther)
+}
+
+func (s *Server) startEnabledModel(r *http.Request, model config.ManagedModel) error {
+	if err := s.models.Start(model); err != nil {
+		return err
+	}
+	if err := s.store.SetModelEnabled(r.Context(), model.ID, true); err != nil {
+		_ = s.models.Stop(model.ID)
+		return err
+	}
+	return nil
 }

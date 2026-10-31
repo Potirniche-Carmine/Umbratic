@@ -46,10 +46,7 @@ func TestRuntimeMetricsRouteReturnsOnlySafeServingCounters(t *testing.T) {
 		"queue_timeout_ms", "queue_wait_ms_avg", "rag_empty_results", "rag_injected",
 		"rag_skipped_unavailable", "release_error_count", "runtime_queue_depth",
 		"runtime_state", "stream_disconnects", "stream_ms_p50", "stream_ms_p95", "stream_ms_p99",
-		"stream_samples", "telemetry_dropped_context_triggers", "telemetry_dropped_event_fields",
-		"telemetry_dropped_failed_tools", "telemetry_dropped_feedback",
-		"telemetry_dropped_product_events", "telemetry_dropped_tasks",
-		"telemetry_dropped_unknown_sections", "timeout_count", "tracked_users",
+		"stream_samples", "timeout_count", "tracked_users",
 		"ttft_ms_p50", "ttft_ms_p95", "ttft_ms_p99", "ttft_samples",
 		"unknown_body_fields", "unknown_harness_buckets",
 	}

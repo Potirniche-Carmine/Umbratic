@@ -1,10 +1,9 @@
-import { scheduleManagedTelemetrySync } from "./backendSettings";
+
 import { updateChatFromTask } from "./chatStore";
 import {
   BrowserWindow,
   nativeImage,
 } from "electron";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -15,28 +14,10 @@ import {
   umbraticRunnerVersion,
   baseUrlHost,
 } from "./policy";
-import {
-  readPermissionModeSetting,
-  readTask,
-  readTasks,
-  writeChat,
-  writeProductTelemetryEvent,
-  writeTask,
-  writeTasks,
-} from "./storage";
+import { readPermissionModeSetting, readTask, readTasks, writeTask, writeTasks } from "./storage";
 import { recordBackendEventDiagnostic, recordLocalDiagnostic } from "./diagnostics";
 import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
-import type {
-  BackendUiEvent,
-  ChatAttachment,
-  ChatRecord,
-  ProductTelemetryEventType,
-  RunnerProcess,
-  PendingPermission,
-  PermissionMode,
-  TaskInfo,
-  TaskRecord,
-} from "./types";
+import type { BackendUiEvent, ChatAttachment, PendingPermission, PermissionMode, TaskInfo, TaskRecord } from "./types";
 import { type ContextPromptPart } from "./promptContext";
 import {
   appendTaskEvent,
@@ -56,11 +37,13 @@ export type PendingTaskPrompt = {
   actionId: string;
   prompt: string;
   attachments: ChatAttachment[];
+  /** Set when the message joined the transcript at acceptance (steers do), so launching it later must not append it again. */
+  alreadyInTranscript?: boolean;
 };
 export type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
   | { ok: false; error: string };
-export const activeRunnerProcesses = new Map<string, RunnerProcess>();
+export const cancelledTaskRuns = new Set<string>();
 export const activeStartTaskRequests = new Map<string, Promise<TaskInfo>>();
 export const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: number }>();
 export const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
@@ -148,40 +131,10 @@ export let pendingRendererEventFlushTimer: NodeJS.Timeout | null = null;
 export const streamingTaskEventCrashCheckpointMs = 30_000;
 export const rendererEventFlushDelayMs = 20;
 
-export function recordProductTelemetry(
-  type: ProductTelemetryEventType,
-  input: {
-    taskId?: string;
-    chatId?: string;
-    repositoryId?: string;
-    data?: Record<string, string | number | boolean>;
-  } = {},
-): void {
-  const event = {
-    id: crypto.randomUUID(),
-    type,
-    at: new Date().toISOString(),
-    ...input,
-  };
-  try {
-    writeProductTelemetryEvent(event);
-    scheduleManagedTelemetrySync();
-  } catch (error) {
-    recordLocalDiagnostic({
-      level: "error",
-      source: "desktop",
-      event: "product_telemetry.persist_failed",
-      taskId: input.taskId,
-      message: error instanceof Error ? error.message : String(error),
-      data: { type, error },
-    });
-  }
-}
-
 export function pruneClosedTaskInternalSnapshots(task: TaskRecord): TaskRecord {
   if (
     task.baselineFiles &&
-    (task.state === "completed" || task.state === "approved" || task.state === "merged" || task.state === "rejected")
+    (task.state === "approved" || task.state === "merged" || task.state === "rejected")
   ) {
     const { baselineFiles: _baselineFiles, ...nextTask } = task;
     void _baselineFiles;
@@ -201,10 +154,6 @@ export function compactClosedTaskStorage() {
   if (changed) {
     writeTasks(compacted);
   }
-}
-
-export function saveChat(chat: ChatRecord) {
-  writeChat(chat);
 }
 
 export function applyTaskPolicyMetadata(task: TaskRecord) {
@@ -240,14 +189,11 @@ export function flushPendingTaskEvents() {
   if (pendingTaskEvents.size === 0) return;
   const queued = Array.from(pendingTaskEvents.entries());
   pendingTaskEvents.clear();
-  let changed = false;
   for (const [taskIdValue, events] of queued) {
     const task = readTask(taskIdValue);
     if (!task || events.length === 0) continue;
     writeTask(taskWithAppendedEvents(task, events), false);
-    changed = true;
   }
-  if (changed) scheduleManagedTelemetrySync();
 }
 
 export function shouldDeferTaskEventFlush(event: BackendUiEvent): boolean {
@@ -277,7 +223,6 @@ export function saveTask(task: TaskRecord) {
   };
   writeTask(nextTask);
   updateChatFromTask(nextTask);
-  scheduleManagedTelemetrySync();
 }
 
 export function publicTask(task: TaskRecord): TaskInfo {
@@ -488,5 +433,6 @@ export function failTask(
 }
 
 export function taskStillRunning(task: TaskRecord): boolean {
-  return task.state === "running";
+  const current = readTask(task.id);
+  return !cancelledTaskRuns.has(task.id) && task.state === "running" && current?.state === "running" && current.worktreePath === task.worktreePath;
 }

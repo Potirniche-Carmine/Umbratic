@@ -14,6 +14,7 @@
  * approximated.
  */
 
+import { inlineRuns } from "../inlineText.js";
 import { OoxmlPackage } from "../package.js";
 import {
   nextRelationshipId,
@@ -35,7 +36,7 @@ import {
   serializeXml,
   textOf,
 } from "../xml.js";
-import { inlineRuns, paragraphNode, runNode, wordNamespace } from "./create.js";
+import { paragraphNode, runNode, wordNamespace } from "./create.js";
 import { paragraphText, type DocxInspection } from "./inspect.js";
 
 export type OpError = { path: string; message: string };

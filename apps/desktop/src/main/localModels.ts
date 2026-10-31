@@ -1,3 +1,4 @@
+import { localImageRuntime } from "./localImage";
 /**
  * Local mode's model list and startup chain.
  *
@@ -16,6 +17,7 @@ import {
   effectiveEffort,
   modelQuant,
   quantMtpFile,
+  quantProjectorFile,
   quantWeightsFile,
   samplingFor,
   type CatalogModel,
@@ -24,7 +26,7 @@ import {
 } from "./modelCatalog";
 import { customModel, listCustomModels } from "./customModels";
 import { discoveredModel, listDiscoveredModels } from "./discoveredModels";
-import { downloadingModelId, modelDownloaded, modelFilePath } from "./modelDownloads";
+import { downloadingModelId, modelDownloaded, modelFileDownloaded, modelFilePath } from "./modelDownloads";
 import { readLocalQuantSelections } from "./settingsStorage";
 import { ensureLocalLlama } from "./localLlama";
 import { localSpeechEndpoint } from "./localSpeech";
@@ -89,6 +91,7 @@ export async function listLocalModels(dataRoot: string, kind: CatalogModelKind):
       kind: model.kind,
       displayName: model.displayName,
       bytes: catalogQuantBytes(chosen),
+      ...(model.kind === "image" ? { sharedBytes: catalogQuantBytes(chosen) - quantWeightsFile(chosen).bytes } : {}),
       recommended,
       uncensored: model.uncensored === true,
       mtp: model.mtp === true,
@@ -193,9 +196,12 @@ export async function ensureLocalChatRuntime(input: {
 }): Promise<LocalVeilConnection> {
   const model = selectedLocalChatModel(input.dataRoot, input.settings.modelId);
   if (!model) throw new Error(chooseLocalModelMessage);
+  const offeredProjector = quantProjectorFile(activeQuant(input.dataRoot, model)!);
+  const projector = offeredProjector && modelFileDownloaded(input.dataRoot, model, offeredProjector) ? offeredProjector : null;
   const runtime = await ensureLocalLlama(
     {
       modelFile: localModelWeightsPath(input.dataRoot, model),
+      projectorFile: projector ? modelFilePath(input.dataRoot, model, projector) : null,
       modelId: model.id,
       contextLength: input.contextLength,
       mtp: localModelMtp(input.dataRoot, model, input.mtp),
@@ -218,9 +224,11 @@ export async function ensureLocalChatRuntime(input: {
     {
       ...runtime,
       reasoning: model.reasoning,
+      vision: projector !== null,
       reasoningEffort: effort,
       sampling: samplingFor(model, effort ?? "off"),
       speech,
+      image: localImageRuntime(input.dataRoot),
     },
     input.contextLength,
     input.onVeilDiagnostic,

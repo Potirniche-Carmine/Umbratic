@@ -14,6 +14,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { readRegularFileSync } from "../../readFile.js";
 
 import { readDocumentSpec } from "./blocks/spec.js";
 import { createDocument } from "./docx/create.js";
@@ -212,7 +213,7 @@ async function editJob(request: ArtifactRequest): Promise<ArtifactResponse> {
 
 async function inspectDocxJob(request: ArtifactRequest): Promise<ArtifactResponse> {
   const { pack, bytes } = await readPackage(request.absolutePath);
-  const inspection = inspectDocument(pack);
+  const inspection = inspectDocument(pack, request.options?.includeContent === true);
   return {
     ok: true,
     path: request.path ?? request.absolutePath ?? "",
@@ -407,14 +408,7 @@ function pdfSummary(pages: number, findings: QaFinding[]): string {
 
 function readBytes(absolutePath: string | undefined): Buffer {
   if (!absolutePath) throw new PackageError("no input path was supplied");
-  const stats = fs.statSync(absolutePath);
-  if (stats.size > maxInflatedBytes) {
-    throw new PackageError(
-      `the file is ${stats.size} bytes, past the ${maxInflatedBytes}-byte limit`,
-      "too-large",
-    );
-  }
-  return fs.readFileSync(absolutePath);
+  return readRegularFileSync(absolutePath, maxInflatedBytes);
 }
 
 function docxSummary(blocks: number, words: number, findings: QaFinding[]): string {
@@ -442,14 +436,7 @@ async function readPackage(
   absolutePath: string | undefined,
 ): Promise<{ pack: OoxmlPackage; bytes: number }> {
   if (!absolutePath) throw new PackageError("no input path was supplied");
-  const stats = fs.statSync(absolutePath);
-  if (stats.size > maxInflatedBytes) {
-    throw new PackageError(
-      `the file is ${stats.size} bytes, past the ${maxInflatedBytes}-byte limit`,
-      "too-large",
-    );
-  }
-  const bytes = fs.readFileSync(absolutePath);
+  const bytes = readBytes(absolutePath);
   return { pack: await OoxmlPackage.read(bytes), bytes: bytes.byteLength };
 }
 

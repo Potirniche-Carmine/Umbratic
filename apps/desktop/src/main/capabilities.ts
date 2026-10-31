@@ -12,7 +12,7 @@ import type {
   CapabilityProbeReport,
   CapabilityProbeResult,
   CapabilityProbeStatus,
-  CapabilityTelemetryProbe,
+  RunCapabilityProbe,
 } from "./types";
 
 const nodeRequire = createRequire(__filename);
@@ -814,10 +814,10 @@ function affectedCurrentRun(probe: CapabilityProbeResult, needs: CapabilityPromp
   return undefined;
 }
 
-export function capabilityTelemetrySnapshot(
+export function runCapabilitySnapshot(
   report: CapabilityProbeReport,
   needs: CapabilityPromptNeeds = {},
-): CapabilityTelemetryProbe[] {
+): RunCapabilityProbe[] {
   return report.probes.map((probe) => ({
     id: probe.id,
     status: probe.status,

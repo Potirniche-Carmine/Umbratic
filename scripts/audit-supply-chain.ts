@@ -57,6 +57,13 @@ run(
   ["./..."],
   path.join(root, "infrastructure/veil-console"),
 );
+run(
+  "Caddy source and patched JOSE vulnerability audit",
+  "govulncheck",
+  ["./..."],
+  path.join(root, "infrastructure/veil-console/deploy/caddy"),
+);
+run("Locked Python and native-server module OSV audit", process.execPath, ["scripts/audit-managed-runtimes.ts"]);
 
 // govulncheck reports these under Module Results with no called or imported
 // symbols. Listing them here keeps a reviewed, unreachable advisory from

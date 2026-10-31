@@ -32,10 +32,6 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_MODEL_VISION", "")
 	t.Setenv("VEIL_MODEL_REASONING", "")
 	t.Setenv("VEIL_TEMPLATE_REGISTRY_PATH", "")
-	t.Setenv("VEIL_TELEMETRY_ENABLED", "")
-	t.Setenv("VEIL_TELEMETRY_STORE_PATH", "")
-	t.Setenv("VEIL_TELEMETRY_RETENTION_DAYS", "")
-	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "")
 	t.Setenv("VEIL_MODEL_TIMEOUT", "")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "")
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
@@ -232,9 +228,6 @@ func TestLoadUsesConfiguredServerMode(t *testing.T) {
 	if cfg.TemplateRegistryPath != "" {
 		t.Fatalf("unexpected template registry path %q", cfg.TemplateRegistryPath)
 	}
-	if !cfg.TelemetryEnabled || cfg.TelemetryRetentionDays != 30 || cfg.TelemetryStorePath != "" || cfg.TelemetryMaxBodyBytes != 16<<20 {
-		t.Fatalf("unexpected telemetry defaults: %#v", cfg)
-	}
 	if cfg.ModelTimeout != 12*time.Second || cfg.RequestTimeout != 20*time.Second {
 		t.Fatalf("unexpected timeouts: %s %s", cfg.ModelTimeout, cfg.RequestTimeout)
 	}
@@ -318,39 +311,13 @@ func TestLoadUsesConfiguredTemplateRegistryPath(t *testing.T) {
 	}
 }
 
-func TestLoadUsesConfiguredTelemetryPolicy(t *testing.T) {
-	setRequiredEnv(t)
-	storePath := filepath.Join(t.TempDir(), "telemetry")
-	t.Setenv("VEIL_TELEMETRY_ENABLED", "false")
-	t.Setenv("VEIL_TELEMETRY_STORE_PATH", storePath)
-	t.Setenv("VEIL_TELEMETRY_RETENTION_DAYS", "14")
-	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "8388608")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.TelemetryEnabled {
-		t.Fatal("expected telemetry to be disabled by admin policy")
-	}
-	if cfg.TelemetryStorePath != storePath {
-		t.Fatalf("unexpected telemetry store path %q", cfg.TelemetryStorePath)
-	}
-	if cfg.TelemetryRetentionDays != 14 {
-		t.Fatalf("unexpected retention days %d", cfg.TelemetryRetentionDays)
-	}
-	if cfg.TelemetryMaxBodyBytes != 8388608 {
-		t.Fatalf("unexpected telemetry body limit %d", cfg.TelemetryMaxBodyBytes)
-	}
-}
-
-func TestLoadRequiresConfiguredModel(t *testing.T) {
+func TestLoadAllowsUnconfiguredServer(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("VEIL_MODEL", "")
 
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected missing model error")
+	cfg, err := Load()
+	if err != nil || cfg.DefaultModel != "" {
+		t.Fatalf("unconfigured server failed: %v", err)
 	}
 }
 
@@ -409,30 +376,6 @@ func TestLoadRejectsInvalidContextLength(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsInvalidTelemetryPolicy(t *testing.T) {
-	setRequiredEnv(t)
-	t.Setenv("VEIL_TELEMETRY_ENABLED", "sometimes")
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected invalid telemetry enabled error")
-	}
-
-	setRequiredEnv(t)
-	t.Setenv("VEIL_TELEMETRY_RETENTION_DAYS", "0")
-	_, err = Load()
-	if err == nil {
-		t.Fatal("expected invalid telemetry retention error")
-	}
-
-	setRequiredEnv(t)
-	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "0")
-	_, err = Load()
-	if err == nil {
-		t.Fatal("expected invalid telemetry body limit error")
-	}
-}
-
 func TestLoadRequiresProviderBaseURL(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("VEIL_PROVIDER_BASE_URL", "")
@@ -488,7 +431,6 @@ func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.
 	t.Setenv("VEIL_MODEL_TIMEOUT", "")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "")
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
-	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "")
 	t.Setenv("VEIL_TEMPERATURE", "")
 	t.Setenv("VEIL_TOP_P", "")
 	t.Setenv("VEIL_REASONING_EFFORT", "")
@@ -502,9 +444,6 @@ func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.
 	t.Setenv("VEIL_MODEL_VISION", "")
 	t.Setenv("VEIL_MODEL_REASONING", "")
 	t.Setenv("VEIL_TEMPLATE_REGISTRY_PATH", "")
-	t.Setenv("VEIL_TELEMETRY_ENABLED", "")
-	t.Setenv("VEIL_TELEMETRY_STORE_PATH", "")
-	t.Setenv("VEIL_TELEMETRY_RETENTION_DAYS", "")
 	t.Setenv("VEIL_CONTROL_TOKEN", "")
 	t.Setenv("VEIL_COMPANY_IDENTITY_MODE", "")
 	t.Setenv("VEIL_ENTITLEMENT_PATH", "")
@@ -535,5 +474,18 @@ func TestLoadRejectsExternalBindWithoutAcknowledgement(t *testing.T) {
 	t.Setenv("VEIL_ALLOW_EXTERNAL_BIND", "1")
 	if _, err := Load(); err != nil {
 		t.Fatalf("acknowledged external bind was refused: %v", err)
+	}
+}
+
+func TestEnvIntRejectsPlatformOverflow(t *testing.T) {
+	for _, value := range []string{"9223372036854775808", "-9223372036854775809", "1.5"} {
+		t.Setenv("VEIL_TEST_INT", value)
+		if _, err := envInt("VEIL_TEST_INT", 7); err == nil {
+			t.Fatalf("accepted out-of-range integer %q", value)
+		}
+	}
+	t.Setenv("VEIL_TEST_INT", "42")
+	if value, err := envInt("VEIL_TEST_INT", 7); err != nil || value != 42 {
+		t.Fatalf("valid integer: %d %v", value, err)
 	}
 }

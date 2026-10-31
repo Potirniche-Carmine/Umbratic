@@ -23,12 +23,29 @@ type migration struct {
 }
 
 var migrations = []migration{
+	{name: "connection_settings", apply: func(tx *sql.Tx) error {
+		_, err := tx.Exec(`CREATE TABLE connection_settings (id INTEGER PRIMARY KEY CHECK (id = 1), host TEXT NOT NULL, port INTEGER NOT NULL, tls TEXT NOT NULL)`)
+		return err
+	}},
 	{name: "base", apply: applyBaseSchema},
 	{name: "configurations_generation_profile", apply: upgradeLegacyConfigurations},
 	{name: "rag_corpus", apply: applyCorpusSchema},
 	{name: "managed_models", apply: applyManagedModelSchema},
 	{name: "managed_model_role", apply: applyManagedModelRole},
 	{name: "document_route_set", apply: applyDocumentRouteSet},
+	{name: "managed_model_enabled", apply: func(tx *sql.Tx) error {
+		_, err := tx.Exec(`ALTER TABLE managed_models ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0`)
+		return err
+	}},
+	{name: "managed_model_sampling", apply: func(tx *sql.Tx) error {
+		_, err := tx.Exec("ALTER TABLE managed_models ADD COLUMN sampling_json TEXT NOT NULL DEFAULT ''")
+		return err
+	}},
+	{name: "managed_model_reasoning", apply: func(tx *sql.Tx) error {
+		_, err := tx.Exec(`ALTER TABLE managed_models ADD COLUMN reasoning_efforts TEXT NOT NULL DEFAULT ''`)
+		return err
+	}},
+	{name: "managed_model_single_name", apply: applyModelNames},
 }
 
 // Connection pragmas. These are per-connection settings rather than schema, and

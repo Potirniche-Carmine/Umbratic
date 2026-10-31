@@ -198,7 +198,17 @@
   overscroll-behavior: contain;
 }
 
+.reviewNavigatorItem {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.reviewNavigatorItem > .reviewIconButton { flex: 0 0 auto; }
+.reviewSelectedUndo { display: none; }
+
 .reviewNavigatorFile {
+  flex: 1 1 auto;
   display: flex;
   width: 100%;
   min-width: 0;
@@ -362,10 +372,15 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
 }
 
+/* Sized for its longer label and centred, so switching between "Leave
+   feedback" and "Done" neither re-centres the word nor slides the layout
+   control beside it along the toolbar. */
 .reviewFeedbackModeButton {
   display: inline-flex;
+  min-width: 128px;
   min-height: 28px;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
@@ -419,6 +434,13 @@
   margin: 0 0 15px;
   border-radius: 4px;
 }
+
+.documentReviewTable { overflow-x: auto; }
+.documentReviewTable table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.documentReviewTable th,
+.documentReviewTable td { min-width: 100px; padding: 10px 12px; border: 1px solid var(--line-strong); vertical-align: top; text-align: left; overflow-wrap: break-word; }
+.documentReviewTable th { background: var(--surface-2); font-weight: 600; }
+.documentReviewTable p { font-size: inherit; }
 
 .documentReviewBlock.style-title { margin-bottom: 8px; }
 .documentReviewBlock.style-subtitle { margin-bottom: 32px; }
@@ -511,33 +533,47 @@
   cursor: pointer;
 }
 
-.documentReviewPreview.isCommenting .documentReviewSentence:hover,
-.documentReviewSentence:focus-visible {
-  background: color-mix(in srgb, var(--blue) 6%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 10%, transparent);
+.documentReviewPreview.isCommenting .documentReviewSentence:hover {
+  background: color-mix(in srgb, var(--text) 15%, var(--surface));
+  box-shadow: inset 0 0 0 2px var(--text);
 }
 
-.documentReviewSentence.isSelected {
-  background: color-mix(in srgb, var(--blue) 15%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 22%, transparent);
+.documentReviewPreview .documentReviewSentence.isSelected {
+  color: #fff;
+  background: #174ea6;
+  box-shadow: inset 0 0 0 2px #174ea6;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
 }
 
-.documentReviewSentence.isSelected:hover,
-.documentReviewSentence.isSelected:focus-visible {
-  background: color-mix(in srgb, var(--blue) 18%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 28%, transparent);
+.documentReviewPreview .documentReviewSentence.isSelected:hover {
+  background: #123c80;
+  box-shadow: inset 0 0 0 2px #fff;
 }
 
-.documentReviewPaper > .inlineReviewComment {
-  position: relative;
-  left: auto;
-  width: 100%;
-  margin: 10px 0 20px;
-  font-family: var(--app-font);
+.documentReviewPreview .documentReviewSentence:focus-visible {
+  outline: 3px solid var(--text);
+  outline-offset: 3px;
+}
+
+@media (forced-colors: active) {
+  .documentReviewPreview .documentReviewSentence.isSelected {
+    color: HighlightText;
+    background: Highlight;
+    forced-color-adjust: none;
+  }
+
+  .documentReviewPreview.isCommenting .documentReviewSentence:hover {
+    outline: 2px solid CanvasText;
+  }
+
+  .documentReviewPreview .documentReviewSentence:focus-visible {
+    outline: 3px dashed CanvasText;
+  }
 }
 
 .reviewFeedbackModeButton:disabled {
   opacity: 0.48;
   cursor: not-allowed;
 }
-

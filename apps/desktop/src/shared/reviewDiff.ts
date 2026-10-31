@@ -107,7 +107,7 @@ function unquoteGitPath(value: string): string {
 }
 
 function parseDiffGitPaths(line: string): { oldPath?: string; path?: string } {
-  const match = line.match(/^diff --git ("(?:\\.|[^"])+"|\S+) ("(?:\\.|[^"])+"|\S+)$/);
+  const match = line.match(/^diff --git ("(?:\\.|[^"\\])+"|\S+) ("(?:\\.|[^"\\])+"|\S+)$/);
   if (!match) return {};
   return { oldPath: unquoteGitPath(match[1]), path: unquoteGitPath(match[2]) };
 }

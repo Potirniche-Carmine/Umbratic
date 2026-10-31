@@ -9,10 +9,6 @@ export function appDatabasePath(): string {
   return appDatabaseFile(app.getPath("userData"));
 }
 
-export function localDatabasePath(): string {
-  return appDatabasePath();
-}
-
 export function chatsDatabasePath(): string {
   return chatsDatabaseFile(app.getPath("userData"));
 }
@@ -54,10 +50,6 @@ export type DiagnosticRow = {
 export type DiagnosticStatsRow = {
   bytes: number;
   entries: number;
-};
-
-export type ProductTelemetryRow = {
-  payload: string;
 };
 
 export type RecordTableName = "projects" | "tasks" | "chats";
@@ -197,14 +189,7 @@ function ensureStorageSchema(db: DatabaseSync) {
       data TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS product_telemetry_events (
-      id TEXT PRIMARY KEY NOT NULL,
-      type TEXT NOT NULL,
-      at TEXT NOT NULL,
-      task_id TEXT,
-      repository_id TEXT,
-      payload TEXT NOT NULL
-    );
+
 
     CREATE TABLE IF NOT EXISTS task_checkpoints (
       id TEXT PRIMARY KEY NOT NULL,
@@ -245,8 +230,6 @@ function ensureStorageSchema(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS tasks_repository_id_index ON tasks(repository_id);
     CREATE INDEX IF NOT EXISTS diagnostic_logs_at_index ON diagnostic_logs(at DESC);
     CREATE INDEX IF NOT EXISTS diagnostic_logs_task_id_index ON diagnostic_logs(task_id);
-    CREATE INDEX IF NOT EXISTS product_telemetry_events_at_index ON product_telemetry_events(at ASC);
-    CREATE INDEX IF NOT EXISTS product_telemetry_events_task_id_index ON product_telemetry_events(task_id);
     CREATE INDEX IF NOT EXISTS task_checkpoints_task_state_created_index ON task_checkpoints(task_id, state, created_at DESC);
     CREATE INDEX IF NOT EXISTS task_workspaces_task_state_created_index ON task_workspaces(task_id, state, created_at DESC);
   `);
