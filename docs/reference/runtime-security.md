@@ -199,3 +199,11 @@ configuration were removed after the check.
 Run the same checks with
 [`verify-metal-kit.py`](../../infrastructure/veil-console/deploy/verify-metal-kit.py).
 The qualification uses a fresh isolated environment and downloads no models.
+Its archive extraction combines the existing member/link checks with Python's
+`data` filter. The host must use Python 3.12.16+, 3.13.18+, 3.14.10+ or 3.15.2+
+within those reviewed release series; older patches, prereleases and unreviewed
+series are rejected. These [security releases](https://blog.python.org/2026/10/python-3152-31410-31318-31216-31118/)
+include the October 2026 destination-link fix as well as earlier extraction-filter
+fixes. Tests preserve safe runtime files and links and block a composed symlink
+and parent-directory escape; removing only the filter reproduces the outside
+write. The exact sealed-kit Python archive also passed filtered extraction.

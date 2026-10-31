@@ -7,6 +7,7 @@ from pathlib import Path
 import posixpath
 import signal
 import subprocess
+import sys
 import tarfile
 
 from metal_wheels import sha256
@@ -29,7 +30,15 @@ def run(arguments, env, log, timeout=300):
         raise RuntimeError(f"{Path(arguments[0]).name} failed; see {log}")
 
 
+def require_patched_python():
+    # These security releases include the 2025 and October 2026 tar-filter fixes.
+    minimum_patch = {(3, 12): 16, (3, 13): 18, (3, 14): 10, (3, 15): 2}.get(sys.version_info[:2])
+    if minimum_patch is None or sys.version_info[2] < minimum_patch or sys.version_info[3] != "final":
+        raise RuntimeError("Kit qualification requires Python 3.12.16+, 3.13.18+, 3.14.10+ or 3.15.2+ in those release series")
+
+
 def main():
+    require_patched_python()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kit", type=Path, required=True)
     parser.add_argument("--work", type=Path, required=True)
@@ -55,7 +64,7 @@ def main():
                     raise RuntimeError("unsafe Python runtime link")
             elif not member.isfile() and not member.isdir():
                 raise RuntimeError("unsupported Python runtime member")
-        archive.extractall(work)
+        archive.extractall(work, filter="data")
     for directory in (work / "home", work / "tmp", work / "cache"):
         directory.mkdir()
     env = {"PATH": str(kit / "bin") + ":/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(work / "home"),

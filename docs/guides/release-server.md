@@ -21,7 +21,7 @@ For an existing deployment, pass `--org-uid` from its previous `entitlement.json
 
 ## First build on macOS
 
-Build a fresh dependency kit from the repository root (Python 3.9+, Xcode Command Line Tools, the pinned Go toolchain, and `govulncheck` are required):
+Build a fresh dependency kit from the repository root (a [patched Python release](../../README.md#build-from-source), Xcode Command Line Tools, the pinned Go toolchain, and `govulncheck` are required):
 
 ```sh
 python3 infrastructure/veil-console/deploy/build-metal-kit.py \

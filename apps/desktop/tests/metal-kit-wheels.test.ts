@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 
-test("Metal kit wheel patches enforce hashes, preserve identity and reseal RECORD", () => {
+test("Metal kit patches preserve wheel integrity and contain runtime extraction", () => {
   const result = spawnSync(process.platform === "win32" ? "python" : "python3", [
     "-B", path.join(root, "infrastructure/veil-console/deploy/test_metal_wheels.py"),
   ], { encoding: "utf8", timeout: 30_000 });
