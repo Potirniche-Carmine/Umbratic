@@ -26,3 +26,8 @@ export function windowsArmClangCompilers(visualStudio: string): { c: string; cxx
   }
   throw new Error("Windows ARM packaging requires the Visual Studio C++ Clang compiler component.");
 }
+
+/** Keep heavy C++ translation units within the host's CPU and memory budget. */
+export function llamaBuildJobs(availableCpus: number, memoryBytes: number): number {
+  return Math.max(1, Math.min(availableCpus, Math.floor(memoryBytes / (4 * 1024 ** 3))));
+}

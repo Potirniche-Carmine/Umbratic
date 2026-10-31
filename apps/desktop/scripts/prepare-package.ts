@@ -1,7 +1,8 @@
 import "./prepare-image-runtime.ts";
-import { llamaCpuBuildFlags, windowsArmClangCompilers } from "./llama-build-config.ts";
+import { llamaBuildJobs, llamaCpuBuildFlags, windowsArmClangCompilers } from "./llama-build-config.ts";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import process from "node:process";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -89,22 +90,31 @@ function runLong(command: string, args: string[], cwd: string, what: string, env
       windowsHide: true,
     });
     let captured = "";
-    let compiled = 0;
+    let startedSteps = 0;
+    let partialLine = "";
+    let latestPhase = "";
     const absorb = (chunk: Buffer | string) => {
       const text = chunk.toString();
       // Keep only the tail: a failing build's message is at the end, and the
       // whole log is tens of megabytes.
       captured = `${captured}${text}`.slice(-16000);
-      // Ninja, Make, and MSBuild all name each translation unit as they go,
-      // which is enough to show that something is still happening.
-      compiled += (text.match(/\.(?:c|cc|cpp|cu|m|mm)\b/gi) ?? []).length;
+      // CMake reports an object build before the compiler finishes. Count
+      // started steps, and retain the phase so a slow link is not called idle.
+      const lines = `${partialLine}${text}`.split(/\r?\n/);
+      partialLine = (lines.pop() ?? "").slice(-16000);
+      for (const line of lines) {
+        if (/\bBuilding [A-Z][A-Z0-9_]* object\b/.test(line)) startedSteps += 1;
+        const clean = line.replace(/\x1b\[[0-9;]*m/g, "").trim();
+        if (/\b(?:Building|Linking|Generating|Built target)\b/.test(clean)) latestPhase = clean.slice(-220);
+      }
     };
     child.stdout?.on("data", absorb);
     child.stderr?.on("data", absorb);
 
     const heartbeat = setInterval(() => {
-      const detail = compiled > 0 ? `${compiled} files compiled` : "working";
-      process.stdout.write(`  ${humanDuration(Date.now() - startedAt)} elapsed, ${detail}\n`);
+      const detail = startedSteps > 0 ? `${startedSteps} compile steps started` : "working";
+      const phase = latestPhase ? ` — ${latestPhase}` : "";
+      process.stdout.write(`  ${humanDuration(Date.now() - startedAt)} elapsed, ${detail}${phase}\n`);
     }, 20_000);
     heartbeat.unref?.();
 
@@ -413,7 +423,8 @@ async function buildLlamaServer() {
       `Building llama.cpp ${pin.tag} from source. The first build takes several minutes;`
       + " later packaging runs reuse apps/desktop/.llama-cache and skip it.",
     );
-    const buildEnv = msvcEnvironment();
+    const parallelJobs = llamaBuildJobs(os.availableParallelism(), os.totalmem());
+    const buildEnv: NodeJS.ProcessEnv = { ...msvcEnvironment(), CMAKE_BUILD_PARALLEL_LEVEL: String(parallelJobs) };
     if (process.platform === "win32" && process.arch === "arm64") {
       configure.push(`-DCMAKE_C_COMPILER=${buildEnv.CC}`, `-DCMAKE_CXX_COMPILER=${buildEnv.CXX}`);
     }
@@ -423,7 +434,7 @@ async function buildLlamaServer() {
     // unbuilt and the packaged app with nothing to run on.
     await runLong(
       "cmake",
-      ["--build", buildDir, "--parallel"],
+      ["--build", buildDir, "--parallel", String(parallelJobs)],
       llamaCacheRoot,
       `Building llama-server ${pin.tag}`,
       buildEnv,

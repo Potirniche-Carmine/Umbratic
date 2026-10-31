@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { llamaCpuBuildFlags, windowsArmClangCompilers } from "../scripts/llama-build-config.ts";
+import { llamaBuildJobs, llamaCpuBuildFlags, windowsArmClangCompilers } from "../scripts/llama-build-config.ts";
 import { verifyPeArchitecture } from "../scripts/verify-pe.ts";
 
 test("Windows ARM uses the supported portable Clang target and other release platforms retain CPU variants", () => {
@@ -50,4 +50,11 @@ test("packaged Windows payloads must contain a valid PE header for their actual 
   }
   fs.writeFileSync(file, "not an executable");
   assert.throws(() => verifyPeArchitecture(file, "arm64"), /Invalid Windows executable/);
+});
+
+test("C++ build parallelism has explicit CPU and four-GiB memory bounds", () => {
+  const gib = 1024 ** 3;
+  for (const [cpus, memory, expected] of [[3, 7, 1], [8, 16, 4], [2, 64, 2], [32, 64, 16], [8, 2, 1], [0, 0, 1]]) {
+    assert.equal(llamaBuildJobs(cpus, memory * gib), expected);
+  }
 });
