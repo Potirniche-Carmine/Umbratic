@@ -51,7 +51,6 @@ export type {
   ServiceStatus,
   TaskInfo,
   TaskState,
-  TelemetryPolicyInfo,
   TestResult,
   ToolErrorCode,
   ToolResultStatus,
@@ -99,16 +98,6 @@ export type CommandClass =
   | "blocked-path"
   | "unknown";
 
-export type TelemetrySyncResult = {
-  ok: boolean;
-  uploaded: number;
-  pending: number;
-  spooledPath: string;
-  spoolDirectory: string;
-  destination: string;
-  message: string;
-};
-
 export type ContextContentKind =
   | "search"
   | "directory"
@@ -136,7 +125,7 @@ export type LspServerLaunchConfig = {
   extensions: string[];
 };
 
-export type CapabilityTelemetryProbe = {
+export type RunCapabilityProbe = {
   id: string;
   status: CapabilityProbeStatus;
   category: CapabilityProbeCategory;
@@ -159,38 +148,6 @@ export type LocalDiagnosticRecord = {
   data: unknown;
 };
 
-export type ProductTelemetryEventType =
-  | "review.opened"
-  | "ide.selected"
-  | "ide.opened"
-  | "permission.mode_changed"
-  | "reasoning.mode_changed"
-  | "task.accepted"
-  | "task.undone"
-  | "worktree.requested"
-  | "worktree.approved"
-  | "worktree.denied"
-  | "worktree.created"
-  | "worktree.kept"
-  | "checkpoint.started"
-  | "checkpoint.completed"
-  | "checkpoint.failed"
-  | "fork.completed"
-  | "fork.failed"
-  | "restore.started"
-  | "restore.completed"
-  | "restore.failed";
-
-export type ProductTelemetryEvent = {
-  id: string;
-  type: ProductTelemetryEventType;
-  at: string;
-  taskId?: string;
-  chatId?: string;
-  repositoryId?: string;
-  data?: Record<string, string | number | boolean>;
-};
-
 export type TaskRecord = TaskInfo & {
   workspaceMode: WorkspaceMode;
   originalRepoPath: string;
@@ -204,7 +161,7 @@ export type TaskRecord = TaskInfo & {
   modelId?: string;
   modelBaseUrlHost?: string;
   enabledTools?: RunnerToolId[];
-  capabilityProbes?: CapabilityTelemetryProbe[];
+  capabilityProbes?: RunCapabilityProbe[];
   runnerSessionId?: string;
   diagnosticLogPath?: string;
   pendingPrompt?: string;

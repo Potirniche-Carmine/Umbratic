@@ -107,8 +107,15 @@ export function knownHostsPath(userDataPath: string): string {
   const directory = path.join(userDataPath, "remote");
   fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, "known_hosts");
-  if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, "", { encoding: "utf8", mode: 0o600 });
+  const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+  try {
+    const stat = fs.fstatSync(fd);
+    const entry = fs.lstatSync(file);
+    if (!stat.isFile() || entry.isSymbolicLink() || stat.dev !== entry.dev || stat.ino !== entry.ino) {
+      throw new Error("The known-hosts path must be a regular file.");
+    }
+  } finally {
+    fs.closeSync(fd);
   }
   return file;
 }

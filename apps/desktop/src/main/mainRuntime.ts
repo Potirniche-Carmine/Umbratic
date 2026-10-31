@@ -1,10 +1,9 @@
-import { scheduleManagedTelemetrySync } from "./managedTelemetry";
+
 import { updateChatFromTask } from "./chatStore";
 import {
   BrowserWindow,
   nativeImage,
 } from "electron";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -15,25 +14,10 @@ import {
   umbraticRunnerVersion,
   baseUrlHost,
 } from "./policy";
-import {
-  readPermissionModeSetting,
-  readTask,
-  readTasks,
-  writeProductTelemetryEvent,
-  writeTask,
-  writeTasks,
-} from "./storage";
+import { readPermissionModeSetting, readTask, readTasks, writeTask, writeTasks } from "./storage";
 import { recordBackendEventDiagnostic, recordLocalDiagnostic } from "./diagnostics";
 import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
-import type {
-  BackendUiEvent,
-  ChatAttachment,
-  ProductTelemetryEventType,
-  PendingPermission,
-  PermissionMode,
-  TaskInfo,
-  TaskRecord,
-} from "./types";
+import type { BackendUiEvent, ChatAttachment, PendingPermission, PermissionMode, TaskInfo, TaskRecord } from "./types";
 import { type ContextPromptPart } from "./promptContext";
 import {
   appendTaskEvent,
@@ -147,36 +131,6 @@ export let pendingRendererEventFlushTimer: NodeJS.Timeout | null = null;
 export const streamingTaskEventCrashCheckpointMs = 30_000;
 export const rendererEventFlushDelayMs = 20;
 
-export function recordProductTelemetry(
-  type: ProductTelemetryEventType,
-  input: {
-    taskId?: string;
-    chatId?: string;
-    repositoryId?: string;
-    data?: Record<string, string | number | boolean>;
-  } = {},
-): void {
-  const event = {
-    id: crypto.randomUUID(),
-    type,
-    at: new Date().toISOString(),
-    ...input,
-  };
-  try {
-    writeProductTelemetryEvent(event);
-    scheduleManagedTelemetrySync();
-  } catch (error) {
-    recordLocalDiagnostic({
-      level: "error",
-      source: "desktop",
-      event: "product_telemetry.persist_failed",
-      taskId: input.taskId,
-      message: error instanceof Error ? error.message : String(error),
-      data: { type, error },
-    });
-  }
-}
-
 export function pruneClosedTaskInternalSnapshots(task: TaskRecord): TaskRecord {
   if (
     task.baselineFiles &&
@@ -235,14 +189,11 @@ export function flushPendingTaskEvents() {
   if (pendingTaskEvents.size === 0) return;
   const queued = Array.from(pendingTaskEvents.entries());
   pendingTaskEvents.clear();
-  let changed = false;
   for (const [taskIdValue, events] of queued) {
     const task = readTask(taskIdValue);
     if (!task || events.length === 0) continue;
     writeTask(taskWithAppendedEvents(task, events), false);
-    changed = true;
   }
-  if (changed) scheduleManagedTelemetrySync();
 }
 
 export function shouldDeferTaskEventFlush(event: BackendUiEvent): boolean {
@@ -272,7 +223,6 @@ export function saveTask(task: TaskRecord) {
   };
   writeTask(nextTask);
   updateChatFromTask(nextTask);
-  scheduleManagedTelemetrySync();
 }
 
 export function publicTask(task: TaskRecord): TaskInfo {

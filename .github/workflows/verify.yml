@@ -1,37 +1,91 @@
-name: Audit
-
-# Solo-developer CI: pull requests get a fast dependency audit and nothing
-# else. Releases are built on the two local machines and published to
-# downloads.umbratic.ai — see docs/releasing.md. Nothing runs on merges to main.
+name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: audit-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: always
 
 jobs:
-  audit:
-    name: Audit
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+  verify:
+    name: Verify (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: infrastructure/veil/go.mod
+          cache-dependency-path: infrastructure/**/go.sum
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --omit=peer
+      - run: node scripts/check-release-version.ts
+      - run: npm run dependencies:provision
+      - name: Run complete verification suite
+        run: npm run test:all
+      - name: Package and smoke-test native resources
+        env:
+          # Unsigned CI packages exercise local packaging; release jobs require
+          # signatures, notarization and the Windows x64 Vulkan backend.
+          UMBRATIC_LLAMA_CPU_ONLY: '1'
+        run: npm run desktop:release -- --unsigned --dir
 
-      # Lockfile-only, so no dependency install and no toolchain setup: the
-      # whole job stays under a minute. Deeper Rust/Go audits run locally
-      # with npm run supply-chain:audit before a release.
-      - name: Audit npm dependency vulnerabilities
-        run: npm audit --package-lock-only --ignore-scripts --omit=peer --audit-level=low
+  audit:
+    name: Dependency and workflow audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: infrastructure/veil/go.mod
+          cache-dependency-path: infrastructure/**/go.sum
+      - run: rustup show active-toolchain
+      - run: npm ci --ignore-scripts --omit=peer
+      - run: cargo install cargo-audit --locked --version "$(node -p 'JSON.parse(require("fs").readFileSync("supply-chain-policy.json")).cargoAuditVersion')"
+      - run: go install "golang.org/x/vuln/cmd/govulncheck@v$(node -p 'JSON.parse(require("fs").readFileSync("supply-chain-policy.json")).govulncheckVersion')"
+      - run: npm run supply-chain:audit
+      - run: npm run supply-chain:sbom
+      - name: Validate GitHub workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+
+  required:
+    name: CI required
+    if: always()
+    needs: [verify, audit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every verification job to pass
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: jq -e 'all(. == "success")' <<< "$RESULTS"

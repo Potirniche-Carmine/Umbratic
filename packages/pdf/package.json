@@ -1,12 +1,13 @@
 {
   "name": "@umbratic/pdf",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "scripts": {
     "build": "cargo build --locked --release --package umbratic-pdf",
     "test:all": "npm run typecheck && npm run test:unit",
     "test:unit": "cargo test --locked --package umbratic-pdf --all-targets",
     "typecheck": "cargo check --locked --package umbratic-pdf --all-targets"
-  }
+  },
+  "license": "MIT"
 }

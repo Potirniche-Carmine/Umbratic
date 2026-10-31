@@ -37,6 +37,9 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   );
   loadTypeScriptModule(new URL("../src/preload/preload.ts", import.meta.url), { mocks: { electron } });
   assert.equal(exposedName, "umbratic");
+  assert.equal("exportTelemetry" in exposedApi, false);
+  assert.equal("recordProductEvent" in exposedApi, false);
+  assert.equal("setResponseFeedback" in exposedApi, false);
 
   const listenerMethods = [
     "onBackendEvent",

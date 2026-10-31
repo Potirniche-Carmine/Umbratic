@@ -129,13 +129,11 @@ function sessionHarness() {
   let fail = false;
   let release;
   let wait = Promise.resolve();
-  const tokens = [];
   const identity = loadTypeScriptModule(new URL("../src/main/companyIdentity.ts", import.meta.url), {
     mocks: {
       "./companyTrust": { companyTLS: () => undefined },
       "./storage": {
         readCompanyDeviceCredential: () => credential,
-        writeUpdateFeedTokenSetting: (token) => tokens.push(token),
       },
       "./providerClient": {
         async postProviderJson(url, body) {
@@ -152,13 +150,13 @@ function sessionHarness() {
           assert.equal(crypto.verify(null, Buffer.from("umbratic-device-session-v1.test"), pair.publicKey, Buffer.from(body.signature, "base64url")), true);
           return { statusCode: 201, json: {
             session_token: `umbs_session${sessions}`, org_name: "Example",
-            expires_at: new Date(Date.now() + 900_000).toISOString(), update_token: "feed-token",
+            expires_at: new Date(Date.now() + 900_000).toISOString(),
           } };
         },
       },
     },
   });
-  return { identity, tokens, counts: () => ({ challenges, sessions }), fail: (value) => { fail = value; }, hold: () => { wait = new Promise((done) => { release = done; }); }, release: () => release() };
+  return { identity, counts: () => ({ challenges, sessions }), fail: (value) => { fail = value; }, hold: () => { wait = new Promise((done) => { release = done; }); }, release: () => release() };
 }
 
 test("concurrent status, discovery and renewal share one device challenge", async () => {
@@ -180,7 +178,7 @@ test("a failed shared exchange can be retried without refreshing the connection"
   assert.deepEqual(h.counts(), { challenges: 2, sessions: 2 });
 });
 
-test("disconnect prevents an in-flight session from restoring credentials or update tokens", async () => {
+test("disconnect prevents an in-flight session from restoring credentials", async () => {
   const h = sessionHarness();
   h.hold();
   const pending = h.identity.ensureCompanySession();
@@ -190,7 +188,6 @@ test("disconnect prevents an in-flight session from restoring credentials or upd
   h.release();
   await Promise.all([rejected, disconnect]);
   assert.equal(h.identity.currentCompanySessionToken(), "");
-  assert.deepEqual(h.tokens, []);
   await assert.rejects(h.identity.ensureCompanySession(), /disconnected/);
   assert.match(await h.identity.connectCompanySession(), /^umbs_/);
 });

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { app } from "electron";
 
+import { readRegularFileSync } from "./readFile";
 import { skillsDirectory } from "./appPaths";
 import { readHarnessProfileSetting, readSkillSettings, writeSkillSettings } from "./storage";
 import { isRecord, pathInside } from "./utils";
@@ -132,13 +133,11 @@ function checksumPath(targetPath: string): string | undefined {
     const hash = crypto.createHash("sha256");
     let totalBytes = 0;
     const addFile = (filePath: string, rootPath: string) => {
-      const fileStat = fs.statSync(filePath);
-      if (!fileStat.isFile()) return;
-      totalBytes += fileStat.size;
-      if (totalBytes > skillImportTotalByteLimit) throw new Error("skill checksum input too large");
+      const bytes = readRegularFileSync(filePath, skillImportTotalByteLimit - totalBytes);
+      totalBytes += bytes.length;
       const relative = path.relative(rootPath, filePath).replace(/\\/g, "/");
       hash.update(`file:${relative}\0`);
-      hash.update(fs.readFileSync(filePath));
+      hash.update(bytes);
       hash.update("\0");
     };
     if (stat.isFile()) {
@@ -301,10 +300,19 @@ function installSystemSkillFolder(source: string, target: string, key: string, m
     if (stat && (!stat.isFile() || stat.isSymbolicLink())) continue;
     const bundled = fs.readFileSync(from);
     const bundledChecksum = sha256Hex(bundled);
-    const onDiskChecksum = stat ? sha256Hex(fs.readFileSync(to)) : null;
+    const onDiskChecksum = stat ? sha256Hex(readRegularFileSync(to, skillImportTotalByteLimit)) : null;
     const installed = manifest.systemSkills[recordKey]?.installedChecksum;
     if (onDiskChecksum !== null && onDiskChecksum !== bundledChecksum && onDiskChecksum !== installed) continue;
-    if (onDiskChecksum !== bundledChecksum) fs.writeFileSync(to, bundled);
+    if (onDiskChecksum !== bundledChecksum) {
+      const staging = fs.mkdtempSync(path.join(target, ".install-"));
+      try {
+        const staged = path.join(staging, entry.name);
+        fs.writeFileSync(staged, bundled, { flag: "wx", mode: 0o600 });
+        fs.renameSync(staged, to);
+      } finally {
+        fs.rmSync(staging, { recursive: true, force: true });
+      }
+    }
     if (installed !== bundledChecksum) {
       manifest.systemSkills[recordKey] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
       changed = true;
@@ -321,9 +329,7 @@ export function installBundledSystemSkills(directory = skillsDirectoryPath()): s
 
 function textFileIfSafe(filePath: string, byteLimit: number): string | null {
   try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile() || stat.size > byteLimit) return null;
-    const buffer = fs.readFileSync(filePath);
+    const buffer = readRegularFileSync(filePath, byteLimit);
     if (buffer.includes(0)) return null;
     return buffer.toString("utf8");
   } catch {
@@ -659,11 +665,7 @@ function safeZipEntryName(name: string): string | null {
 }
 
 function extractZipToDirectory(zipFile: string, outputDir: string) {
-  const archiveStat = fs.lstatSync(zipFile);
-  if (archiveStat.isSymbolicLink()) throw new Error("Skill zip path must not be a symbolic link.");
-  if (!archiveStat.isFile()) throw new Error("Skill zip path must be a regular file.");
-  if (archiveStat.size > skillImportArchiveByteLimit) throw new Error("Skill import archive is too large.");
-  const data = fs.readFileSync(zipFile);
+  const data = readRegularFileSync(zipFile, skillImportArchiveByteLimit);
   let eocd = -1;
   const min = Math.max(0, data.length - 0xffff - 22);
   for (let index = data.length - 22; index >= min; index -= 1) {

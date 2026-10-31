@@ -16,7 +16,7 @@ The build uses the repository's ignored `artifacts/release-work/` on Mac and `~/
 
 Customer update keys are derived automatically from the master key. Neither master key nor signing key goes into the ZIP. Back up both files; if you already have a signing key elsewhere, put the original here before building.
 
-For an existing customer, add `--org-uid` with the value from their previous ZIP’s `entitlement.json`. Keep their purchased `--searches-per-month` allowance if applicable.
+For an existing deployment, add `--org-uid` with the value from its previous ZIP’s `entitlement.json`. Keep its configured `--searches-per-month` allowance if applicable.
 
 ## First-time Mac setup
 

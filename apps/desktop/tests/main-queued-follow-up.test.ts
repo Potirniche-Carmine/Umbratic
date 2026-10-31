@@ -76,11 +76,9 @@ function loadRuntime() {
         readTasks: () => [...tasks.values()],
         writeTasks: () => {},
         writeChat: () => {},
-        writeProductTelemetryEvent: () => {},
         readPermissionModeSetting: () => "normal",
       },
       "./chatStore": { updateChatFromTask: () => {} },
-      "./managedTelemetry": { scheduleManagedTelemetrySync: () => {} },
       "./diagnostics": { recordBackendEventDiagnostic: () => {}, recordLocalDiagnostic: () => {} },
     },
   });

@@ -191,6 +191,8 @@ func dockerRunArgs(image string, model config.ManagedModel) ([]string, error) {
 		"--ipc", "host",
 		"--mount", strings.TrimSuffix(mount.String(), "\n"),
 		"--env", "HF_HUB_OFFLINE=1", "--env", "TRANSFORMERS_OFFLINE=1",
+		"--env", "DO_NOT_TRACK=1", "--env", "VLLM_NO_USAGE_STATS=1",
+		"--env", "HF_HUB_DISABLE_TELEMETRY=1", "--env", "OTEL_SDK_DISABLED=true",
 		"-p", fmt.Sprintf("127.0.0.1:%d:%d", facts.Port, facts.Port),
 	}
 	switch os.Getenv("UMBRATIC_RUNTIME_PROFILE") {
@@ -247,7 +249,8 @@ func childEnvironment() []string {
 			values = append(values, name+"="+value)
 		}
 	}
-	return append(values, "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1")
+	return append(values, "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1",
+		"DO_NOT_TRACK=1", "VLLM_NO_USAGE_STATS=1", "HF_HUB_DISABLE_TELEMETRY=1", "OTEL_SDK_DISABLED=true")
 }
 
 func (m *ModelSupervisor) lockFor(id string) *sync.Mutex {

@@ -51,7 +51,6 @@ type RawSettings = {
   customModels?: unknown;
   localQuants?: unknown;
   automaticAppUpdates?: unknown;
-  updateFeedToken?: unknown;
 };
 
 type SettingsRow = {
@@ -532,7 +531,7 @@ function normalizedKeyBindings(value: unknown): KeyBindingSettings {
 }
 
 /**
- * Whether the app checks downloads.umbratic.ai for a newer release on its own.
+ * Whether the app checks GitHub Releases for a newer release on its own.
  * On until turned off: an installed app that never learns about a fix is the
  * worse default. Only an explicit `false` is off, so an older settings file
  * with nothing stored reads as on rather than as a choice nobody made.
@@ -545,22 +544,6 @@ export function writeAutomaticAppUpdatesSetting(value: unknown): boolean {
   const automaticAppUpdates = value !== false;
   writeRawSettings({ ...readRawSettings(), automaticAppUpdates });
   return automaticAppUpdates;
-}
-
-/**
- * The token the company server minted for this device at its last session,
- * which the update feed accepts for thirty days. Stored so an app that is
- * checking for updates before it has reached Veil still has the last one, and
- * kept out of the renderer: nothing in the product shows or asks for it.
- */
-export function readUpdateFeedTokenSetting(): string {
-  const value = readRawSettings().updateFeedToken;
-  return typeof value === "string" ? value : "";
-}
-
-export function writeUpdateFeedTokenSetting(value: string): void {
-  if (!value || value === readUpdateFeedTokenSetting()) return;
-  writeRawSettings({ ...readRawSettings(), updateFeedToken: value });
 }
 
 /**

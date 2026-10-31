@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/base64"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"umbratic-veil-console/internal/entitlement"
 )
@@ -46,5 +48,31 @@ func TestSigningKeyDoesNotReplaceInvalidFile(t *testing.T) {
 	}
 	if _, _, err := signingKey(filepath.Dir(path)); err == nil {
 		t.Fatal("directory accepted as key")
+	}
+}
+
+func TestDeploymentPolicyNeedsOnlyAdministratorSigningKey(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "entitlement.json")
+	keyPath := filepath.Join(dir, "private", "signing.key")
+	command := exec.Command("go", "run", ".", "--output", outputPath, "--private-key-file", keyPath, "--seats", "10", "--devices-per-user", "2")
+	var public bytes.Buffer
+	command.Stdout = &public
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("administrator-generated policy: %v %s", err, stderr.String())
+	}
+	document, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := strings.TrimSpace(public.String())
+	if strings.Contains(key, "\n") {
+		t.Fatal("command emitted something other than its public key")
+	}
+	payload, err := entitlement.Verify(document, key)
+	if err != nil || payload.MaxAuthorizedUsers != 10 || payload.MaxDevicesPerUser != 2 {
+		t.Fatalf("signed deployment policy: %+v %v", payload, err)
 	}
 }

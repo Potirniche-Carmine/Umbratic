@@ -463,136 +463,6 @@ func TestChatRouteHidesTemplateRegistryLoadErrors(t *testing.T) {
 	}
 }
 
-func selectiveTelemetryBody() string {
-	return `{
-		"exportedAt": "2026-01-01T00:00:00.000Z",
-		"localDiagnostics": {"total": 0, "warnings": 0, "errors": 0, "bySource": {}, "byEvent": {}},
-		"productEvents": [{
-			"id": "event-1",
-			"type": "review.opened",
-			"at": "2026-01-01T00:00:00.000Z",
-			"taskId": "task-1",
-			"data": {"scope": "task"}
-		}],
-		"tasks": [{
-			"id": "task-1",
-			"chatId": "chat-1",
-			"status": "completed",
-			"feedback": [{
-				"messageId": "assistant-1",
-				"rating": "bad",
-				"comment": "Missed the requested edge case.",
-				"conversation": [
-					{"role": "user", "content": "Fix the parser edge case.", "taskId": "task-1"},
-					{"role": "assistant", "content": "I updated the parser.", "taskId": "task-1", "messageId": "assistant-1"}
-				]
-			}],
-			"failedTools": [{
-				"id": "tool-1",
-				"toolKind": "edit",
-				"exitCode": 1,
-				"status": "validation_error",
-				"errorCode": "invalid_arguments",
-				"inputMeta": {"pathHash": "abc123", "argKeys": ["path", "edits"]},
-				"responseMeta": {"stdoutChars": 0, "stderrChars": 0, "toolResponseChars": 21, "errorMessage": "oldText was not found"}
-			}],
-			"contextTriggers": [{"threshold": 75, "estimatedTokens": 750, "contextLength": 1000}]
-		}]
-	}`
-}
-
-func TestTelemetryRouteAcceptsSelectiveBundleAndPersistsIt(t *testing.T) {
-	cfg := testConfig()
-	cfg.TelemetryStorePath = t.TempDir()
-	cfg.TelemetryRetentionDays = 14
-	modelClient := &fakeModelClient{}
-	server := NewServer(cfg, modelClient)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(selectiveTelemetryBody()))
-	req.Header.Set("Authorization", "Bearer test-token")
-	rr := httptest.NewRecorder()
-	server.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
-	}
-	var response map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	if response["acceptedTasks"] != float64(1) || response["acceptedEvents"] != float64(1) || response["stored"] != true || response["retentionDays"] != float64(14) {
-		t.Fatalf("unexpected telemetry response: %#v", response)
-	}
-	entries, err := os.ReadDir(cfg.TelemetryStorePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("expected one stored telemetry file, got %d", len(entries))
-	}
-	stored, err := os.ReadFile(cfg.TelemetryStorePath + "/" + entries[0].Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(stored), "Fix the parser edge case.") || !strings.Contains(string(stored), "oldText was not found") {
-		t.Fatalf("stored telemetry did not contain selective feedback and failure content: %s", stored)
-	}
-	if strings.Contains(string(stored), "raw secret prompt") {
-		t.Fatalf("stored telemetry contained raw prompt text: %s", stored)
-	}
-	if modelClient.req.Model != "" {
-		t.Fatalf("telemetry route unexpectedly called model: %#v", modelClient.req)
-	}
-}
-
-func TestTelemetryRouteRejectsRawPromptFields(t *testing.T) {
-	modelClient := &fakeModelClient{}
-	server := NewServer(testConfig(), modelClient)
-	body := strings.Replace(selectiveTelemetryBody(), `"id": "task-1",`, `"id": "task-1", "prompt": "raw secret prompt",`, 1)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer test-token")
-	rr := httptest.NewRecorder()
-	server.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
-	}
-	if !strings.Contains(rr.Body.String(), "raw task field") || strings.Contains(rr.Body.String(), "raw secret prompt") {
-		t.Fatalf("unexpected validation response: %s", rr.Body.String())
-	}
-	if modelClient.req.Model != "" {
-		t.Fatalf("telemetry route unexpectedly called model: %#v", modelClient.req)
-	}
-}
-
-func TestTelemetryRouteObeysAdminDisablePolicy(t *testing.T) {
-	cfg := testConfig()
-	cfg.TelemetryEnabled = false
-	cfg.TelemetryStorePath = t.TempDir()
-	modelClient := &fakeModelClient{}
-	server := NewServer(cfg, modelClient)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(selectiveTelemetryBody()))
-	req.Header.Set("Authorization", "Bearer test-token")
-	rr := httptest.NewRecorder()
-	server.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
-	}
-	entries, err := os.ReadDir(cfg.TelemetryStorePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("disabled telemetry route wrote files: %#v", entries)
-	}
-	if modelClient.req.Model != "" {
-		t.Fatalf("telemetry route unexpectedly called model: %#v", modelClient.req)
-	}
-}
-
 func TestChatRouteRejectsModelOverride(t *testing.T) {
 	modelClient := &fakeModelClient{}
 	server := NewServer(testConfig(), modelClient)
@@ -896,18 +766,12 @@ func TestChatRouteRejectsOversizedBody(t *testing.T) {
 	}
 }
 
-// A live outage produced only "model service could not be reached" with no way
-// to tell connection-refused from a hung runtime. The transport cause must
-// survive from the model client into the diagnostic detail, and the detail must
-// never reach the client payload.
-func TestClassifyModelFailureCarriesTransportDetailForDiagnosticsOnly(t *testing.T) {
+// Transport causes remain internal; the boundary exposes stable failure categories.
+func TestClassifyModelFailureReturnsSafeCategories(t *testing.T) {
 	cause := errors.New(`Post "http://127.0.0.1:8081/v1/chat/completions": dial tcp 127.0.0.1:8081: connection refused`)
 	failure := classifyModelFailure(model.ProviderError{Kind: model.ProviderFailureTransport, Cause: cause}, 0)
 	if failure.Code != "model_service_unavailable" {
 		t.Fatalf("got code %q", failure.Code)
-	}
-	if !strings.Contains(failure.Detail, "connection refused") {
-		t.Fatalf("detail must carry the transport cause, got %q", failure.Detail)
 	}
 
 	rr := httptest.NewRecorder()
@@ -917,7 +781,23 @@ func TestClassifyModelFailureCarriesTransportDetailForDiagnosticsOnly(t *testing
 	}
 
 	timedOut := classifyModelFailure(model.ProviderError{Kind: model.ProviderFailureTimeout, Cause: errors.New("context deadline exceeded")}, 0)
-	if timedOut.Code != "model_service_timeout" || !strings.Contains(timedOut.Detail, "deadline") {
-		t.Fatalf("timeout classification lost its detail: %+v", timedOut)
+	if timedOut.Code != "model_service_timeout" {
+		t.Fatalf("timeout classification changed: %+v", timedOut)
+	}
+}
+
+func TestTelemetryRouteIsAbsent(t *testing.T) {
+	server := NewServer(testConfig(), &fakeModelClient{})
+	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(`{"tasks":[]}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("telemetry route status = %d", recorder.Code)
+	}
+	for _, feature := range serverFeatures {
+		if strings.HasPrefix(feature, "telemetry.") {
+			t.Fatalf("telemetry advertised: %s", feature)
+		}
 	}
 }

@@ -8,7 +8,7 @@ Keep the shell thin and direct:
 
 - `src/renderer/` owns the React UI and presentation state.
 - `src/preload/` exposes a narrow, typed IPC surface. Do not expose general Electron, filesystem, or process primitives.
-- `src/main/` owns trusted desktop orchestration, native-process lifecycle, workspace and attachment context, permissions, review flows, event streaming, local state, telemetry redaction, and transport to the Rust runner.
+- `src/main/` owns trusted desktop orchestration, native-process lifecycle, workspace and attachment context, permissions, review flows, event streaming, local state, diagnostic redaction, and transport to the Rust runner.
 - `native/` owns only the small desktop-core command surface described by its local instructions.
 - `scripts/` owns development, build-copy, packaging, and package-verification tasks.
 

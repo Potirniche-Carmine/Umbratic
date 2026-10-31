@@ -20,7 +20,6 @@ import (
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/prompts"
 	"umbratic-veil/internal/rag"
-	"umbratic-veil/internal/telemetry"
 	"umbratic-veil/internal/templates"
 	"umbratic-veil/internal/websearch"
 )
@@ -60,10 +59,8 @@ type Server struct {
 	identity     *identity.Store
 	identityErr  error
 	identityRate *identityRateLimiter
-	// modelQuota and telemetryQuota bound how often one identity may ask for
 	// work, which is a different question from how much work runs at once.
-	modelQuota     *quotaLimiter
-	telemetryQuota *quotaLimiter
+	modelQuota *quotaLimiter
 	// webSearchQuota is separate from modelQuota on purpose: a lookup costs the
 	// company a search credit, not a generation, and research should not be able
 	// to spend the turn's chat budget.
@@ -109,7 +106,6 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 		cfg:       cfg, model: modelClient, templateData: registry, templateErr: err,
 		identityRate:   &identityRateLimiter{entries: map[string]rateEntry{}},
 		modelQuota:     newQuotaLimiter(cfg.ModelRequestsPerMinute, time.Minute),
-		telemetryQuota: newQuotaLimiter(cfg.TelemetryBundlesPerHour, time.Hour),
 		webSearchQuota: newQuotaLimiter(cfg.WebSearchRequestsPerMinute, time.Minute),
 		lifecycle:      &lifecycle{},
 		stream:         newStreamMetrics(),
@@ -131,7 +127,7 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 		if usageErr != nil {
 			// A ledger Veil cannot read is a month it cannot count, so search
 			// stays absent rather than spending an unknown amount of the pool.
-			recordWebSearchFailure("usage", usageErr)
+			recordWebSearchFailure("usage")
 		} else {
 			server.webSearch = websearch.NewClient(key, webSearchTimeout)
 			server.webSearchUsage = usage
@@ -255,7 +251,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Model work is refused while starting or draining; telemetry and control
+	// Model work is refused while starting or draining; control
 	// routes stay available so a restart is still observable.
 	switch r.URL.Path {
 	case "/api/engineering/chat", "/api/marketing/chat", "/api/sales/chat",
@@ -271,10 +267,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !s.allowQuota(w, r, s.webSearchQuota) {
-			return
-		}
-	case "/api/telemetry":
-		if !s.allowQuota(w, r, s.telemetryQuota) {
 			return
 		}
 	}
@@ -298,8 +290,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleTranscribe(w, r)
 	case "/api/web/search":
 		s.handleWebSearch(w, r)
-	case "/api/telemetry":
-		s.handleTelemetry(w, r)
 	default:
 		writeJSONError(w, http.StatusNotFound, "unknown route")
 	}
@@ -665,7 +655,7 @@ func writeIdentityError(w http.ResponseWriter, err error) {
 func isActivityProductRoute(path string) bool {
 	switch path {
 	case "/api/model/connect", "/api/model/context", "/api/models", "/api/engineering/chat", "/api/marketing/chat",
-		"/api/sales/chat", "/api/internal/context/compact", "/api/internal/orient", "/api/telemetry",
+		"/api/sales/chat", "/api/internal/context/compact", "/api/internal/orient",
 		"/api/transcribe", "/api/web/search", "/api/images/generate":
 		return true
 	default:
@@ -757,39 +747,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
-	if !s.cfg.TelemetryEnabled {
-		writeJSONError(w, http.StatusForbidden, "telemetry disabled by admin policy")
-		return
-	}
-	maxBodyBytes := s.cfg.TelemetryMaxBodyBytes
-	if maxBodyBytes <= 0 {
-		maxBodyBytes = s.cfg.MaxBodyBytes
-	}
-	bundle, raw, drops, err := telemetry.DecodeBundle(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	if err != nil {
-		if errors.Is(err, telemetry.ErrInvalidBundle) {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSONError(w, http.StatusBadRequest, "invalid telemetry request")
-		return
-	}
-	storedPath, err := telemetry.StoreBundle(s.cfg.TelemetryStorePath, raw, time.Now(), s.cfg.TelemetryRetentionDays)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "telemetry storage unavailable")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":             true,
-		"acceptedTasks":  len(bundle.Tasks),
-		"acceptedEvents": len(bundle.ProductEvents),
-		"droppedRecords": drops.Total(),
-		"retentionDays":  s.cfg.TelemetryRetentionDays,
-		"stored":         storedPath != "",
-	})
-}
-
 // defaultModelReasons is what capabilities.reasoning has always meant — can the
 // model this server answers with think — asked of the model rather than only of
 // the environment, now that local runtimes can be asked directly.
@@ -825,26 +782,9 @@ type modelFailure struct {
 	// never model output), bounded for local diagnostics. It is recorded in the
 	// VEIL_DIAGNOSTIC event only and never sent to clients — "model service
 	// could not be reached" alone proved undebuggable in a live run.
-	Detail string
 }
 
 func classifyModelFailure(err error, upstreamStatus int) modelFailure {
-	failure := classifyModelFailureKind(err, upstreamStatus)
-	if err != nil {
-		failure.Detail = boundedFailureDetail(err)
-	}
-	return failure
-}
-
-func boundedFailureDetail(err error) string {
-	detail := strings.Join(strings.Fields(err.Error()), " ")
-	if runes := []rune(detail); len(runes) > 300 {
-		return string(runes[:300])
-	}
-	return detail
-}
-
-func classifyModelFailureKind(err error, upstreamStatus int) modelFailure {
 	if upstreamStatus > 0 {
 		if upstreamStatus == http.StatusRequestEntityTooLarge {
 			return modelFailure{Status: http.StatusRequestEntityTooLarge, Code: "context_overflow_upstream", Message: "model service rejected the assembled context", UpstreamStatus: upstreamStatus}
@@ -894,11 +834,8 @@ func recordModelFailure(route prompts.Route, phase string, failure modelFailure,
 	if failure.UpstreamStatus > 0 {
 		record["upstreamStatus"] = failure.UpstreamStatus
 	}
-	if failure.Detail != "" {
-		record["detail"] = failure.Detail
-	}
 	if encoded, err := json.Marshal(record); err == nil {
-		log.Printf("VEIL_DIAGNOSTIC %s", encoded)
+		log.Printf("VEIL_DIAGNOSTIC %s", strings.ReplaceAll(strings.ReplaceAll(string(encoded), "\r", "\\r"), "\n", "\\n"))
 	}
 }
 

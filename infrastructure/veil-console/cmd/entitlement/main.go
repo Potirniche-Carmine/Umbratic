@@ -12,35 +12,26 @@ import (
 const defaultMaxDevicesPerUser = 2
 
 func main() {
-	var output, privateKeyPath, feedKeyPath, orgUID string
+	var output, privateKeyPath, orgUID string
 	var seats, devices, searchesPerMonth int
 	flag.StringVar(&output, "output", "", "signed entitlement output path")
 	flag.StringVar(&privateKeyPath, "private-key-file", "", "base64url Ed25519 signing key file")
-	flag.StringVar(&feedKeyPath, "feed-key-file", "", "base64url update-feed master key file")
 	flag.StringVar(&orgUID, "org-uid", "", "existing organization UID")
 	flag.IntVar(&seats, "seats", 0, "maximum authorized users")
 	flag.IntVar(&devices, "devices-per-user", defaultMaxDevicesPerUser, "maximum devices per user")
-	// Zero is the honest default: an organization that bought no web search.
-	flag.IntVar(&searchesPerMonth, "searches-per-month", 0, "purchased web searches per month for the whole organization")
+	// Search stays disabled until the administrator configures a budget.
+	flag.IntVar(&searchesPerMonth, "searches-per-month", 0, "maximum web searches per month for the whole organization")
 	flag.Parse()
-	if flag.NArg() != 0 || output == "" || privateKeyPath == "" || feedKeyPath == "" || seats < 1 {
-		fmt.Fprintln(os.Stderr, "usage: entitlement --output FILE --private-key-file FILE --feed-key-file FILE --seats N [--devices-per-user N] [--searches-per-month N] [--org-uid UID]")
+	if flag.NArg() != 0 || output == "" || privateKeyPath == "" || seats < 1 {
+		fmt.Fprintln(os.Stderr, "usage: entitlement --output FILE --private-key-file FILE --seats N [--devices-per-user N] [--searches-per-month N] [--org-uid UID]")
 		os.Exit(2)
 	}
-	masterKey, err := os.ReadFile(feedKeyPath)
-	if err != nil {
-		fail(err)
-	}
+	var err error
 	if orgUID == "" {
 		orgUID, err = entitlement.NewOrgUID()
 		if err != nil {
 			fail(err)
 		}
-	}
-	// Derive from the existing master before creating any release input.
-	feedKey, err := entitlement.DeriveFeedKey(string(masterKey), orgUID)
-	if err != nil {
-		fail(err)
 	}
 	key, created, err := signingKey(privateKeyPath)
 	if err != nil {
@@ -60,10 +51,8 @@ func main() {
 	if err := os.WriteFile(output, document, 0o600); err != nil {
 		fail(err)
 	}
-	// Two lines: the entitlement public key, then this organization's
-	// update-feed key. Both are build inputs for the customer binaries.
+	// The public key is a build input for this deployment's binaries.
 	fmt.Println(publicKey)
-	fmt.Println(feedKey)
 }
 
 func fail(err error) {

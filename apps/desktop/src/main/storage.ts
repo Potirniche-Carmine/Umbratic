@@ -12,7 +12,7 @@ import type {
   CapabilityProbeCategory,
   CapabilityProbeImportance,
   CapabilityProbeStatus,
-  CapabilityTelemetryProbe,
+  RunCapabilityProbe,
   ChatRecord,
   RepositoryInfo,
   RunnerToolId,
@@ -127,9 +127,9 @@ function isCapabilityProbeImportance(value: unknown): value is CapabilityProbeIm
   return value === "required" || value === "recommended" || value === "optional";
 }
 
-function normalizeStoredCapabilityProbes(value: unknown): CapabilityTelemetryProbe[] | undefined {
+function normalizeStoredCapabilityProbes(value: unknown): RunCapabilityProbe[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const probes: CapabilityTelemetryProbe[] = [];
+  const probes: RunCapabilityProbe[] = [];
   for (const item of value) {
     if (!isRecord(item)) continue;
     if (

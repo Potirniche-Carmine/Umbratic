@@ -1,7 +1,6 @@
 import type { ReasoningEffort } from "./modelReasoning";
 export { REASONING_EFFORTS, DEFAULT_REASONING_EFFORT, isReasoningEffort, resolveReasoningEffort } from "./modelReasoning";
 export type { ReasoningEffort } from "./modelReasoning";
-import type { ResponseFeedbackReason, ResponseRating } from "./responseFeedback";
 import type { BackendUiEvent } from "./backendEvents";
 import type { DocumentReviewSnapshot } from "./documentReview";
 import type { LocalCatalogModel, LocalCatalogModelKind, ModelDownloadEvent } from "./localModels";
@@ -238,15 +237,6 @@ export type LocalDiagnosticInfo = {
   entries: number;
 };
 
-export type TelemetryPolicyInfo = {
-  mode: "developer_toggle" | "managed_required" | "managed_disabled";
-  localEnabled: boolean;
-  syncEnabled: boolean;
-  retentionDays: number;
-  exportFormat: "redacted-json";
-  storage: "company-managed-telemetry" | "task-event-snapshots";
-};
-
 export type BackendDiagnostics = {
   runnerName: string;
   runnerVersion: string;
@@ -259,7 +249,6 @@ export type BackendDiagnostics = {
   commandClassifier: "enabled";
   runnerDiagnosticsDirectory: string;
   localLogs: LocalDiagnosticInfo;
-  telemetry: TelemetryPolicyInfo;
   runtimes: {
     python: {
       runtimeVersion: string;
@@ -548,7 +537,7 @@ export type StoredKeyBinding = {
 export type KeyBindingSettings = Record<string, StoredKeyBinding>;
 
 /**
- * Where the installed app stands against the release feed at downloads.umbratic.ai.
+ * Where the installed app stands against the release feed on GitHub Releases.
  *
  * `automatic` is the one setting: whether the app checks on its own. Off means
  * the feed is never reached at all — there is no on-demand check to override
@@ -574,7 +563,6 @@ export type AppUpdateStatus = {
      * token. Distinct from `failed` because nothing is broken and nobody at
      * this keyboard can act on it.
      */
-    | { phase: "unlicensed" }
     | { phase: "downloading"; latestVersion: string; percent: number }
     | { phase: "ready"; latestVersion: string }
     | { phase: "failed"; message: string };
@@ -789,22 +777,10 @@ export type DesktopApi = {
     settings: PublicModelEndpointSettings;
     status: BackendStatus;
   }>;
-  exportTelemetry(): Promise<
-    { ok: true; path: string } | { ok: false; message: string }
-  >;
   exportLocalDiagnostics(): Promise<
     { ok: true; path: string } | { ok: false; message: string }
   >;
   clearLocalDiagnostics(): Promise<LocalDiagnosticInfo>;
-  recordProductEvent(input: {
-    type: "review.opened" | "ide.selected";
-    taskId?: string;
-    repositoryId?: string;
-    scope?: "task" | "worktree";
-    target?: "task" | "project";
-    ideId?: string;
-    surface?: "composer" | "review";
-  }): Promise<void>;
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
   saveSkillSettings(input: Record<string, boolean>): Promise<{
     skills: SkillInfo[];
@@ -906,13 +882,6 @@ export type DesktopApi = {
   undoTaskChanges(input: { taskId: string; path?: string }): Promise<TaskInfo | null>;
   keepWorktree(input: { taskId: string }): Promise<void>;
   cancelTask(input: { taskId: string }): Promise<void>;
-  setResponseFeedback(input: {
-    taskId: string;
-    messageId: string;
-    rating: ResponseRating | null;
-    reason?: ResponseFeedbackReason;
-    comment?: string;
-  }): Promise<void>;
   setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
   /**
    * Opens a link from a chat reply in the user's browser. The URL comes from

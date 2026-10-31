@@ -312,14 +312,7 @@ let previewLocalMtp = true;
       commandClassifier: "enabled",
       runnerDiagnosticsDirectory: "Umbratic/logs/runner",
       localLogs: { bytes: 0, entries: 0 },
-      telemetry: {
-        mode: readPreviewEndpointSettings().mode === "local" ? "managed_disabled" : "managed_required",
-        localEnabled: false,
-        syncEnabled: readPreviewEndpointSettings().mode === "server",
-        retentionDays: readPreviewEndpointSettings().mode === "server" ? 30 : 0,
-        exportFormat: "redacted-json",
-        storage: readPreviewEndpointSettings().mode === "server" ? "company-managed-telemetry" : "task-event-snapshots",
-      },
+
       runtimes: {
         python: {
           runtimeVersion: "python-uv-venv-1",
@@ -462,10 +455,8 @@ let previewLocalMtp = true;
       status: await previewApi.getBackendStatus(),
     };
   },
-  exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
   exportLocalDiagnostics: async () => ({ ok: false, message: "Electron preload is not available." }),
   clearLocalDiagnostics: async () => ({ bytes: 0, entries: 0 }),
-  recordProductEvent: async () => undefined,
   listSkills: async () => ({ skills: previewSkills, directory: "~/.umbratic/skills" }),
   saveSkillSettings: async (input) => {
     previewSkills = previewSkills.map((skill) => ({ ...skill, enabled: input[skill.id] ?? skill.enabled }));
@@ -505,7 +496,6 @@ let previewLocalMtp = true;
   undoTaskChanges: async () => null,
   keepWorktree: async () => undefined,
   cancelTask: async () => undefined,
-  setResponseFeedback: async () => undefined,
   setWindowChromeTheme: async () => ({ ok: true }),
   // The preview has no main process to hand a URL to, so a link click is a
   // no-op rather than a broken promise.

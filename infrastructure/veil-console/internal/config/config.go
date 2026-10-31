@@ -307,7 +307,6 @@ func (v Veil) Environment(veilAddress, token string) []string {
 		"VEIL_MODEL_TIMEOUT=" + v.ModelTimeout.String(),
 		"VEIL_REQUEST_TIMEOUT=" + v.RequestTimeout.String(),
 		"VEIL_MAX_BODY_BYTES=" + strconv.FormatInt(v.MaxBodyBytes, 10),
-		"VEIL_TELEMETRY_ENABLED=false",
 	}
 	if v.ThinkingTokenBudget != nil {
 		values = append(values, "VEIL_THINKING_TOKEN_BUDGET="+strconv.Itoa(*v.ThinkingTokenBudget))

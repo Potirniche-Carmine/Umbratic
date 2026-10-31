@@ -19,9 +19,6 @@ var serverFeatures = []string{
 	"chat.harness_bucket_hint",
 	// Unknown body fields on product routes are stripped and counted.
 	"chat.tolerant_body",
-	// Telemetry accepts any event type and drops unreadable records one at a
-	// time instead of rejecting the bundle.
-	"telemetry.open_vocabulary",
 	// The orient classifier accepts previousResponse as carried context.
 	"orient.previous_response",
 	// GET /api/models lists the models this Veil routes to, with live

@@ -20,17 +20,7 @@ test("desktop policy identifies generated runtime artifacts without creating pro
   assert.equal("runtimeProfileForPrompt" in policy, false);
 });
 
-test("local mode disables telemetry while server mode keeps managed redacted sync", () => {
-  const local = policy.telemetryPolicyForMode("local");
-  const server = policy.telemetryPolicyForMode("server");
 
-  assert.equal(local.mode, "managed_disabled");
-  assert.equal(local.syncEnabled, false);
-  assert.equal(local.storage, "task-event-snapshots");
-  assert.equal(server.mode, "managed_required");
-  assert.equal(server.syncEnabled, true);
-  assert.equal(server.storage, "company-managed-telemetry");
-});
 
 test("desktop command classifier blocks unsafe branches and allows expected tooling", () => {
   const cwd = path.join(os.tmpdir(), "umbratic-desktop-policy");

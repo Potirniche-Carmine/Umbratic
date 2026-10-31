@@ -28,6 +28,7 @@ function run(title: string, command: string[]) {
   }
 }
 
+run("Checking release versions", [path.join(root, "scripts", "check-release-version.ts")]);
 run("Building Go services", [path.join(root, "scripts", "build-go-services.ts")]);
 run("Packaging", [npm, "--workspace", "@umbratic/desktop", "run", "package", "--", ...args]);
 run("Verifying the package", [npm, "--workspace", "@umbratic/desktop", "run", "verify:package"]);

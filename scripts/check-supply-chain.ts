@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
@@ -162,6 +163,26 @@ compareExactSet(
   supplyChainPolicy.allowedNpmPlatformPackages,
 );
 
+// A reviewed local patch is pinned by its complete file manifest, so neither
+// source edits nor additional executable files can silently bypass registry pins.
+for (const vendored of supplyChainPolicy.reviewedVendoredCargoPackages ?? []) {
+  const directory = path.resolve(root, vendored.path);
+  const sums = fs.readFileSync(path.join(directory, "SHA256SUMS.json"));
+  if (crypto.createHash("sha256").update(sums).digest("hex") !== vendored.manifestSha256) {
+    fail(`Vendored Cargo package ${vendored.name} checksum manifest changed without review.`);
+  }
+  const checksums = JSON.parse(sums.toString("utf8"));
+  const files = fs.readdirSync(directory, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.relative(directory, path.join(entry.parentPath, entry.name)).replaceAll("\\", "/"))
+    .filter((name) => name !== "SHA256SUMS.json");
+  compareExactSet(`Vendored ${vendored.name} file`, files, Object.keys(checksums));
+  for (const file of files) {
+    const digest = crypto.createHash("sha256").update(fs.readFileSync(path.join(directory, file))).digest("hex");
+    if (digest !== checksums[file]) fail(`Vendored ${vendored.name} file ${file} changed without review.`);
+  }
+}
+
 const cargoLock = fs.readFileSync(path.join(root, "Cargo.lock"), "utf8");
 for (const source of cargoLock.matchAll(/^source = "([^"]+)"$/gm)) {
   if (source[1] !== "registry+https://github.com/rust-lang/crates.io-index") {
@@ -189,6 +210,14 @@ if (cargoMetadata.error || cargoMetadata.status !== 0) {
   fail(`Unable to validate locked Cargo metadata: ${cargoMetadata.error?.message ?? cargoMetadata.stderr.trim()}`);
 } else {
   const metadata = JSON.parse(cargoMetadata.stdout);
+  const workspacePackages = new Set(metadata.workspace_members);
+  for (const entry of metadata.packages.filter((value) => !value.source && !workspacePackages.has(value.id))) {
+    const reviewed = (supplyChainPolicy.reviewedVendoredCargoPackages ?? []).some((value) => (
+      value.name === entry.name && value.version === entry.version
+      && path.resolve(root, value.path, "Cargo.toml") === entry.manifest_path
+    ));
+    if (!reviewed) fail(`Cargo local package ${entry.name}@${entry.version} is not a reviewed source patch.`);
+  }
   const allowedLicenses = new Set(supplyChainPolicy.allowedCargoLicenseExpressions ?? []);
   for (const packageMetadata of metadata.packages ?? []) {
     if (!packageMetadata.source) continue;

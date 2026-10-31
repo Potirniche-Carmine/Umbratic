@@ -72,9 +72,12 @@ maybe("artifact preview reports a missing file rather than throwing", async () =
   }
 });
 
-maybe("artifact preview rejects symlinked and oversized documents", async () => {
+maybe("artifact preview rejects symlinked and oversized documents", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-artifact-preview-"));
-  const outside = path.join(os.tmpdir(), `umbratic-artifact-preview-outside-${process.pid}.docx`);
+  const outsideDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-artifact-preview-outside-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(outsideDirectory, { recursive: true, force: true }));
+  const outside = path.join(outsideDirectory, "outside.docx");
   const absoluteDocument = path.join(root, documentPath);
   fs.mkdirSync(path.dirname(absoluteDocument), { recursive: true });
   fs.writeFileSync(outside, "docx", "utf8");

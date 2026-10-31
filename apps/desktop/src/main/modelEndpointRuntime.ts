@@ -1,10 +1,9 @@
-import { configuredEndpointRoute, endpointHealthRoute, endpointRequestHeaders, type endpointProvider } from "./endpointConfig";
+import { endpointHealthRoute, endpointRequestHeaders, type endpointProvider } from "./endpointConfig";
 import { getProviderJson } from "./providerClient";
 import { readContextLengthSetting } from "./storage";
 import type { LocalModelInfo, ServiceStatus } from "./types";
 import { probeVeilContextLength } from "./veilContext";
 import { parseVeilFeatures } from "./veilFeatures";
-import type { TelemetryUploadEndpoint } from "./telemetrySync";
 
 type EndpointProvider = ReturnType<typeof endpointProvider>;
 
@@ -15,14 +14,6 @@ export async function modelWithFreshContextLength(selected: LocalModelInfo, prov
     mtls: provider.mtls,
   });
   return { ...selected, contextLength: detected ?? readContextLengthSetting() };
-}
-
-export function telemetryUploadEndpoint(provider: EndpointProvider): TelemetryUploadEndpoint {
-  return {
-    url: configuredEndpointRoute(provider.baseUrl, "/api/telemetry"),
-    headers: endpointRequestHeaders(provider),
-    mtls: provider.mtls,
-  };
 }
 
 export async function checkEndpointHealth(provider: EndpointProvider): Promise<{

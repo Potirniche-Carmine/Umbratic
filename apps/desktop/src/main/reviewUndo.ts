@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { assertUndoFileUnchanged } from "./checkpoints/undo";
 import { assertFolderUndoBaseline, restoreTurnCheckpointFiles, UNDO_UNSAFE_NO_CHECKPOINT } from "./checkpoints/service";
-import { getTask, missingSnapshotValue, publicTask, recordProductTelemetry, saveTask } from "./mainRuntime";
+import { getTask, missingSnapshotValue, publicTask, saveTask } from "./mainRuntime";
 import { isBlockedPath, isGeneratedRuntimePath } from "./policy";
 import { folderReviewFiles, gitReviewFiles, refreshReview } from "./reviewFiles";
 import type { TaskInfo, TaskRecord } from "./types";
@@ -64,7 +64,6 @@ export async function undoTaskChanges(input: unknown): Promise<TaskInfo> {
       for (const restore of restores) restore();
     }
     for (const file of files) delete task.undoFileHashes?.[file];
-    recordProductTelemetry("task.undone", { taskId: task.id, chatId: task.chatId, repositoryId: task.repositoryId });
     await refreshReview(task, "task");
     saveTask(task);
     return publicTask(task);

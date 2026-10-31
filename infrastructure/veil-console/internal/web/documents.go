@@ -105,7 +105,7 @@ func (s *Server) documentsUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	data := make([]byte, 0, header.Size)
+	data := make([]byte, 0, 32<<10)
 	buffer := make([]byte, 32<<10)
 	for len(data) <= extract.MaxFileBytes {
 		read, readErr := file.Read(buffer)

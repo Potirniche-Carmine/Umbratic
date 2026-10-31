@@ -1,4 +1,4 @@
-import * as fs from "node:fs";
+import { readRegularFileSync } from "./readFile";
 import * as path from "node:path";
 
 import { estimateAttachmentTextTokens } from "../shared/contextWindow";
@@ -9,9 +9,7 @@ const chatAttachmentByteLimit = 25 * 1024 * 1024;
 
 export function readAttachmentTextIfSafe(filePath: string): string | null {
   try {
-    const stat = fs.lstatSync(filePath);
-    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > chatAttachmentByteLimit) return null;
-    const buffer = fs.readFileSync(filePath);
+    const buffer = readRegularFileSync(filePath, chatAttachmentByteLimit);
     if (buffer.includes(0)) return null;
     return buffer.toString("utf8");
   } catch {

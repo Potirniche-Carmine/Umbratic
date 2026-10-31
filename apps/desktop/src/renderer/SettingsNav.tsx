@@ -1,7 +1,7 @@
 import { BarChart3, Brain, Info, Image, Keyboard, Mic, Server, Settings2, Sparkles, Type, User } from "lucide-react";
 
 /** The sections of the settings dialog, in the order they are shown. */
-export type SettingsTab = "general" | "account" | "remote" | "harness" | "appearance" | "image" | "voice" | "keyboard" | "skills" | "telemetry" | "about";
+export type SettingsTab = "general" | "account" | "remote" | "harness" | "appearance" | "image" | "voice" | "keyboard" | "skills" | "diagnostics" | "about";
 
 const sections: Array<{ id: SettingsTab; label: string; icon: typeof User }> = [
   { id: "general", label: "General", icon: Settings2 },
@@ -14,7 +14,7 @@ const sections: Array<{ id: SettingsTab; label: string; icon: typeof User }> = [
   // Beside Voice, which is where the one chord it documents comes from.
   { id: "keyboard", label: "Keyboard", icon: Keyboard },
   { id: "skills", label: "Skills", icon: Sparkles },
-  { id: "telemetry", label: "Telemetry", icon: BarChart3 },
+  { id: "diagnostics", label: "Privacy & logs", icon: BarChart3 },
   { id: "about", label: "About", icon: Info },
 ];
 

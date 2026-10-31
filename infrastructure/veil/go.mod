@@ -1,3 +1,3 @@
 module umbratic-veil
 
-go 1.26.6
+go 1.26.10

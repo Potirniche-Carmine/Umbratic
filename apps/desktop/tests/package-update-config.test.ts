@@ -26,8 +26,10 @@ test("directory packages include the resolved update feed and Windows publisher 
     };
     await afterPack({ packager, appOutDir: root, arch: 3, targets: [] });
     const written = load(await fs.readFile(path.join(root, "app-update.yml"), "utf8"));
-    assert.equal(written.provider, "generic");
-    assert.equal(written.url, "https://downloads.umbratic.ai/releases");
+    assert.equal(written.provider, "github");
+    assert.equal(written.owner, "Potirniche-Carmine");
+    assert.equal(written.repo, "Umbratic");
+    assert.equal(written.private, undefined);
     assert.equal(written.updaterCacheDirName, appInfo.updaterCacheDirName);
     assert.deepEqual(written.publisherName, platform === Platform.WINDOWS ? ["Umbratic Publisher"] : undefined);
   }

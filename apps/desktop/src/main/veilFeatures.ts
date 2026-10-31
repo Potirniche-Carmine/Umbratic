@@ -17,7 +17,6 @@ export const veilFeature = {
   toolsBoundsOnly: "tools.bounds_only",
   harnessBucketHint: "chat.harness_bucket_hint",
   tolerantBody: "chat.tolerant_body",
-  telemetryOpenVocabulary: "telemetry.open_vocabulary",
   orientPreviousResponse: "orient.previous_response",
   /**
    * The server retrieves company documents for the request's route and injects

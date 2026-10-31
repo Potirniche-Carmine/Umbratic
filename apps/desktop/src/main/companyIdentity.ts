@@ -4,14 +4,7 @@ import * as os from "node:os";
 
 import type { EndpointMtlsConfig } from "./config";
 import { postProviderJson } from "./providerClient";
-import {
-  assertCompanyCredentialStorageAvailable,
-  clearCompanyDeviceCredential,
-  companyConnectionStatus,
-  readCompanyDeviceCredential,
-  writeCompanyDeviceCredential,
-  writeUpdateFeedTokenSetting,
-} from "./storage";
+import { assertCompanyCredentialStorageAvailable, clearCompanyDeviceCredential, companyConnectionStatus, readCompanyDeviceCredential, writeCompanyDeviceCredential } from "./storage";
 import type { CompanyDeviceCredential } from "./companyCredentialStorage";
 import { isRecord } from "./utils";
 
@@ -200,7 +193,6 @@ async function createCompanySession(transport: TransportOptions, generation: num
   // thirty days. Collecting it here is the whole of the app's part in it —
   // nothing asks the user for a key, and a company that stops running Veil
   // simply stops receiving new ones.
-  if (typeof session.update_token === "string") writeUpdateFeedTokenSetting(session.update_token);
   if (credential.orgName !== orgName) {
     writeCompanyDeviceCredential({ ...credential, orgName });
   }

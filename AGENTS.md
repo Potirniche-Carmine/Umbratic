@@ -39,6 +39,7 @@ Administrator browser -> Veil Console -> supervised Veil process
 ```
 
 - Renderer: presentation only. No privileged filesystem or process access.
+- No telemetry: do not add product analytics, response-rating collection, diagnostic uploads, or telemetry ingestion. Local redacted diagnostics and operator-owned runtime counters are operational state, not reporting to Umbratic.
 - Electron main: orchestration, IPC, permissions, local product state, runner/Veil lifecycle.
 - Runner: workspace tools, policy, execution, session/context, authenticated HTTP/SSE.
 - Veil: all protected model-facing behavior. Desktop and runner never call Ollama, vLLM, or another runtime directly. Choosing among the models Veil publishes is a product route choice, not a runtime decision: the list comes from Veil and the id means whatever Veil says it means.
@@ -49,7 +50,7 @@ Administrator browser -> Veil Console -> supervised Veil process
 
 Veil is released independently of the harness that calls it. The contract between them:
 
-- **Veil rejects on bounds and privacy only, never vocabulary.** Size caps, count caps, well-formedness, and the privacy deny-list are enforced. Unknown tool-schema keywords, unknown skill fields, unknown `harness_bucket` values, unknown telemetry event types, and unknown body fields are accepted — stripped or defaulted and counted, never rejected.
+- **Veil rejects on bounds and privacy only, never vocabulary.** Size caps, count caps, well-formedness, and the privacy deny-list are enforced. Unknown tool-schema keywords, unknown skill fields, unknown `harness_bucket` values, and unknown body fields are accepted — stripped or defaulted and counted, never rejected.
 - **Harness changes are additive.** A newer harness may send fields an older Veil has never seen; that request must still succeed.
 - **Capability discovery is by feature name, never by version.** `/api/health` returns `features: []string`. Clients gate server-cooperation features on membership in that list. A missing field means "no features"; a 404 means the capability is absent.
 - **A "major shift" — transport or auth change — is a coordinated server release**, not a field addition. Only these justify breaking older harnesses.

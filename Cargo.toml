@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-license = "UNLICENSED"
+license = "MIT"
 rust-version = "1.96"
 
 [profile.release]
@@ -14,3 +14,6 @@ opt-level = 3
 # PDF parsing runs inside catch_unwind, including when linked into the runner.
 panic = "unwind"
 strip = "symbols"
+
+[patch.crates-io]
+umya-spreadsheet = { path = "third_party/umya-spreadsheet" }

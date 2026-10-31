@@ -3,15 +3,7 @@ import * as path from "node:path";
 
 import { configuredEndpointRoute, veilManagedModelId } from "./endpointConfig";
 import { isRunnerToolId } from "./toolSettings";
-import type {
-  CommandClass,
-  LocalModelInfo,
-  LocalProviderId,
-  ModelEndpointMode,
-  PermissionMode,
-  RuntimeDiagnostics,
-  TelemetryPolicyInfo,
-} from "./types";
+import type { CommandClass, LocalModelInfo, LocalProviderId, PermissionMode, RuntimeDiagnostics } from "./types";
 import { isRecord, normalizeRelativePath, pathInside } from "./utils";
 export { isLocalhostUrl } from "./utils";
 
@@ -23,28 +15,6 @@ export const umbraticRunnerContractVersion = "umbratic-runner-1";
 export const companyEndpointProviderId: LocalProviderId = "company-endpoint";
 export const pythonRuntimeVersion = "python-uv-venv-1";
 export const cmakeRuntimeVersion = "cmake-umbratic-build-1";
-
-export const telemetryPolicyInfo: TelemetryPolicyInfo = {
-  mode: "managed_required",
-  localEnabled: false,
-  syncEnabled: true,
-  retentionDays: 30,
-  exportFormat: "redacted-json",
-  storage: "company-managed-telemetry",
-};
-
-export const localTelemetryPolicyInfo: TelemetryPolicyInfo = {
-  mode: "managed_disabled",
-  localEnabled: false,
-  syncEnabled: false,
-  retentionDays: 0,
-  exportFormat: "redacted-json",
-  storage: "task-event-snapshots",
-};
-
-export function telemetryPolicyForMode(mode: ModelEndpointMode): TelemetryPolicyInfo {
-  return mode === "local" ? localTelemetryPolicyInfo : telemetryPolicyInfo;
-}
 
 const generatedRuntimePrefixes = [
   ".umbratic/runtime/",

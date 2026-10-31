@@ -5,12 +5,18 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    versioning-strategy: increase-if-necessary
+    versioning-strategy: increase
+    groups:
+      npm-routine:
+        update-types: [minor, patch]
     cooldown:
       default-days: 14
 
   - package-ecosystem: cargo
     directory: /
+    groups:
+      rust-routine:
+        update-types: [minor, patch]
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -25,8 +31,22 @@ updates:
     cooldown:
       default-days: 14
 
+  - package-ecosystem: gomod
+    directory: /infrastructure/veil-console
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      go-routine:
+        update-types: [minor, patch]
+    cooldown:
+      default-days: 14
+
   - package-ecosystem: github-actions
     directory: /
+    groups:
+      actions-routine:
+        patterns: ["*"]
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

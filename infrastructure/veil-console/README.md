@@ -2,9 +2,9 @@
 
 Local administration for Veil: models, employees, documents, and service controls.
 
-- **Customer:** [Server quickstart](../../docs/guides/deploy-customer.md)
-- **Release team:** [Build a customer ZIP](../../docs/guides/release-server.md)
-- **Administrator:** [Restart, redeploy, backup, recovery](../../docs/guides/operate-server.md)
+- **Self-hosting:** [Server quickstart](../../docs/guides/deploy-customer.md)
+- **Build from source:** [Build a server ZIP](../../docs/guides/release-server.md)
+- **Administrator:** [State locations and backups](../../docs/reference/storage.md)
 
 For development, run `npm run veil-console:dev` from the repository root. Console opens on `http://127.0.0.1:8177`. The terminal prints the first owner setup code. Managed deployments issue that code privately after readiness checks. A model is not required to initialize Veil or administer employee access.
 

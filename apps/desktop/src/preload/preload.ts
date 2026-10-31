@@ -15,7 +15,6 @@ import type {
   RemoteConnectionDraft,
   WorkspaceIndexEvent,
 } from "../shared/desktopApi";
-import type { ResponseFeedbackReason, ResponseRating } from "../shared/responseFeedback";
 
 type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string };
 
@@ -156,18 +155,8 @@ const umbraticApi = {
   connectCompanyConnection: () => invoke("umbratic:connect-company-connection"),
   disconnectCompanySession: () => invoke("umbratic:disconnect-company-session"),
   disconnectCompanyConnection: () => invoke("umbratic:disconnect-company-connection"),
-  exportTelemetry: () => invoke("umbratic:export-telemetry"),
   exportLocalDiagnostics: () => invoke("umbratic:export-local-diagnostics"),
   clearLocalDiagnostics: () => invoke("umbratic:clear-local-diagnostics"),
-  recordProductEvent: (input: {
-    type: "review.opened" | "ide.selected";
-    taskId?: string;
-    repositoryId?: string;
-    scope?: "task" | "worktree";
-    target?: "task" | "project";
-    ideId?: string;
-    surface?: "composer" | "review";
-  }) => invoke("umbratic:record-product-event", input),
   listSkills: () => invoke("umbratic:list-skills"),
   saveSkillSettings: (input: Record<string, boolean>) => invoke("umbratic:save-skill-settings", input),
   openSkillsFolder: () => invoke("umbratic:open-skills-folder"),
@@ -211,8 +200,6 @@ const umbraticApi = {
   undoTaskChanges: (input: { taskId: string; path?: string }) => invoke("umbratic:undo-task-changes", input),
   keepWorktree: (input: { taskId: string }) => invoke("umbratic:keep-worktree", input),
   cancelTask: (input: { taskId: string }) => invoke("umbratic:cancel-task", input),
-  setResponseFeedback: (input: { taskId: string; messageId: string; rating: ResponseRating | null; reason?: ResponseFeedbackReason; comment?: string }) =>
-    invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => invoke("umbratic:set-window-chrome-theme", theme),
   openExternal: (input: { url: string }) => invoke("umbratic:open-external", input),
   requestMicrophoneAccess: () => invoke("umbratic:request-microphone-access", undefined),

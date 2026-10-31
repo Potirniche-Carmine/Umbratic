@@ -1,21 +1,35 @@
 # Umbratic
 
-Umbratic is a private AI workbench for teams running local or company-managed model infrastructure. The desktop app talks to a local runner for workspace tools, and the runner talks to Veil, the authenticated model boundary in front of the model runtime: an app-managed llama.cpp sidecar in local mode, or Console-managed vLLM processes in server mode.
+An open-source AI harness for working with code, files, and documents. Run models on your computer or connect to a Veil server on your own infrastructure.
 
-Umbratic is not a public connector platform. The supported harness surface is intentionally small: local workspace tools, local skills, Veil-owned prompts, worktree review, approval flows, and redacted operational telemetry retained on company-managed servers.
+[Download the desktop app](https://github.com/Potirniche-Carmine/Umbratic/releases/latest) · [Website](https://umbratic.ai) · [Documentation](docs/README.md) · [Report an issue](https://github.com/Potirniche-Carmine/Umbratic/issues)
 
-## Project Structure
+## What you can do
 
-- `apps/desktop/` - Electron/Vite/React TypeScript shell plus the native Rust desktop core in `native/`.
-- `packages/runner/` - native Rust runner with the fixed workspace tool loop.
-- `infrastructure/veil/` - Go service that owns auth, protected prompts, route policy, model configuration, and runtime calls.
+- Search and edit workspace files, run commands, and work with code in Git worktrees.
+- Use built-in skills for documents, spreadsheets, presentations, PDFs, and other tasks, or add local skills.
+- Review code changes and document drafts, give feedback, and control actions through permissions and approvals.
+- Run local inference through the bundled Veil gateway, or enroll a device with a company-managed Veil server.
 
-## Getting Started
+## Privacy
 
-Install the exact Node.js and Rust versions declared by `.nvmrc` and
-`rust-toolchain.toml`, plus Go 1.26.5. Install only the locked JavaScript and
-Rust dependencies, then explicitly provision Electron's checksum-verified
-runtime:
+Umbratic has no usage analytics or automatic telemetry uploads. Task history and diagnostic logs stay on your device; you can export logs when troubleshooting.
+
+Local mode runs inference on your computer. Company server mode sends model requests to the Veil server you configure, where the administrator controls access, runtime infrastructure, and server logs. That deployment determines its own retention policy.
+
+Model and runtime downloads, application release checks, server enrollment, and explicitly used web search require network access. Commands you approve may also use the network. See [storage locations](docs/reference/storage.md) for local and server state.
+
+## Getting started
+
+Download an available macOS or Windows build from [GitHub Releases](https://github.com/Potirniche-Carmine/Umbratic/releases/latest). Local mode is the first-run default. Choose a model and provision its runtime in the app; the download size and hardware requirements depend on the model.
+
+For shared infrastructure, follow the [self-hosted server guide](docs/guides/deploy-customer.md). An administrator runs Veil Console and Veil, adds models, and provides an enrollment code. Select **Company server** in Settings to enroll your device.
+
+## Build from source
+
+Install Node.js and npm at the versions in [package.json](package.json), Rust from [rust-toolchain.toml](rust-toolchain.toml), and Go 1.26.5. Platform builds also require the native toolchain for that operating system.
+
+Install locked dependencies and explicitly provision the checksum-verified Electron runtime:
 
 ```sh
 npm ci --ignore-scripts
@@ -23,61 +37,61 @@ cargo fetch --locked
 npm run dependencies:provision
 ```
 
-Normal development and build commands do not download the Electron runtime.
-Run the explicit provisioning command again after an approved Electron update.
-
-Run the desktop app in development:
+Start the desktop app:
 
 ```sh
 npm run desktop:dev
 ```
 
-Build the shippable application for the machine you are on. This compiles every
-binary, bundles Veil into the app, and writes the installers and the
-no-installer builds to `target/release/desktop`:
+Build for the machine you are on:
 
 ```sh
 npm run desktop:release
 ```
 
-On Windows this produces `Umbratic-<version>-<arch>.exe` (installer). On macOS
-it produces `Umbratic-<version>.dmg` and `Umbratic-<version>.zip`, which unzips
-to `Umbratic.app`. Each build runs on its own platform; electron-builder cannot
-produce a macOS app from Windows or the reverse. Signing, notarization, and
-publishing to `downloads.umbratic.ai` — where installed apps look for updates
-— are covered in [docs/guides/release-desktop.md](docs/guides/release-desktop.md).
+Build outputs go to `target/release/desktop`. Each operating system is built on that platform. Packaged applications include Veil; users do not need to start it separately or create a Veil `.env` file. Model weights and inference runtimes are provisioned separately.
 
-Both carry their own Veil binary, so a packaged app runs with no install script
-and no separate Veil process to start.
+See [desktop releases](docs/guides/release-desktop.md) for signing, packaging, and GitHub publication, and [supply-chain rules](docs/reference/supply-chain.md) for dependency updates, audits, and SBOMs.
 
-Local is the first-run default, and you can switch between Local and Company
-server in Settings. In Local mode the desktop owns the Veil process and supplies
-its configuration at launch. Packaged users do not need a Veil `.env` file.
+## Architecture
 
-In Company server mode, an administrator creates an assigned user in Veil Console
-and gives the user one Enrollment code. The desktop uses the code once to enroll
-one device. It then uses a device key and short sessions. A shared company bearer
-token cannot access chat or telemetry.
+```text
+Desktop UI → Electron main → Rust runner → Veil → model runtime
+                    ↓
+            Rust file search
 
-See [`docs/guides/deploy-customer.md`](docs/guides/deploy-customer.md) to build
-a customer release and install it, and
-[`docs/guides/operate-server.md`](docs/guides/operate-server.md) for entitlement
-changes, backup, and recovery.
-
-See [`docs/reference/storage.md`](docs/reference/storage.md) for desktop and
-server installation, state, cache, and log locations.
-
-Run Veil by itself for server development:
-
-```sh
-npm run veil:dev
+Administrator browser → Veil Console → Veil + managed model processes
 ```
 
-Run the full test suite:
+| Path | Purpose |
+| --- | --- |
+| `apps/desktop/` | Electron, React, and TypeScript app; Rust file-search helper in `native/` |
+| `packages/runner/` | Rust workspace tools, permissions, task execution, and context |
+| `packages/code-index/` | Workspace graph producer |
+| `packages/pdf/` | PDF text extraction |
+| `infrastructure/veil/` | Model gateway, authentication, prompts, routing, and runtime calls |
+| `infrastructure/veil-console/` | Self-hosted administration and service supervision |
+| `scripts/` | Build, release, verification, and supply-chain tooling |
+
+The renderer handles presentation. Privileged file and process access stays in Electron main and the runner. Model calls pass through Veil in both local and server modes.
+
+## Development
+
+Run the full verification suite before submitting code changes:
 
 ```sh
 npm run test:all
 ```
 
-Dependency update, audit, runtime provisioning, and SBOM rules are documented in
-[`docs/reference/supply-chain.md`](docs/reference/supply-chain.md).
+Run Veil or Veil Console separately for server development:
+
+```sh
+npm run veil:dev
+npm run veil-console:dev
+```
+
+Read [AGENTS.md](AGENTS.md) for repository conventions and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance.
+
+## License
+
+Umbratic is released under the [MIT License](LICENSE). Third-party dependencies, model weights, and inference runtimes retain their own licenses.

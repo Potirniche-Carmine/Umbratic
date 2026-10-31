@@ -31,7 +31,6 @@ GET  /api/models
 POST /api/engineering/chat
 POST /api/marketing/chat
 POST /api/sales/chat
-POST /api/telemetry
 
 POST /api/enrollment/enroll
 POST /api/session/challenge
@@ -171,13 +170,8 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | `VEIL_MAX_CONCURRENT_REQUESTS` | Server / Local profile | `32` / `4` | Global admission semaphore for model work. |
 | `VEIL_MAX_CONCURRENT_REQUESTS_PER_USER` | Server / Local profile | `4` / `2` | Per-user admission semaphore when company identity supplies a user. Without identity, only the global bucket applies. |
 | `VEIL_MODEL_REQUESTS_PER_MINUTE` | No | `120` | Per-identity token bucket over chat, compaction, orientation, and dictation. Admission bounds how much work runs at once; this bounds how often one client may ask. Over the limit is `429` with `Retry-After`. `0` disables. |
-| `VEIL_TELEMETRY_BUNDLES_PER_HOUR` | No | `120` | Per-identity token bucket over telemetry ingestion, so one device cannot flood the store. `0` disables. |
 | `VEIL_QUEUE_TIMEOUT` | Server / Local profile | `30s` | Maximum wait for an admission slot. Exhaustion returns `503` with `code: busy` and `Retry-After`. |
 | `VEIL_TEMPLATE_REGISTRY_PATH` | No | Empty | Path to the server-owned template registry JSON file. No template metadata is injected when unset. |
-| `VEIL_TELEMETRY_ENABLED` | No | `true` | Enables the authenticated `/api/telemetry` ingestion route. Accepted boolean values are `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`. |
-| `VEIL_TELEMETRY_STORE_PATH` | No | Empty | Directory in which accepted telemetry bundles are persisted. Bundles are validated but not persisted when unset. |
-| `VEIL_TELEMETRY_RETENTION_DAYS` | No | `30` | Positive number of days to retain stored telemetry bundles. |
-| `VEIL_TELEMETRY_MAX_BODY_BYTES` | No | `16777216` | Positive maximum request-body size for selective telemetry bundles. |
 | `VEIL_MODEL_TIMEOUT` | No | `180s` | Timeout for a model-runtime HTTP call. Accepts a Go duration such as `90s` or `2m`, or a bare number of seconds. |
 | `VEIL_REQUEST_TIMEOUT` | No | `195s` | Overall timeout applied by Veil to health, connection, and chat operations after admission. Uses the same duration format as `VEIL_MODEL_TIMEOUT`. |
 | `VEIL_STREAM_IDLE_TIMEOUT` | No | `60s` | Maximum idle gap between streamed model chunks. Separate from request and model timeouts. |
@@ -264,7 +258,7 @@ tool-call controls on every vLLM chat request. Clients cannot override them.
 
 The vLLM port should remain private; expose Veil, not vLLM.
 
-### Optional templates and telemetry
+### Optional templates and runtime metrics
 
 When `VEIL_TEMPLATE_REGISTRY_PATH` is set, Veil reads a server-owned JSON registry and injects only matching template metadata into protected prompt context. The registry can be either an array or `{ "templates": [...] }` with entries like:
 
@@ -292,7 +286,7 @@ authenticates, calls the runtime, and reports what Veil can actually serve.
 as JSON. Adding `?format=prometheus` renders the same values as OpenMetrics text
 for a scraper.
 
-`POST /api/telemetry` accepts the desktop app's selective telemetry bundles using the same authentication class as chat. The contract includes compact product events, rated conversations, failed-tool input/response, and context thresholds; it rejects raw top-level task fields and unscoped task-event dumps. It applies `VEIL_TELEMETRY_MAX_BODY_BYTES` and persists accepted JSON bundles under `VEIL_TELEMETRY_STORE_PATH` when that path is set. `VEIL_TELEMETRY_ENABLED=false` disables ingestion by admin policy, while `VEIL_TELEMETRY_RETENTION_DAYS` controls local pruning for stored bundles.
+Umbratic has no usage analytics or automatic desktop telemetry uploads. There is no telemetry ingestion API. The runtime metrics endpoint exposes operational counters for the administrator of this Veil deployment; it does not upload them to Umbratic. Local desktop diagnostic logs remain on the device unless the user exports them. Server access logs and runtime diagnostics remain under the server operator’s control.
 
 ## Network
 
@@ -319,8 +313,7 @@ npm run desktop:release
 When Local is selected, the desktop app starts and owns the local Veil process. It
 does not read `infrastructure/veil/.env`, and the app does not force Local mode.
 Users do not configure a Veil URL or token in Local mode. Veil binds to loopback,
-uses an app-generated transient credential, and starts with telemetry ingestion
-disabled. Override local runtime values for one run through the environment:
+uses an app-generated transient credential. Override local runtime values for one run through the environment:
 
 ```sh
 UMBRATIC_LOCAL_MODEL_ID=gemma4-e4b npm run desktop:dev

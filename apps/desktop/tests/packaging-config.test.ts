@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+const { load } = createRequire(import.meta.url)("js-yaml");
 
 const configUrl = new URL("../electron-builder.yml", import.meta.url);
 const preparePackageUrl = new URL("../scripts/prepare-package.ts", import.meta.url);
@@ -153,31 +156,50 @@ test("the Windows uninstaller offers an explicit local-data removal option", () 
   assert.match(include, /\$\{NSD_Uncheck\}/);
 });
 
-test("pull-request audit does not package or run the full suite", () => {
-  const verifyWorkflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
-  const verifyTriggers = verifyWorkflow.slice(
-    verifyWorkflow.indexOf("on:"),
-    verifyWorkflow.indexOf("\npermissions:"),
-  );
-
-  assert.match(verifyTriggers, /branches:\r?\n\s+- main/);
-  assert.match(verifyTriggers, /pull_request:/);
-  assert.doesNotMatch(verifyTriggers, /push:/);
-  assert.doesNotMatch(verifyWorkflow, /run package|electron-builder/);
-  assert.doesNotMatch(verifyWorkflow, /test:all|release:check/);
+test("CI verifies every native platform on pull requests and main without release secrets", () => {
+  const source = fs.readFileSync(verifyWorkflowUrl, "utf8");
+  const workflow = load(source);
+  assert.deepEqual(workflow.on.push.branches, ["main"]);
+  assert.deepEqual(workflow.on.pull_request.branches, ["main"]);
+  assert.deepEqual(workflow.jobs.verify.strategy.matrix.os, ["macos-15", "windows-2025", "windows-11-arm"]);
+  const commands = workflow.jobs.verify.steps.map((step) => step.run ?? "");
+  assert.ok(commands.includes("npm run test:all"));
+  assert.ok(commands.includes("npm run desktop:release -- --unsigned --dir"));
+  assert.ok(commands.includes("node scripts/check-release-version.ts"));
+  assert.doesNotMatch(source, /secrets\./);
+  assert.deepEqual(workflow.jobs.required.needs, ["verify", "audit"]);
+  assert.equal(workflow.jobs.required.if, "always()");
 });
 
-test("pull-request audit omits the unused Squirrel peer dependency", () => {
-  const verifyWorkflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
-  assert.doesNotMatch(verifyWorkflow, /npm ci/);
-  assert.match(verifyWorkflow, /npm audit --package-lock-only --ignore-scripts --omit=peer/);
+test("CI installs locked dependencies without lifecycle scripts and retains vulnerability auditing", () => {
+  const workflow = load(fs.readFileSync(verifyWorkflowUrl, "utf8"));
+  for (const name of ["verify", "audit"]) {
+    const commands = workflow.jobs[name].steps.map((step) => step.run ?? "");
+    assert.ok(commands.includes("npm ci --ignore-scripts --omit=peer"));
+  }
+  assert.ok(workflow.jobs.audit.steps.some((step) => step.run === "npm run supply-chain:audit"));
+  assert.ok(workflow.jobs.audit.steps.some((step) => step.run === "npm run supply-chain:sbom"));
 });
 
-test("pull-request audit pins actions and stays read-only", () => {
-  const workflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
-  const actionReferences = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)/gm)].map((match) => match[1]);
+test("CI pins actions and stays read-only", () => {
+  const workflow = load(fs.readFileSync(verifyWorkflowUrl, "utf8"));
+  const actionReferences = Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])
+    .map((step) => step.uses).filter(Boolean);
   assert.ok(actionReferences.length >= 2);
   assert.ok(actionReferences.every((reference) => /@[0-9a-f]{40}$/.test(reference)));
-  assert.match(workflow, /^permissions:\r?\n  contents: read$/m);
-  assert.doesNotMatch(workflow, /contents: write/);
+  assert.deepEqual(workflow.permissions, { contents: "read" });
+  for (const job of Object.values(workflow.jobs)) assert.notEqual(job.permissions?.contents, "write");
+});
+
+test("release publication waits for every signed platform and scopes write access to publication", () => {
+  const workflow = load(fs.readFileSync(new URL("../../../.github/workflows/release.yml", import.meta.url), "utf8"));
+  assert.deepEqual(workflow.on.workflow_run.workflows, ["CI"]);
+  assert.match(workflow.jobs.source.if, /workflow_run\.event == 'push'/);
+  assert.match(workflow.jobs.source.if, /head_repository\.full_name == github\.repository/);
+  assert.deepEqual(workflow.jobs.publish.needs, ["source", "package"]);
+  assert.deepEqual(workflow.jobs.package.strategy.matrix.os, ["macos-15", "windows-2025", "windows-11-arm"]);
+  assert.equal(workflow.permissions.contents, "read");
+  assert.equal(workflow.jobs.publish.permissions.contents, "write");
+  assert.ok(workflow.jobs.package.steps.some((step) => step.run === "node scripts/ci/verify-release.ts"));
+  assert.ok(workflow.jobs.publish.steps.some((step) => step.run === "node scripts/ci/publish-release.ts"));
 });

@@ -51,7 +51,6 @@ const explicitVersion = takeOption("--version");
 const explicitSeats = takeOption("--seats");
 const explicitDevicesPerUser = takeOption("--devices-per-user");
 const explicitSigningKeyFile = takeOption("--signing-key-file");
-const explicitFeedKeyFile = takeOption("--feed-key-file");
 const explicitSearchesPerMonth = takeOption("--searches-per-month");
 const explicitOrgUid = takeOption("--org-uid");
 const explicitConsolePort = takeOption("--port");
@@ -106,13 +105,12 @@ if (
   (explicitSeats
     || explicitDevicesPerUser
     || explicitSigningKeyFile
-    || explicitFeedKeyFile
     || explicitSearchesPerMonth
     || explicitOrgUid)
   && action !== "release"
 ) {
   console.error(
-    "--seats, --devices-per-user, --signing-key-file, --feed-key-file, --searches-per-month, and --org-uid "
+    "--seats, --devices-per-user, --signing-key-file, --searches-per-month, and --org-uid "
     + "are available only for a release.",
   );
   process.exit(2);
@@ -253,7 +251,6 @@ try {
         String(releaseSearchesPerMonth),
       ];
       if (explicitSigningKeyFile) releaseArguments.push("--signing-key-file", keyFilePathForLinux(explicitSigningKeyFile));
-      if (explicitFeedKeyFile) releaseArguments.push("--feed-key-file", keyFilePathForLinux(explicitFeedKeyFile));
       if (explicitOrgUid) {
         releaseArguments.push("--org-uid", explicitOrgUid);
       }

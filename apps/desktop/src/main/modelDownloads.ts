@@ -198,8 +198,13 @@ async function downloadFile(
   const done = new Set<number>(ledger?.done.filter((index) => index < chunkCount) ?? []);
   if (!ledger) fs.rmSync(partialPath, { force: true });
 
-  const fd = fs.openSync(partialPath, fs.existsSync(partialPath) ? "r+" : "w+");
+  const fd = fs.openSync(partialPath, fs.constants.O_RDWR | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
   try {
+    const stat = fs.fstatSync(fd);
+    const entry = fs.lstatSync(partialPath);
+    if (!stat.isFile() || entry.isSymbolicLink() || stat.dev !== entry.dev || stat.ino !== entry.ino) {
+      throw new Error("The partial model download must be a regular file.");
+    }
     let landedBytes = [...done].reduce((total, index) => total + chunkSize(index), 0);
     const inFlight = new Map<number, number>();
     const report = () =>

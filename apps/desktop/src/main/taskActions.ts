@@ -3,7 +3,7 @@ import { cancelledTaskRuns, getPermissionMode } from "./mainRuntime";
 import { assertTaskWorkspaceIdle } from "./workspaceActivity";
 import { assertReusableWorktreeForRepository, chatWorktreeTaskId, findReusableWorktreeTask, taskUsesIsolatedWorktree, worktreeRootTaskId } from "./worktreeOps";
 import { chatId, createChat, hiddenChatRepository, hiddenChatWorkspacePath, taskId } from "./chatStore";
-import { activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, getTask, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
+import { activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, getTask, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
 import { capabilityNeedsForPrompt, runnerPromptForTask } from "./taskPromptContext";
 import { inspectRepository } from "./repositoryOps";
 import { createWorktreeAndRunRunner, runRunnerTask } from "./taskRunner";
@@ -15,7 +15,7 @@ import * as path from "node:path";
 import { chatTitleFromFirstMessage } from "../shared/chatTitle";
 
 import {
-  capabilityTelemetrySnapshot,
+  runCapabilitySnapshot,
   probeLocalCapabilities,
 } from "./capabilities";
 import {
@@ -48,7 +48,6 @@ import type {
   WorkspaceMode,
 } from "./types";
 import { isRecord, requiredString, slugify } from "./utils";
-import { isResponseFeedbackReason, removeResponseFeedback } from "../shared/taskEvents";
 
 export function closedTaskMessage(task: TaskRecord): string | undefined {
   if (task.state === "merged") {
@@ -201,7 +200,7 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
   const capabilityReport = remote
     ? await remoteCapabilityReport(remote.connectionId)
     : await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
-  const taskCapabilityProbes = capabilityTelemetrySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt, attachments));
+  const taskCapabilityProbes = runCapabilitySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt, attachments));
   const modelEndpointMode = readModelEndpointSettings().mode;
   if (existingTask) {
     const closedMessage = closedTaskMessage(existingTask);
@@ -350,11 +349,6 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
   saveTask(task);
   appendUserMessage(task, prompt, attachments);
   if (shouldCreateWorktree) {
-    recordProductTelemetry("worktree.requested", {
-      taskId: task.id,
-      chatId: task.chatId,
-      repositoryId: task.repositoryId,
-    });
     await createWorktreeAndRunRunner(task, undefined, attachments, prompt);
   } else {
     void runRunnerTask(task.id, undefined, prompt, attachments);
@@ -373,11 +367,6 @@ export async function approveWorktreeCreation(input: unknown): Promise<void> {
   }
   if (approved) assertTaskWorkspaceIdle(task, true);
   if (!approved) {
-    recordProductTelemetry("worktree.denied", {
-      taskId: task.id,
-      chatId: task.chatId,
-      repositoryId: task.repositoryId,
-    });
     task.state = "rejected";
     task.pendingPrompt = undefined;
     pendingRunnerPrompts.delete(task.id);
@@ -386,11 +375,6 @@ export async function approveWorktreeCreation(input: unknown): Promise<void> {
     emit({ type: "task.error", taskId: task.id, message: "Worktree creation was declined." });
     return;
   }
-  recordProductTelemetry("worktree.approved", {
-    taskId: task.id,
-    chatId: task.chatId,
-    repositoryId: task.repositoryId,
-  });
   const promptForRun = pendingRunnerPrompts.get(task.id) ?? task.pendingPrompt ?? task.prompt;
   task.pendingPrompt = undefined;
   pendingRunnerPrompts.delete(task.id);
@@ -403,11 +387,6 @@ export async function keepWorktree(input: unknown): Promise<void> {
     throw new Error("Invalid keep-worktree input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  recordProductTelemetry("worktree.kept", {
-    taskId: task.id,
-    chatId: task.chatId,
-    repositoryId: task.repositoryId,
-  });
   emit({
     type: "task.error",
     taskId: task.id,
@@ -557,22 +536,4 @@ export async function dropQueuedTaskPrompt(input: unknown): Promise<void> {
     method: "POST",
     body: { action: "drop", actionId },
   }).catch(() => undefined);
-}
-
-export async function setResponseFeedback(input: unknown): Promise<void> {
-  if (!isRecord(input)) throw new Error("Invalid response feedback input.");
-  const task = getTask(requiredString(input.taskId, "taskId"));
-  const messageId = requiredString(input.messageId, "messageId").slice(0, 80);
-  const rating = input.rating === null || input.rating === "good" || input.rating === "bad"
-    ? input.rating
-    : undefined;
-  if (rating === undefined) throw new Error("Invalid response feedback rating.");
-  const reason = rating && isResponseFeedbackReason(rating, input.reason) ? input.reason : undefined;
-  if (input.reason !== undefined && !reason) throw new Error("Invalid response feedback reason.");
-  const comment = typeof input.comment === "string" ? input.comment.trim().slice(0, 1000) : "";
-  if (!/^assistant-\d+$/.test(messageId)) throw new Error("Invalid response message id.");
-  task.events = removeResponseFeedback(task.events, task.id, messageId);
-  saveTask(task);
-  if (rating === null) return;
-  emit({ type: "response.feedback", taskId: task.id, messageId, rating, ...(reason ? { reason } : {}), ...(comment ? { comment } : {}) });
 }

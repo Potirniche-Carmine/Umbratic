@@ -18,7 +18,6 @@ if [[ "$(uname -s)" == Darwin ]]; then
   release_env_file="$release_dir/release.env"
 fi
 signing_key_file="$release_dir/umbratic-entitlement-signing.key"
-feed_key_file="$release_dir/umbratic-feed-master.key"
 searches_per_month=0
 org_uid=""
 positional=0
@@ -40,7 +39,6 @@ while [[ $# -gt 0 ]]; do
     --seats) seats="${2:-}"; shift 2 ;;
     --devices-per-user) devices_per_user="${2:-}"; shift 2 ;;
     --signing-key-file) signing_key_file="${2:-}"; shift 2 ;;
-    --feed-key-file) feed_key_file="${2:-}"; shift 2 ;;
     --searches-per-month) searches_per_month="${2:-}"; shift 2 ;;
     --org-uid) org_uid="${2:-}"; shift 2 ;;
     --*)
@@ -92,10 +90,6 @@ if [[ ! "$devices_per_user" =~ ^[0-9]+$ ]] || (( devices_per_user < 1 || devices
   echo "--devices-per-user must be between 1 and 32." >&2
   exit 2
 fi
-if [[ -z "$feed_key_file" || ! -f "$feed_key_file" ]]; then
-  echo "Feed master key missing: $feed_key_file. Put your existing master key there or use --feed-key-file." >&2
-  exit 2
-fi
 if [[ ! "$searches_per_month" =~ ^[0-9]+$ ]] || (( searches_per_month > 100000000 )); then
   echo "--searches-per-month must be between 0 and 100000000." >&2
   exit 2
@@ -105,9 +99,8 @@ if [[ -n "$org_uid" && ( ! "$org_uid" =~ ^org_[A-Za-z0-9_-]{8,76}$ ) ]]; then
   exit 2
 fi
 
-# The Brave subscription key is not a per-release input. It is ours rather than
-# any customer's, identical for every bundle we build, and so it belongs to the
-# release machine the same way the publishing credentials do: taken from the
+# The deployment administrator supplies the optional Brave subscription key
+# on the release machine: taken from the
 # environment, and otherwise from the one assignment for it in
 # the release identity file. The file is read line by line and never sourced — it
 # holds credentials, not commands, and sourcing it would run whatever a stray
@@ -139,10 +132,9 @@ search_key=""
 if (( searches_per_month > 0 )); then
   search_key="${UMBRATIC_BRAVE_SEARCH_API_KEY:-}"
   if [[ -z "$search_key" ]]; then search_key="$(read_release_env_value UMBRATIC_BRAVE_SEARCH_API_KEY)"; fi
-  if [[ -z "$search_key" ]]; then echo "Purchased search requires the release-machine search credential." >&2; exit 2; fi
+  if [[ -z "$search_key" ]]; then echo "Web search requires an administrator-supplied Brave Search credential." >&2; exit 2; fi
 fi
-# No key anywhere is not a failure: a customer who did not buy web search gets a
-# bundle whose veil holds no subscription key, which is a complete product.
+# Web search is optional; a zero budget needs no external credential.
 
 mkdir -p "$release_dir/tmp"
 chmod 700 "$release_dir" "$release_dir/tmp"
@@ -153,14 +145,12 @@ bundle_name="umbratic-veil-$version-$customer-$target_os-$architecture"
 bundle_dir="$work_dir/$bundle_name"
 mkdir -p "$bundle_dir/bin" "$output_dir"
 
-# Two lines: the entitlement public key, then this organization's update-feed
-# key. Both are baked into the binaries below and neither is written to disk.
+# Generate an administrator-owned signing key if absent and sign this deployment.
 entitlement_output="$(
   cd "$repo_root/infrastructure/veil-console"
   entitlement_args=(
     --output "$bundle_dir/entitlement.json"
     --private-key-file "$signing_key_file"
-    --feed-key-file "$feed_key_file"
     --seats "$seats"
     --devices-per-user "$devices_per_user"
     --searches-per-month "$searches_per_month"
@@ -171,12 +161,11 @@ entitlement_output="$(
   go run ./cmd/entitlement "${entitlement_args[@]}"
 )"
 entitlement_public_key="$(printf '%s\n' "$entitlement_output" | sed -n 1p)"
-feed_key="$(printf '%s\n' "$entitlement_output" | sed -n 2p)"
 
-# The subscription key read above is the third baked-in value. It goes into the
+# The optional subscription key read above goes into the
 # veil binary and nowhere else â€” not into the bundle directory, not into
 # SHA256SUMS, not into Console's environment, and never onto a log line.
-veil_ldflags="-X umbratic-veil/internal/entitlement.TrustedPublicKey=$entitlement_public_key -X umbratic-veil/internal/updatefeed.CustomerKey=$feed_key"
+veil_ldflags="-X umbratic-veil/internal/entitlement.TrustedPublicKey=$entitlement_public_key"
 if [[ -n "$search_key" ]]; then
   veil_ldflags+=" -X umbratic-veil/internal/websearch.SubscriptionKey=$search_key"
 fi

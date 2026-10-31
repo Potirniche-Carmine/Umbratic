@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { type OcrInputKind } from "./artifactRuntime";
+import { readRegularFileSync } from "./readFile";
 import { attachmentContextTokens } from "./attachmentContext";
 import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
@@ -42,11 +43,7 @@ export const ignoredSnapshotDirectories = new Set([
 
 export function readTextFileIfSafe(filePath: string): string | null {
   try {
-    const stat = fs.lstatSync(filePath);
-    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > textAttachmentByteLimit) {
-      return null;
-    }
-    const buffer = fs.readFileSync(filePath);
+    const buffer = readRegularFileSync(filePath, textAttachmentByteLimit);
     if (buffer.includes(0)) {
       return null;
     }
@@ -127,12 +124,9 @@ export function ocrInputKindsForAttachments(attachments: ChatAttachment[]): OcrI
 
 export function imageDataUrlIfSafe(filePath: string): string | null {
   try {
-    const stat = fs.statSync(filePath);
     const mimeType = imageMimeType(filePath);
-    if (!mimeType || !stat.isFile() || stat.size > imageAttachmentByteLimit) {
-      return null;
-    }
-    const buffer = fs.readFileSync(filePath);
+    if (!mimeType) return null;
+    const buffer = readRegularFileSync(filePath, imageAttachmentByteLimit);
     return `data:${mimeType};base64,${buffer.toString("base64")}`;
   } catch {
     return null;

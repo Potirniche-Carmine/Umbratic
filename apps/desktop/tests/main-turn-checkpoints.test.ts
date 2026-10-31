@@ -20,7 +20,7 @@ function runnerFixture(failQueuedCheckpoint = false) {
     pendingTaskFollowUps: new Map([[task.id, [{ actionId: "next", prompt: "second", attachments: [] }]]]),
     getTask: () => task, getPermissionMode: () => "normal", saveTask: () => {}, applyTaskPolicyMetadata: () => {},
     taskStillRunning: () => task.state === "running" && !runtime.cancelledTaskRuns.has(task.id), clearPendingPermissionsForTask: () => {},
-    appendUserMessage: (_task, prompt) => calls.push(`message:${prompt}`), emit: () => {}, recordProductTelemetry: () => {},
+    appendUserMessage: (_task, prompt) => calls.push(`message:${prompt}`), emit: () => {},
     failTask: (_task, error) => { task.state = "failed"; calls.push(`failed:${error}`); },
   };
   const mocks = Object.fromEntries([

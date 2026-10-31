@@ -412,7 +412,7 @@ test("checkpoint metadata persists and workspace activation switches the task at
   assert.equal(storage.readTaskWorkspaces(task.id).some((workspace) => workspace.id === "workspace-3"), false);
 });
 
-test("local diagnostics report logical size, exportable records, and clear independently of product telemetry", () => {
+test("local diagnostics report logical size, exportable records, and clear without uploads", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-diagnostics-"));
   const storage = loadStorage(userData);
 
@@ -433,14 +433,7 @@ test("local diagnostics report logical size, exportable records, and clear indep
     message: "Edit failed.",
     data: { errorCode: "invalid_arguments" },
   });
-  storage.writeProductTelemetryEvent({
-    id: "event-1",
-    type: "review.opened",
-    at: "2026-01-01T00:00:01.000Z",
-    taskId: "task-1",
-    repositoryId: "repo-1",
-    data: { scope: "task" },
-  });
+
 
   const info = storage.readLocalDiagnosticInfo();
   assert.equal(info.entries, 1);
@@ -455,11 +448,9 @@ test("local diagnostics report logical size, exportable records, and clear indep
     message: "Edit failed.",
     data: { errorCode: "invalid_arguments" },
   }]);
-  assert.deepEqual(plain(storage.readProductTelemetryEvents()).map((event) => event.id), ["event-1"]);
 
   assert.deepEqual(plain(storage.clearLocalDiagnostics()), { bytes: 0, entries: 0 });
   assert.deepEqual(plain(storage.readLocalDiagnostics()), []);
-  assert.deepEqual(plain(storage.readProductTelemetryEvents()).map((event) => event.id), ["event-1"]);
 });
 
 test("endpoint settings round-trip secrets through OS encryption without writing plaintext", () => {

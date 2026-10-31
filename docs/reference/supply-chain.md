@@ -1,7 +1,7 @@
 # Supply chain
 
 Dependency changes are security changes. Only locked crates.io and npm
-packages; Veil stays on the Go standard library; executable downloads are
+packages plus the reviewed source patch described below; Veil stays on the Go standard library; executable downloads are
 explicit.
 
 ## Set up a machine
@@ -135,22 +135,40 @@ packaging without the SDK. The result is far too slow to ship, so
 is set there too. A release build never sets it — which is what stops a release
 that quietly lost its GPU backend from passing.
 
+## Reviewed spreadsheet patch
+
+`third_party/umya-spreadsheet` contains the production source of crates.io
+`umya-spreadsheet 4.0.0-beta.1`, under its MIT license. Stable 3.0.1 still requires
+zip 8, affected by RUSTSEC-2026-0367, RUSTSEC-2026-0368 and RUSTSEC-2026-0369.
+Version 4 is the only published fixed dependency path. Its validation writer has
+a regression: it treats empty formulas as inner content. The one-line local
+correction tests for nonempty formulas, preserving validation bounds when cells
+are edited. Artifact round-trip tests cover this behavior. The prerelease remains
+a dependency risk to reassess at the next stable release.
+
+`PROVENANCE.json` records the upstream archive SHA-256 and exact changes; production
+source, license and manifest are retained, while upstream examples, tests and images
+are omitted. `SHA256SUMS.json` pins every included file, and its digest is reviewed
+in `supply-chain-policy.json`. The supply-chain gate rejects changed or added files.
+No security advisory is suppressed.
+
+The October 2026 refresh updates Electron, Vite, matching and HTTP dependencies,
+Rust TLS/certificate roots, Tokio and archive consumers. ZIP codecs beyond deflate
+are disabled, removing the unused vulnerable zstd chain. Go modules require 1.26.10
+for standard-library security fixes. Native and procedural-code allowlists track the
+reviewed graph; the Brotli decompressor's `BSD-3-Clause/MIT` license expression is
+reviewed alongside the already allowed individual licenses.
+
 ## Releases
 
-Built and signed on our own machines, published to `downloads.umbratic.ai` by
-`scripts/publish-release.ts`, which talks S3's API directly with a SigV4
-signature rather than through an SDK.
-
-The installed app updates through electron-updater: macOS refuses an app not
-signed by the same Team ID, Windows verifies the installer's publisher. Neither
-the app nor the script trusts the transport for anything else. Published
-installers are immutable, the channel file never moves to an older release, and
-an unsigned build is refused at publish time.
-
-An update check sends a `User-Agent` naming the build and the company's update
-token, and nothing that distinguishes one machine from another. It can be
-turned off in Settings → About. An installation with no current token does not
-check at all.
+Desktop releases publish to public GitHub Releases. Build workflows pin their
+Actions, and the Windows Vulkan SDK installer is pinned by SHA-256 in
+`third_party/vulkan-sdk.json` and verified before execution. Windows signing tools
+and the isolated x64 .NET runtime are pinned by official package/archive checksums
+in `third_party/windows-signing.json`; no moving PowerShell module is installed.
+Signing credentials
+stay in GitHub environment secrets. The updater sends ordinary GitHub release
+requests and can be disabled in Settings → About. It does not need a company token.
 
 Runbook: [../guides/release-desktop.md](../guides/release-desktop.md).
 

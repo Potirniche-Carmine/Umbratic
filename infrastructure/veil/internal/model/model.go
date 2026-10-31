@@ -423,7 +423,7 @@ func mergeLeadingSystemMessages(messages []Message) []Message {
 	if len(parts) < 2 {
 		return messages
 	}
-	merged := make([]Message, 0, len(messages)-len(parts)+1)
+	merged := make([]Message, 0, len(messages))
 	merged = append(merged, Message{Role: "system", Content: strings.Join(parts, "\n\n")})
 	return append(merged, messages[len(parts):]...)
 }

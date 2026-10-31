@@ -44,7 +44,6 @@ test("all managed desktop paths stay below one data root", () => {
     pathsModule.electronLogsDirectory(root),
     pathsModule.crashDumpsDirectory(root),
     pathsModule.runnerLogsDirectory(root),
-    pathsModule.telemetrySpoolDirectoryPath(root),
   ];
   assert.equal(paths.every((value) => path.relative(root, value) && !path.relative(root, value).startsWith("..")), true);
 });

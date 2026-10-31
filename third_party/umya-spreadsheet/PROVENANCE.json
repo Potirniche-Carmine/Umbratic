@@ -1,0 +1,21 @@
+{
+  "package": "umya-spreadsheet",
+  "version": "4.0.0-beta.1",
+  "source": "https://crates.io/api/v1/crates/umya-spreadsheet/4.0.0-beta.1/download",
+  "crateSha256": "a078ecf00e5d9ca4665945cf3734e68c8b048068472ee3563fd49da59ecad046",
+  "license": "MIT",
+  "reviewedOn": "2026-10-31",
+  "reason": "Stable 3.0.1 requires zip 8, affected by RUSTSEC-2026-0367/0368/0369. Prerelease 4 is the only published upgrade using fixed zip 9. The source patch prevents validation formulas from disappearing during workbook editing. No advisory is suppressed.",
+  "changes": [
+    "src/structs/data_validation.rs: is_inner tests nonempty formula1 OR nonempty formula2 instead of empty formula1 OR empty formula2.",
+    "Cargo.toml: removed example/test targets and dev-dependencies because only production source is vendored."
+  ],
+  "omitted": [
+    "examples",
+    "tests",
+    "images",
+    ".github",
+    "Cargo.lock",
+    "development metadata"
+  ]
+}

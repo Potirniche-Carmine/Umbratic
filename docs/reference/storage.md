@@ -30,14 +30,15 @@ One data root per user:
 | `cache/electron/` | Electron session cache | No |
 | `cache/tmp/` | Private temporary files for Electron and its child processes | No |
 | `logs/electron/`, `logs/runner/`, `logs/crash-dumps/` | Diagnostics | No |
-| `telemetry/spool/` | Telemetry bundles waiting to upload | No |
+
+Diagnostic logs are local troubleshooting data. Umbratic does not automatically upload them or collect usage analytics. A user can export logs manually. In company server mode, model requests and server diagnostics are governed by that server’s configuration and operator.
 
 Inside a user's own repository the runner writes `.umbratic/` — build output,
 runtime state, diagnostics, temporary files. Workspace-local and disposable.
 
 ## Company server
 
-Installed by `deploy.sh` from the target-specific customer ZIP. Mac data lives under `/Library/Application Support/Umbratic/Veil Console/`.
+Installed by `deploy.sh` from the target-specific server ZIP. Mac data lives under `/Library/Application Support/Umbratic/Veil Console/`.
 
 On Mac, the entire server uses `/Library/Application Support/Umbratic/Veil Console/`:
 
@@ -69,7 +70,7 @@ Console supervises Caddy and generates its `Caddyfile` in the state directory fr
 
 ## Release machine
 
-On Mac, release work lives in the repository's ignored `artifacts/release-work/`: `release.env`, signing and feed keys, notarization keys, dependency kits, download caches, deployment packages and `tmp/`. Run release commands from the repository root. Keep this directory owner-only and never force-add its credentials to Git. Windows and Linux keep `~/.umbratic/release.env` and `~/umbratic-release/`.
+On Mac, release work lives in the repository's ignored `artifacts/release-work/`: `release.env`, signing keys, notarization keys, dependency kits, download caches, deployment packages and `tmp/`. Run release commands from the repository root. Keep this directory owner-only and never force-add its credentials to Git. Windows and Linux keep `~/.umbratic/release.env` and `~/umbratic-release/`.
 
 For a clean local Console setup on Mac, run `sudo python3 scripts/reset-veil-console-macos.py` from the repository root. It unloads and removes the Console and Qdrant services, archives the installed programs, state and previous backups in the invoking user's Trash, and clears known Console test leftovers. Downloaded models and desktop data remain intact. It does not reinstall or start services.
 

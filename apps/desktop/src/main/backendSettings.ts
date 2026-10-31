@@ -1,7 +1,7 @@
 import { activeRunnerProcesses } from "./runnerLifecycle";
 import { getMainWindow, getPermissionMode } from "./mainRuntime";
 
-import { RunnerPromptPart, recordProductTelemetry } from "./mainRuntime";
+import { RunnerPromptPart } from "./mainRuntime";
 import {
   app,
   dialog,
@@ -23,16 +23,7 @@ import {
   runnerBinaryPath,
   runnerDiagnosticsDirectory,
 } from "./runnerAdapter";
-import {
-  umbraticPolicyVersion,
-  umbraticRunnerContractVersion,
-  umbraticRunnerName,
-  umbraticRunnerVersion,
-  companyEndpointProviderId,
-  isLocalhostUrl,
-  runtimeDiagnostics,
-  telemetryPolicyForMode,
-} from "./policy";
+import { umbraticPolicyVersion, umbraticRunnerContractVersion, umbraticRunnerName, umbraticRunnerVersion, companyEndpointProviderId, isLocalhostUrl, runtimeDiagnostics } from "./policy";
 import {
   connectCompanySession,
   companyConnectionStatus,
@@ -53,37 +44,11 @@ import {
   selectedLocalChatModel,
   selectedLocalDictationModel,
 } from "./localModels";
-import {
-  hasStoredModelEndpointSettings,
-  readContextLengthSetting,
-  readLocalMtpSetting,
-  readDictationSettings,
-  readLocalDiagnosticInfo,
-  readLocalDiagnostics,
-  readModelEndpointSettings,
-  readReasoningEffortSetting,
-  readToolSettings,
-  publicModelEndpointSettings,
-  readProjects,
-  readProductTelemetryEvents,
-  readTask,
-  readTasks,
-  clearLocalDiagnostics,
-  writeHarnessProfileSetting,
-  writeContextLengthSetting,
-  writeLocalMtpSetting,
-  writeReasoningEffortSetting,
-  writeSendOnEnterSetting,
-  writeShowThinkingSetting,
-  writeDictationSettings,
-  writeModelEndpointSettings,
-  writeSkillSettings,
-} from "./storage";
+import { hasStoredModelEndpointSettings, readContextLengthSetting, readLocalMtpSetting, readDictationSettings, readLocalDiagnosticInfo, readLocalDiagnostics, readModelEndpointSettings, readReasoningEffortSetting, readToolSettings, publicModelEndpointSettings, clearLocalDiagnostics, writeHarnessProfileSetting, writeContextLengthSetting, writeLocalMtpSetting, writeReasoningEffortSetting, writeSendOnEnterSetting, writeShowThinkingSetting, writeDictationSettings, writeModelEndpointSettings, writeSkillSettings } from "./storage";
 import { webToolsEnabled } from "./toolSettings";
 import { modelsDirectory } from "./appPaths";
 import { systemProfile } from "./hardware";
 import { recordLocalDiagnostic } from "./diagnostics";
-import { buildRedactedTelemetryBundle } from "./telemetry";
 import { checkEndpointHealth } from "./modelEndpointRuntime";
 import { connectedVeilFeatures, connectedVeilSupports, recordVeilFeatures, veilFeature } from "./veilFeatures";
 import {
@@ -102,7 +67,7 @@ import type {
   LocalDiagnosticInfo,
   RunnerProcess,
 } from "./types";
-import { isRecord, pathInside, requiredString } from "./utils";
+import { isRecord, pathInside } from "./utils";
 
 export async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readModelEndpointSettings>>) {
   if (activeRunnerProcesses.size > 0) {
@@ -497,7 +462,7 @@ export async function resolveSelectedModel(
     models,
     message:
       health.status === "ready" && settings.mode === "local"
-        ? `Local Veil is running with ${settings.modelId}. Telemetry is off.`
+        ? `Local Veil is running with ${settings.modelId}.`
         : settings.mode === "server" && health.status === "unavailable"
           ? "Connected. No model is available yet."
           : health.message,
@@ -589,7 +554,6 @@ export async function getBackendStatus(startLocal: LocalRuntimeStart = "never"):
       commandClassifier: "enabled",
       runnerDiagnosticsDirectory: runnerDiagnosticsDirectory(app.getPath("userData")),
       localLogs: readLocalDiagnosticInfo(),
-      telemetry: telemetryPolicyForMode(endpointSettings.mode),
       runtimes: runtimeDiagnostics(),
       capabilities: capabilityReport,
     },
@@ -674,29 +638,6 @@ export async function importSkillFromDialog(_input?: unknown) {
   return importSkillService({ sourcePath: result.filePaths[0] });
 }
 
-export async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dialogWindow = getMainWindow();
-  const result = dialogWindow
-    ? await dialog.showSaveDialog(dialogWindow, {
-        title: "Export Umbratic Telemetry",
-        defaultPath: `umbratic-telemetry-${timestamp}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      })
-    : await dialog.showSaveDialog({
-        title: "Export Umbratic Telemetry",
-        defaultPath: `umbratic-telemetry-${timestamp}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-  if (result.canceled || !result.filePath) {
-    return { ok: false, message: "Export canceled." };
-  }
-  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects(), readProductTelemetryEvents(), readLocalDiagnostics());
-  fs.mkdirSync(path.dirname(result.filePath), { recursive: true });
-  fs.writeFileSync(result.filePath, `${JSON.stringify(bundle)}\n`, "utf8");
-  return { ok: true, path: result.filePath };
-}
-
 export async function exportLocalDiagnostics(): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const dialogWindow = getMainWindow();
@@ -725,35 +666,4 @@ export function clearLocalDiagnosticLogs(): LocalDiagnosticInfo {
     fs.rmSync(logsDirectory, { recursive: true, force: true });
   }
   return info;
-}
-
-export function recordRendererProductEvent(input: unknown): void {
-  if (!isRecord(input) || (input.type !== "review.opened" && input.type !== "ide.selected")) {
-    throw new Error("Invalid product event input.");
-  }
-  const taskId = typeof input.taskId === "string" && /^task-[A-Za-z0-9_-]+$/.test(input.taskId) ? input.taskId : undefined;
-  const task = taskId ? readTask(taskId) : null;
-  const repositoryId = typeof input.repositoryId === "string" && input.repositoryId.length <= 128
-    ? input.repositoryId
-    : task?.repositoryId;
-  if (input.type === "review.opened") {
-    const scope = input.scope === "worktree" ? "worktree" : "task";
-    const target = input.target === "project" ? "project" : "task";
-    recordProductTelemetry("review.opened", {
-      taskId,
-      chatId: task?.chatId,
-      repositoryId,
-      data: { scope, target },
-    });
-    return;
-  }
-  const ideId = requiredString(input.ideId, "ideId");
-  if (!/^[A-Za-z0-9_-]{1,40}$/.test(ideId)) throw new Error("Invalid IDE selection.");
-  const surface = input.surface === "review" ? "review" : "composer";
-  recordProductTelemetry("ide.selected", {
-    taskId,
-    chatId: task?.chatId,
-    repositoryId,
-    data: { ideId, surface },
-  });
 }

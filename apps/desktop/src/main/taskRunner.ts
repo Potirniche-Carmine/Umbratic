@@ -4,7 +4,7 @@ import { localArtifactTransport, remoteArtifactTransport } from "./artifacts/tra
 import { getPermissionMode } from "./mainRuntime";
 import { resolveSelectedModel, submitSteeredRunnerTurn } from "./backendSettings";
 import { chatAttachmentDirectory } from "./chatStore";
-import { PendingTaskPrompt, RunnerPrompt, appendUserMessage, applyTaskPolicyMetadata, clearPendingPermissionsForTask, emit, failTask, getTask, pendingPermissions, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, recordProductTelemetry, saveTask, taskStillRunning } from "./mainRuntime";
+import { PendingTaskPrompt, RunnerPrompt, appendUserMessage, applyTaskPolicyMetadata, clearPendingPermissionsForTask, emit, failTask, getTask, pendingPermissions, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, saveTask, taskStillRunning } from "./mainRuntime";
 import { runnerPromptForTask, runnerPromptParts, runnerPromptText } from "./taskPromptContext";
 import { refreshWorkspaceGraph } from "./indexerService";
 import { refreshReview, reviewPatchHash } from "./reviewFiles";
@@ -121,11 +121,6 @@ export async function handleRunnerPermission(
         branch: task.agentBranch,
         path: task.worktreePath,
         baseCommit: task.baseCommit,
-      });
-      recordProductTelemetry("worktree.requested", {
-        taskId: task.id,
-        chatId: task.chatId,
-        repositoryId: task.repositoryId,
       });
     }
     return "worktree_requested";
@@ -648,11 +643,6 @@ export async function createWorktreeAndRunRunner(
     pendingRunnerPrompts.delete(task.id);
     saveTask(task);
     emit({ type: "worktree.created", taskId: task.id, branch: task.agentBranch, path: task.worktreePath });
-    recordProductTelemetry("worktree.created", {
-      taskId: task.id,
-      chatId: task.chatId,
-      repositoryId: task.repositoryId,
-    });
     created = true;
   } catch (error) {
     if (taskStillRunning(task)) failTask(task, String(error instanceof Error ? error.message : error));

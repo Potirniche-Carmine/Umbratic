@@ -48,7 +48,7 @@ function fixture(t) {
     return value.reviewFiles;
   };
   const { undoTaskChanges } = loadTypeScriptModule(new URL("../src/main/reviewUndo.ts", import.meta.url), { mocks: {
-    "./mainRuntime": { getTask: () => task, publicTask: (value) => value, saveTask: () => {}, recordProductTelemetry: () => {} },
+    "./mainRuntime": { getTask: () => task, publicTask: (value) => value, saveTask: () => {} },
     "./storage": storage,
     "./checkpoints/service": service,
     "./reviewFiles": { gitReviewFiles: async () => reviews(), folderReviewFiles: reviews, refreshReview },

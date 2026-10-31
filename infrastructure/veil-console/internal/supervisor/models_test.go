@@ -91,7 +91,15 @@ func TestShellConstructsNeverReachArgv(t *testing.T) {
 func TestChildEnvironmentIsAnAllowlist(t *testing.T) {
 	t.Setenv("VEIL_CONSOLE_OWNER_SECRET", "must-not-travel")
 	t.Setenv("CUDA_VISIBLE_DEVICES", "0")
+	t.Setenv("DO_NOT_TRACK", "0")
+	t.Setenv("VLLM_NO_USAGE_STATS", "0")
+	t.Setenv("HF_HUB_DISABLE_TELEMETRY", "0")
 	values := childEnvironment()
+	for _, required := range []string{"DO_NOT_TRACK=1", "VLLM_NO_USAGE_STATS=1", "HF_HUB_DISABLE_TELEMETRY=1", "OTEL_SDK_DISABLED=true"} {
+		if !containsPrefix(values, required) {
+			t.Fatalf("runtime telemetry must be disabled: %s", required)
+		}
+	}
 	for _, value := range values {
 		if strings.HasPrefix(value, "VEIL_CONSOLE_OWNER_SECRET=") {
 			t.Fatal("the child must not inherit Console's environment")
@@ -136,6 +144,8 @@ func TestDockerRunArgsAreExactAndLoopbackPublished(t *testing.T) {
 		"--ipc", "host",
 		"--mount", "type=bind,src=" + folder + ",dst=" + folder + ",readonly",
 		"--env", "HF_HUB_OFFLINE=1", "--env", "TRANSFORMERS_OFFLINE=1",
+		"--env", "DO_NOT_TRACK=1", "--env", "VLLM_NO_USAGE_STATS=1",
+		"--env", "HF_HUB_DISABLE_TELEMETRY=1", "--env", "OTEL_SDK_DISABLED=true",
 		"-p", "127.0.0.1:8001:8001",
 		"--env", "VLLM_USE_V2_MODEL_RUNNER",
 		"vllm/vllm-openai:v0.28.0",

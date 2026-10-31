@@ -54,10 +54,7 @@ import {
   type ProjectDeleteTarget,
   type WorktreeChatGroup,
 } from "./chatListPresentation";
-import type {
-  AppearanceSettings, ComposerSubmission, IdeChoice, PermissionRequest, PromptMention, QueuedComposerPrompt,
-  ResponseFeedbackDialogState, ReviewFile,
-} from "./rendererTypes";
+import type { AppearanceSettings, ComposerSubmission, IdeChoice, PermissionRequest, PromptMention, QueuedComposerPrompt, ReviewFile } from "./rendererTypes";
 import { readQueuedPrompts } from "./queuedPrompts";
 import { QueuedPromptList } from "./queuedPromptList";
 import {
@@ -118,8 +115,6 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
-  ThumbsDown,
-  ThumbsUp,
   Trash2,
   X,
 } from "lucide-react";
@@ -136,12 +131,7 @@ import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
 import { AssistantMessage } from "./assistantMessage";
 import { normalizeReviewFile } from "../shared/reviewDiff";
 import { isArtifactPath } from "../shared/artifactReview";
-import { appendTaskEvent, appendTaskEvents, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
-import {
-  responseFeedbackReasons,
-  type ResponseFeedbackReason,
-  type ResponseRating,
-} from "../shared/responseFeedback";
+import { appendTaskEvent, appendTaskEvents, compactTaskEvents } from "../shared/taskEvents";
 import { ReviewPanel } from "./review/ReviewPanel";
 import { defaultModelEndpointSettings } from "./endpointSettings";
 import { ConnectionSettingsPanel, useConnectionSettings } from "./ConnectionSettings";
@@ -149,7 +139,7 @@ import { AppearanceSettingsPanel } from "./AppearanceSettings";
 import { VoiceSettings } from "./VoiceSettings";
 import { SettingsNav, type SettingsTab } from "./SettingsNav";
 import { GeneralSettingsPanel } from "./GeneralSettings";
-import { TelemetrySettingsPanel } from "./TelemetrySettings";
+import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
 import { RemoteChatBadge, RemoteHostPicker } from "./RemoteControls";
 import { RemoteSettingsPanel, useRemoteSettings } from "./RemoteSettings";
 import { appendReviewFeedback, reviewCommentLineLabel, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
@@ -311,8 +301,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [chatJumpKeysVisible, setChatJumpKeysVisible] = useState(false);
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(previewEnvironment?.events ?? []);
-  const [responseFeedbackDialog, setResponseFeedbackDialog] = useState<ResponseFeedbackDialogState | null>(null);
-  const [responseFeedbackSubmitting, setResponseFeedbackSubmitting] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() =>
     previewEnvironment ? new Set(previewEnvironment.reviewFiles.map((file) => file.path)) : new Set(),
@@ -448,7 +436,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const reviewScopeRequestRef = useRef(0);
   const modalTriggerRef = useRef<HTMLElement | null>(null);
   const modalRef = useRef<HTMLElement | null>(null);
-  const responseFeedbackInputRef = useRef<HTMLTextAreaElement | null>(null);
   const suppressDraftSaveRef = useRef(false);
   // Read by the async unsaved-draft restore, which must see the live value
   // rather than the one captured when it started.
@@ -591,7 +578,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   useEffect(() => {
     if (!connectionSettings.localModelLoading && !dictationStarting) setModelStartupDismissed(false);
   }, [connectionSettings.localModelLoading, dictationStarting]);
-  const telemetrySyncEnabled = backend?.diagnostics.telemetry.syncEnabled ?? endpointSettings.mode === "server";
   const localLogInfo = backend?.diagnostics.localLogs ?? { bytes: 0, entries: 0 };
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   // A chat that already ran without a folder keeps running without one: its
@@ -656,15 +642,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const workspaceModeLocked = activeTaskWorkspaceMode === "worktree" || !!activeChatWorktreeTaskId;
   const useWorktreeForNextRun = canUseWorktreeMode && (workspaceModeLocked || workspaceMode === "worktree");
   const visibleEvents = events;
-  const responseFeedback = useMemo(() => {
-    const ratings = new Map<string, "good" | "bad">();
-    for (const event of visibleEvents) {
-      if (event.type === "response.feedback") {
-        ratings.set(event.messageId, event.rating);
-      }
-    }
-    return ratings;
-  }, [visibleEvents]);
   const composerItems = useMemo(() => {
     const items = composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state);
     // Soft bound for very long chats: keep the newest composer items without a full virtualizer rewrite.
@@ -906,14 +883,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   function setVisibleTask(nextTask: TaskInfo | null) {
     visibleTaskIdRef.current = nextTask?.id ?? null;
-    setResponseFeedbackDialog(null);
     if (nextTask) setWorkspaceReview(null);
     setTask(nextTask);
   }
 
   function prepareVisibleTaskLoad(taskId: string | null) {
     visibleTaskIdRef.current = taskId;
-    setResponseFeedbackDialog(null);
     setWorkspaceReview(null);
     setTask(null);
   }
@@ -1146,8 +1121,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     !!previewAttachment?.previewDataUrl
     || !!deleteCandidate
     || showElevatedPermissionsDialog
-    || approvalPending
-    || !!responseFeedbackDialog;
+    || approvalPending;
   const modalOpen = settingsOpen || nonSettingsModalOpen;
 
   /** Opens the microphone, or offers the way in when dictation is not set up. */
@@ -1306,13 +1280,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     };
     document.addEventListener("keydown", trapFocus);
     return () => { window.cancelAnimationFrame(frame); document.removeEventListener("keydown", trapFocus); };
-  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending, responseFeedbackDialog]);
+  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending]);
 
-  useEffect(() => {
-    if (!responseFeedbackDialog) return undefined;
-    const frame = window.requestAnimationFrame(() => responseFeedbackInputRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
-  }, [responseFeedbackDialog?.messageId, responseFeedbackDialog?.rating]);
 
   // The offset lives on the DOM node rather than in the style prop, so it needs
   // its starting value written once. Everything after this comes from the
@@ -2421,86 +2390,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     await copyPlainText(value);
   }
 
-  function openResponseFeedbackDialog(
-    messageId: string,
-    rating: ResponseRating,
-    trigger: HTMLButtonElement,
-  ) {
-    modalTriggerRef.current = trigger;
-    const previousFeedback = [...visibleEvents].reverse().find(
-      (event): event is Extract<BackendUiEvent, { type: "response.feedback" }> =>
-        event.type === "response.feedback" && event.messageId === messageId,
-    );
-    setResponseFeedbackDialog({
-      messageId,
-      rating,
-      ...(previousFeedback?.rating === rating && previousFeedback.reason
-        ? { reason: previousFeedback.reason }
-        : {}),
-      comment: previousFeedback?.rating === rating ? previousFeedback.comment ?? "" : "",
-    });
-  }
-
-  async function rateResponse(
-    messageId: string,
-    rating: ResponseRating,
-    reason?: ResponseFeedbackReason,
-    comment?: string,
-  ): Promise<boolean> {
-    if (!latestTaskId) return false;
-    setError(null);
-    const taskId = latestTaskId;
-    const previousFeedback = [...visibleEvents].reverse().find(
-      (event): event is Extract<BackendUiEvent, { type: "response.feedback" }> =>
-        event.type === "response.feedback" && event.taskId === taskId && event.messageId === messageId,
-    );
-    const nextComment = (comment ?? "").trim().slice(0, 1000);
-    setEvents((current) => appendBackendEvent(current, {
-      type: "response.feedback",
-      taskId,
-      messageId,
-      rating,
-      ...(reason ? { reason } : {}),
-      ...(nextComment ? { comment: nextComment } : {}),
-      at: new Date().toISOString(),
-    }, 500));
-    try {
-      await api.setResponseFeedback({
-        taskId,
-        messageId,
-        rating,
-        ...(reason ? { reason } : {}),
-        ...(nextComment ? { comment: nextComment } : {}),
-      });
-      return true;
-    } catch (cause) {
-      setEvents((current) => {
-        const withoutFailedRating = removeResponseFeedback(current, taskId, messageId) as BackendUiEvent[];
-        return previousFeedback
-          ? appendBackendEvent(withoutFailedRating, { ...previousFeedback, at: new Date().toISOString() }, 500)
-          : withoutFailedRating;
-      });
-      setError(String(cause instanceof Error ? cause.message : cause));
-      return false;
-    }
-  }
-
-  async function submitResponseFeedback() {
-    if (!responseFeedbackDialog || responseFeedbackSubmitting) return;
-    setResponseFeedbackSubmitting(true);
-    try {
-      const submitted = await rateResponse(
-        responseFeedbackDialog.messageId,
-        responseFeedbackDialog.rating,
-        responseFeedbackDialog.reason,
-        responseFeedbackDialog.comment,
-      );
-      if (submitted) setResponseFeedbackDialog(null);
-    } finally {
-      setResponseFeedbackSubmitting(false);
-    }
-  }
-
   async function exportLocalLogs() {
     setLocalLogsBusy(true);
     try {
@@ -2592,13 +2481,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 type="button"
                 role="menuitem"
                 onClick={() => {
-                  void api.recordProductEvent({
-                    type: "ide.selected",
-                    taskId: task?.id,
-                    repositoryId: repository?.id,
-                    ideId: ide.id,
-                    surface: owner,
-                  }).catch(() => undefined);
                   setSelectedIdeId(ide.id);
                   setIdeMenuOpen(null);
                 }}
@@ -2702,13 +2584,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   function openReviewPanel(filePath?: string) {
     if (!reviewOpen || reviewClosing) {
-      void api.recordProductEvent({
-        type: "review.opened",
-        taskId: task?.id,
-        repositoryId: repository?.id,
-        scope: task?.reviewScope ?? tasklessReviewScope,
-        target: task ? "task" : "project",
-      }).catch(() => undefined);
     }
     cancelReviewClose();
     if (!reviewHasSessionWidth) setReviewWidth(Math.min(reviewOpenWidth(), reviewMaxWidth()));
@@ -3637,14 +3512,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         key={item.id}
                         item={item}
                         settled={!isGenerating || item.id !== lastAssistantItemId}
-                        rating={responseFeedback.get(item.id)}
                         copyText={item.text}
                         onCopy={(text) => void copyText(text)}
-                        // Ratings exist to reach the company server as rated-chat
-                        // telemetry. A local chat has nowhere to send one, so the
-                        // thumbs are not offered.
-                        canRate={endpointSettings.mode === "server"}
-                        onRate={openResponseFeedbackDialog}
                         documents={
                           // Generated documents belong to the newest answer.
                           item.id === lastAssistantItemId && reviewReadyForDisplay && documentReviewFiles.length ? (
@@ -4214,101 +4083,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         />
       </aside>
 
-      {responseFeedbackDialog ? (
-        <div
-          className="modalScrim responseFeedbackScrim"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !responseFeedbackSubmitting) {
-              setResponseFeedbackDialog(null);
-            }
-          }}
-        >
-          <form
-            ref={modalRef as React.RefObject<HTMLFormElement>}
-            tabIndex={-1}
-            className="responseFeedbackDialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="response-feedback-title"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submitResponseFeedback();
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && !responseFeedbackSubmitting) {
-                setResponseFeedbackDialog(null);
-              }
-            }}
-          >
-            <header>
-              <span className={`responseFeedbackDialogIcon is${responseFeedbackDialog.rating === "good" ? "Good" : "Bad"}`}>
-                {responseFeedbackDialog.rating === "good" ? <ThumbsUp size={16} /> : <ThumbsDown size={16} />}
-              </span>
-              <h3 id="response-feedback-title">
-                {responseFeedbackDialog.rating === "good"
-                  ? "What made this a good answer?"
-                  : "What could be better?"}
-              </h3>
-              <button
-                className="responseFeedbackClose"
-                type="button"
-                aria-label="Close response feedback"
-                disabled={responseFeedbackSubmitting}
-                onClick={() => setResponseFeedbackDialog(null)}
-              >
-                <X size={15} />
-              </button>
-            </header>
-            <fieldset>
-              <legend>Choose one (optional)</legend>
-              <div className="responseFeedbackOptions">
-                {responseFeedbackReasons[responseFeedbackDialog.rating].map((reason) => (
-                  <button
-                    type="button"
-                    key={reason}
-                    aria-pressed={responseFeedbackDialog.reason === reason}
-                    onClick={() => setResponseFeedbackDialog((current) => current ? {
-                      ...current,
-                      reason: current.reason === reason ? undefined : reason,
-                    } : current)}
-                  >
-                    {reason}
-                  </button>
-                ))}
-              </div>
-            </fieldset>
-            <label>
-              <span>Additional details (optional)</span>
-              <textarea
-                ref={responseFeedbackInputRef}
-                autoFocus
-                data-modal-autofocus
-                value={responseFeedbackDialog.comment}
-                maxLength={1000}
-                placeholder="Add a note"
-                onChange={(event) => {
-                  const comment = event.target.value;
-                  setResponseFeedbackDialog((current) => current ? { ...current, comment } : current);
-                }}
-              />
-            </label>
-            <footer>
-              <button
-                className="secondaryAction"
-                type="button"
-                disabled={responseFeedbackSubmitting}
-                onClick={() => setResponseFeedbackDialog(null)}
-              >
-                Cancel
-              </button>
-              <button className="primaryAction" type="submit" disabled={responseFeedbackSubmitting}>
-                {responseFeedbackSubmitting ? "Submitting…" : "Submit"}
-              </button>
-            </footer>
-          </form>
-        </div>
-      ) : null}
       {reviewFeedbackDialogOpen ? (() => {
         const readOnly = reviewFeedbackPreview !== null;
         const dialogFeedback = readOnly
@@ -4402,9 +4176,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     onToggleLaunchAtLogin={(next) => void updateLaunchAtLogin(next)}
                   />
                 ) : null}
-                {settingsTab === "telemetry" ? (
-                  <TelemetrySettingsPanel
-                    syncEnabled={telemetrySyncEnabled}
+                {settingsTab === "diagnostics" ? (
+                  <DiagnosticsSettingsPanel
                     localLogSize={formatFileSize(localLogInfo.bytes)}
                     busy={localLogsBusy}
                     logEntryCount={localLogInfo.entries}

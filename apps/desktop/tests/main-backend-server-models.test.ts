@@ -9,8 +9,8 @@ function backend(mode, state, sessionError = null, health = { features: ["models
   const mocks = Object.fromEntries([
     "electron", "./mainRuntime", "./config", "./capabilities", "./runnerAdapter",
     "./policy", "./localVeil", "./localLlama", "./localSpeech", "./localModels",
-    "./toolSettings", "./appPaths", "./hardware", "./diagnostics", "./telemetry",
-    "./telemetrySync", "./skills", "../shared/harnessSkills", "./utils",
+    "./toolSettings", "./appPaths", "./hardware", "./diagnostics",
+    "./skills", "../shared/harnessSkills", "./utils",
   ].map((name) => [name, {}]));
   Object.assign(mocks, {
     electron: { app: { getPath: () => "/tmp" } },
@@ -39,7 +39,7 @@ function backend(mode, state, sessionError = null, health = { features: ["models
     "./capabilities": { probeLocalCapabilities: async () => ({}) },
     "./runnerAdapter": { runnerBinaryPath: () => "/runner", runnerDiagnosticsDirectory: () => "/logs" },
     "./hardware": { systemProfile: async () => ({}) },
-    "./policy": { isLocalhostUrl: () => false, telemetryPolicyForMode: () => ({}), runtimeDiagnostics: () => ({}) },
+    "./policy": { isLocalhostUrl: () => false, runtimeDiagnostics: () => ({}) },
     "./toolSettings": { webToolsEnabled: () => false },
     "./utils": { isRecord: (value) => value && typeof value === "object" },
   });

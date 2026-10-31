@@ -43,14 +43,14 @@ const descriptiveVersionFiles = new Set([
   "apps/desktop/src/main/capabilities.ts",
   "apps/desktop/src/main/remoteHost.ts",
   "packages/runner/src/conversation_state.rs",
-  "apps/desktop/tests/fixtures/telemetry-bundle.golden.json",
-  "apps/desktop/src/main/telemetry.ts",
   "apps/desktop/src/renderer/previewEnvironment.ts",
   "apps/desktop/src/renderer/previewCapabilities.ts",
   "apps/desktop/tests/main-capabilities.test.ts",
   "apps/desktop/tests/main-ocr-runtime.test.ts",
   // electron-updater's UpdateInfo, a shape we do not own, describing a release.
   "apps/desktop/tests/main-app-updates.test.ts",
+  "apps/desktop/tests/release-artifacts.test.ts",
+  "scripts/ci/release-artifacts.ts",
   "apps/desktop/tests/no-versioning-guard.test.ts",
 ]);
 
@@ -58,8 +58,6 @@ const descriptiveVersionFiles = new Set([
 const rejectionAssertionFiles = new Set([
   "packages/runner/src/conversation_state.rs",
   "packages/runner/src/workspace_graph.rs",
-  "infrastructure/veil/internal/telemetry/telemetry_test.go",
-  "apps/desktop/tests/main-telemetry.test.ts",
   "apps/desktop/tests/no-versioning-guard.test.ts",
 ]);
 

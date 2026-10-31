@@ -133,7 +133,3 @@ export function crashDumpsDirectory(dataRoot: string): string {
 export function runnerLogsDirectory(dataRoot: string): string {
   return path.join(dataRoot, "logs", "runner");
 }
-
-export function telemetrySpoolDirectoryPath(dataRoot: string): string {
-  return path.join(dataRoot, "telemetry", "spool");
-}

@@ -146,8 +146,6 @@ func testConfig() config.Config {
 		Mode:                   model.ModeServer,
 		DefaultModel:           "default-model",
 		Models:                 []config.ModelEntry{{ID: "default-model", ProviderBaseURL: "http://provider.test"}},
-		TelemetryEnabled:       true,
-		TelemetryRetentionDays: 30,
 		RequestTimeout:         time.Second,
 		StreamIdleTimeout:      time.Second,
 		MaxBodyBytes:           1 << 20,

@@ -12,7 +12,7 @@ export function requiredString(value: unknown, field: string): string {
 }
 
 export function quoteCommandArg(arg: string): string {
-  return /\s|"/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg;
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
 export function commandText(command: string, args: string[]): string {

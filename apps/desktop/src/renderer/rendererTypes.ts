@@ -3,7 +3,6 @@
 
 import type { CommandRun } from "./commandDisplay";
 import type { ReviewCommentDraft, ReviewFeedbackReference } from "./review/reviewComments";
-import type { ResponseFeedbackReason, ResponseRating } from "../shared/responseFeedback";
 import type { TaskPermissionRequest } from "./taskEventReducer";
 import type { ChatAttachment, IdeInfo, ReviewFile } from "../shared/desktopApi";
 
@@ -12,13 +11,6 @@ export type { ReviewFile };
 export type AppearanceTheme = "system" | "light" | "dark";
 
 export type IdeChoice = IdeInfo;
-
-export type ResponseFeedbackDialogState = {
-  messageId: string;
-  rating: ResponseRating;
-  reason?: ResponseFeedbackReason;
-  comment: string;
-};
 export type ComposerSubmission = {
   prompt: string;
   attachedFiles: ChatAttachment[];

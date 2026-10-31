@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"umbratic-veil/internal/policy"
-	"umbratic-veil/internal/telemetry"
 )
 
 func (s *Server) handleRuntimeMetrics(w http.ResponseWriter, r *http.Request) {
@@ -84,9 +83,6 @@ func (s *Server) runtimeMetrics(parent context.Context) map[string]any {
 		payload[name] = value
 	}
 	for name, value := range policy.CompatibilityCounters() {
-		payload[name] = value
-	}
-	for name, value := range telemetry.DropCounters() {
 		payload[name] = value
 	}
 	for name, value := range s.retriever.Counters() {

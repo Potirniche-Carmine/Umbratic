@@ -455,11 +455,15 @@ test("importSkill imports a real folder skill with referenced resources and reje
   assert.match(reserved.message, /reserved skill/);
 });
 
-test("importSkill imports a zip skill archive with one skill folder", async () => {
+test("importSkill imports a zip skill archive with one skill folder", async (t) => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-settings-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
   const skills = loadSkills(userData);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-target-"));
-  const zipPath = path.join(os.tmpdir(), `umbratic-skill-${Date.now()}-${Math.random().toString(16).slice(2)}.zip`);
+  const archiveDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-"));
+  t.after(() => fs.rmSync(archiveDirectory, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const zipPath = path.join(archiveDirectory, "skill.zip");
   fs.writeFileSync(
     zipPath,
     storedZip({
@@ -479,15 +483,19 @@ test("importSkill imports a zip skill archive with one skill folder", async () =
   }
 });
 
-test("importSkill rejects zip archives with too many entries or symlink entries", async () => {
+test("importSkill rejects zip archives with too many entries or symlink entries", async (t) => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-limits-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
   const skills = loadSkills(userData);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-limits-target-"));
   const crowded = Object.fromEntries(
     Array.from({ length: 257 }, (_, index) => [`entry-${index}.md`, `# ${index}`]),
   );
-  const crowdedPath = path.join(os.tmpdir(), `umbratic-skill-crowded-${Date.now()}.zip`);
-  const symlinkPath = path.join(os.tmpdir(), `umbratic-skill-symlink-${Date.now()}.zip`);
+  const archiveDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-limits-archives-"));
+  t.after(() => fs.rmSync(archiveDirectory, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const crowdedPath = path.join(archiveDirectory, "crowded.zip");
+  const symlinkPath = path.join(archiveDirectory, "symlink.zip");
   fs.writeFileSync(crowdedPath, storedZip(crowded));
   fs.writeFileSync(
     symlinkPath,

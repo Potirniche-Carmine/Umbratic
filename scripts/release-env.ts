@@ -79,3 +79,18 @@ export function windowsSigningConfig(): {
   }
   return { endpoint: endpoint!, codeSigningAccountName: codeSigningAccountName!, certificateProfileName: certificateProfileName!, publisherName: publisherName! };
 }
+
+/** Signed builds must never silently fall back to an unsigned or unnotarized app. */
+export function requireSigningEnvironment(platform = process.platform): void {
+  if (process.env.UMBRATIC_LLAMA_CPU_ONLY === "1") {
+    throw new Error("CPU-only development packages cannot be released.");
+  }
+  if (platform === "win32") {
+    if (!windowsSigningConfig()) throw new Error("Windows release signing is required. Configure UMBRATIC_WIN_SIGN_* or use --unsigned for local testing.");
+    return;
+  }
+  if (platform !== "darwin") throw new Error("Desktop releases support macOS and Windows only.");
+  const apiKey = ["APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"].every((key) => process.env[key]?.trim());
+  const appleId = ["APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"].every((key) => process.env[key]?.trim());
+  if (!apiKey && !appleId) throw new Error("macOS releases require complete Apple notarization credentials. Use --unsigned for local testing.");
+}

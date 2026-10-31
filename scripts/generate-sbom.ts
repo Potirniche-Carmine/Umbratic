@@ -68,7 +68,7 @@ function cargoComponents() {
   const result = spawnSync(
     "cargo",
     ["metadata", "--locked", "--offline", "--format-version", "1"],
-    { cwd: root, encoding: "utf8", windowsHide: true },
+    { cwd: root, encoding: "utf8", windowsHide: true, maxBuffer: 64 * 1024 * 1024 },
   );
   if (result.error || result.status !== 0) {
     throw new Error(
@@ -78,7 +78,7 @@ function cargoComponents() {
   const metadata = JSON.parse(result.stdout);
   const checksums = cargoChecksums();
   return metadata.packages
-    .filter((entry) => entry.source)
+    .filter((entry) => entry.source || entry.name === "umya-spreadsheet")
     .map((entry) => {
       const purl = `pkg:cargo/${encodeURIComponent(entry.name)}@${entry.version}`;
       const checksum = checksums.get(`${entry.name}@${entry.version}`);
@@ -88,6 +88,10 @@ function cargoComponents() {
         name: entry.name,
         version: entry.version,
         purl,
+        ...(!entry.source ? { properties: [
+          { name: "umbratic:source:vendored", value: "third_party/umya-spreadsheet/PROVENANCE.json" },
+          { name: "umbratic:source:patch", value: "Preserve both data-validation formula bounds" },
+        ] } : {}),
         ...(checksum ? { hashes: [{ alg: "SHA-256", content: checksum }] } : {}),
         ...(entry.license ? { licenses: licenseEntry(entry.license) } : {}),
         ...(entry.repository

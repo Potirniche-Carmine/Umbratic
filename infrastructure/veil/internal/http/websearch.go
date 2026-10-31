@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"umbratic-veil/internal/policy"
@@ -40,7 +41,7 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 
 	allowed, err := s.webSearchUsage.Reserve(limit, time.Now())
 	if err != nil {
-		recordWebSearchFailure("usage", err)
+		recordWebSearchFailure("usage")
 		writeCodedError(w, http.StatusBadGateway, "web_search_unavailable", "Web search is unavailable right now.")
 		return
 	}
@@ -53,7 +54,7 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	results, err := s.webSearch.Search(ctx, input.Query)
 	if err != nil {
-		recordWebSearchFailure("upstream", err)
+		recordWebSearchFailure("upstream")
 		writeCodedError(w, http.StatusBadGateway, "web_search_unavailable", "Web search is unavailable right now.")
 		return
 	}
@@ -79,18 +80,14 @@ func (s *Server) webSearchAvailable() bool {
 	return s.webSearch != nil && s.webSearchUsage.Available(s.webSearchMonthlyLimit(), time.Now())
 }
 
-// recordWebSearchFailure logs why a search did not happen. The detail is Veil's
-// own error text and never the upstream body, the query, or the subscription
-// token: the query is the user's words and the token is the company's
-// credential, and an operator log is the wrong home for either.
-func recordWebSearchFailure(stage string, err error) {
+// recordWebSearchFailure records the failed stage without queries or transport errors.
+func recordWebSearchFailure(stage string) {
 	record := map[string]any{
-		"level":  "warn",
-		"event":  "web_search.failed",
-		"stage":  stage,
-		"detail": boundedFailureDetail(err),
+		"level": "warn",
+		"event": "web_search.failed",
+		"stage": stage,
 	}
 	if encoded, marshalErr := json.Marshal(record); marshalErr == nil {
-		log.Printf("VEIL_DIAGNOSTIC %s", encoded)
+		log.Printf("VEIL_DIAGNOSTIC %s", strings.ReplaceAll(strings.ReplaceAll(string(encoded), "\r", "\\r"), "\n", "\\n"))
 	}
 }

@@ -1,3 +1,4 @@
+import { readRegularFileSync } from "./readFile";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -152,8 +153,7 @@ export function remoteRunnerArtifact(platformKey: string): { path: string; sha25
   ];
   for (const candidate of candidates) {
     try {
-      if (!fs.statSync(candidate).isFile()) continue;
-      const sha256 = crypto.createHash("sha256").update(fs.readFileSync(candidate)).digest("hex");
+      const sha256 = crypto.createHash("sha256").update(readRegularFileSync(candidate, Number.MAX_SAFE_INTEGER)).digest("hex");
       return { path: candidate, sha256 };
     } catch {
       // Try the next location; a missing artifact is an expected state.

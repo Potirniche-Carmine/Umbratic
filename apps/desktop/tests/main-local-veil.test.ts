@@ -50,8 +50,6 @@ test("managed local Veil is pointed at the app's own llama-server with its per-r
     assert.equal(env.VEIL_REQUEST_TIMEOUT, "12m");
     assert.equal(env.VEIL_MAX_OUTPUT_TOKENS, "8192");
     assert.equal(env.VEIL_MAX_BODY_BYTES, "67108864");
-    assert.equal(env.VEIL_TELEMETRY_ENABLED, "false");
-    assert.equal(env.VEIL_TELEMETRY_STORE_PATH, "");
     assert.notEqual(env.VEIL_AUTH_TOKEN, "user-facing-token-is-ignored");
     assert.equal("HTTP_PROXY" in env, false);
     assert.equal("http_proxy" in env, false);

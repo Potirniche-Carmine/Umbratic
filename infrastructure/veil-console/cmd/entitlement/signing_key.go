@@ -10,7 +10,7 @@ import (
 )
 
 // The release signer is provisioned once and never replaced. It is independent
-// of the feed master; customer update keys keep their existing derivation.
+// of any vendor credential; the deployment administrator owns this key.
 func signingKey(path string) ([]byte, bool, error) {
 	info, err := os.Lstat(path)
 	if err == nil {
