@@ -10,7 +10,7 @@ Use the exact versions in `.nvmrc`, `rust-toolchain.toml`, and
 `infrastructure/veil/go.mod`.
 
 ```bash
-npm ci --ignore-scripts
+npm ci --ignore-scripts --omit=peer
 ```
 
 ```bash
@@ -25,6 +25,10 @@ The third command is separate on purpose: it runs the install program from the
 integrity-checked Electron package and verifies Electron's published checksum
 before making the runtime available. Development and packaging fail if the
 runtime was not provisioned.
+
+The Windows package uses NSIS. `--omit=peer` leaves out its unused Squirrel
+backend; the supply-chain gate verifies the exact reviewed omission and
+NSIS-only packaging configuration.
 
 All Cargo builds must pass `--locked`.
 
@@ -51,6 +55,16 @@ npm run supply-chain:sbom
 ```
 
 CycloneDX 1.6 inventory from `package-lock.json` and locked Cargo metadata.
+
+## Unreachable OpenPGP advisory
+
+`govulncheck` reports [GO-2026-5932](https://pkg.go.dev/vuln/GO-2026-5932) at module
+scope for the deprecated `golang.org/x/crypto/openpgp` packages. They have no
+published fix. Console uses `golang.org/x/crypto` for Argon2id password hashing;
+its compiled dependencies include `argon2` and `blake2b`, and no OpenPGP package.
+The scanner reports zero affected imported packages or called symbols for this
+advisory. `supply-chain-policy.json` records the reviewed exception, and the audit
+continues to display it; it is not suppressed.
 
 ## Adding or updating a dependency
 
@@ -180,9 +194,11 @@ Runbook: [../guides/release-desktop.md](../guides/release-desktop.md).
 PKCS#12/PFX client identities. Managed endpoints must use PEM `certPath` and
 `keyPath`, keeping the default runner on one rustls TLS stack.
 
-Release signing, notarization, branch protection, repository rulesets,
-CODEOWNERS assignment, and GitHub private-repository dependency review require
-repository or organization administration and are not configured here.
+Release workflows define signed builds and notarization. The public repository
+requires pull requests and the `CI required` and `CodeQL` checks for `main`, and
+disables force pushes and branch deletion. Administrators configure signing
+credentials and reviewer/CODEOWNERS rules through GitHub. Keep credentials out
+of source control; follow the [release guide](../guides/release-desktop.md).
 
 ## Image runtime sources
 

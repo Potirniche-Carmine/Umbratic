@@ -4,8 +4,8 @@ GitHub Actions tests, builds and publishes Umbratic. GitHub Releases hosts the
 public installers and updater metadata. No Cloudflare account, bucket, Worker,
 company enrollment or update token is required.
 
-Supported release targets are macOS Apple Silicon, Windows x64 and Windows
-ARM64. Each native runner builds the Rust helpers, Veil, Electron shell and
+Supported release targets are macOS 13 or later on Apple Silicon, Windows x64
+and Windows ARM64. Each native runner builds the Rust helpers, Veil, Electron shell and
 pinned local runtimes for its own architecture.
 
 ## Configure signing once

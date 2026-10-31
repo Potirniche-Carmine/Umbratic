@@ -21,7 +21,7 @@ Model downloads, application release checks, server enrollment, and explicitly u
 
 ## Getting started
 
-Download an available macOS or Windows build from [GitHub Releases](https://github.com/Potirniche-Carmine/Umbratic/releases). Local mode is the first-run default. Choose and download a model in the app; the download size and hardware requirements depend on the model.
+Download an available build for macOS 13 or later on Apple Silicon, Windows x64, or Windows ARM64 from [GitHub Releases](https://github.com/Potirniche-Carmine/Umbratic/releases). Local mode is the first-run default. Choose and download a model in the app; the download size and hardware requirements depend on the model.
 
 For shared infrastructure, follow the [self-hosted server guide](docs/guides/deploy-customer.md). An administrator runs Veil Console and Veil, adds models, and provides an enrollment code. Select **Company server** in Settings to enroll your device.
 
@@ -32,7 +32,7 @@ Install Node.js and npm at the versions in [package.json](package.json), Rust fr
 Install locked dependencies and explicitly provision the checksum-verified Electron runtime:
 
 ```sh
-npm ci --ignore-scripts
+npm ci --ignore-scripts --omit=peer
 cargo fetch --locked
 npm run dependencies:provision
 ```
