@@ -457,8 +457,14 @@ test("importSkill imports a real folder skill with referenced resources and reje
 
 test("importSkill imports a zip skill archive with one skill folder", async (t) => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-settings-"));
-  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
-  const skills = loadSkills(userData);
+  const options = { cache: new Map(), mocks: { electron: electronMock(userData) } };
+  const skills = loadTypeScriptModule(skillsPath, options);
+  const storage = loadTypeScriptModule(new URL("../src/main/storage.ts", import.meta.url), options);
+  t.after(() => {
+    storage.closeStorageDatabases();
+    assert.equal(storage.retainedStorageDatabaseCount(), 0);
+    fs.rmSync(userData, { recursive: true, force: true });
+  });
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-target-"));
   const archiveDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-"));
   t.after(() => fs.rmSync(archiveDirectory, { recursive: true, force: true }));
@@ -474,6 +480,7 @@ test("importSkill imports a zip skill archive with one skill folder", async (t) 
   try {
     const imported = await skills.importSkill({ sourcePath: zipPath }, directory);
     assert.equal(imported.ok, true);
+    assert.ok(storage.retainedStorageDatabaseCount() > 0, "skill settings retain their SQLite database until shutdown");
     assert.equal(imported.skill.id, "zip-skill");
     assert.equal(fs.readFileSync(path.join(directory, "zip-skill", "examples.md"), "utf8"), "Zip resource text.");
     const selected = skills.enabledPromptSkills(directory, { "zip-skill": true });

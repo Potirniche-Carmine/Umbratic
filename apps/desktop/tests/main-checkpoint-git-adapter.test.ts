@@ -56,6 +56,30 @@ test("checkpoint captures tracked, deleted, and untracked state without changing
   }
 });
 
+test("checkpoint identity follows filesystem canonical paths and still rejects a nested workspace", async () => {
+  const root = fixtureRepository();
+  const alias = path.join(path.dirname(root), path.basename(root).toUpperCase());
+  const needsLink = !fs.existsSync(alias);
+  if (needsLink) fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+  try {
+    fs.writeFileSync(path.join(root, "tracked.txt"), "alias checkpoint\n");
+    const checkpoint = await createGitCheckpoint({
+      workspacePath: alias, taskId: "task-alias", checkpointId: "alias", seedCommit: "HEAD",
+    });
+    fs.writeFileSync(path.join(root, "tracked.txt"), "later edit\n");
+    await restoreGitCheckpointPaths({ workspacePath: alias, checkpointCommit: checkpoint.commitOid, relativePaths: ["tracked.txt"] });
+    assert.equal(fs.readFileSync(path.join(root, "tracked.txt"), "utf8"), "alias checkpoint\n");
+    const nested = path.join(root, "nested");
+    fs.mkdirSync(nested);
+    await assert.rejects(createGitCheckpoint({
+      workspacePath: nested, taskId: "task-alias", checkpointId: "nested", seedCommit: "HEAD",
+    }), /must be the Git worktree root/);
+  } finally {
+    if (needsLink) fs.rmSync(alias, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("checkpoint rejects blocked secrets and materializes a contained fork", async () => {
   const root = fixtureRepository();
   const managedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-worktrees-test-"));

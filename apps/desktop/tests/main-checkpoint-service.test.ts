@@ -188,7 +188,8 @@ test("local Git chats get automatic checkpoints and restore into their own workt
   const restored = await state.service.restoreTaskCheckpoint({ task: state.task, checkpointId: before.id, managedRoot: state.managedRoot });
   assert.equal(restored.workspaceMode, "worktree");
   assert.equal(restored.worktreeRootTaskId, state.task.id);
-  assert.ok(restored.worktreePath.startsWith(state.managedRoot));
+  const relative = path.relative(path.resolve(state.managedRoot), path.resolve(restored.worktreePath));
+  assert.ok(relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 });
 
 test("a chat moving into an editing worktree gives its checkpoints a new workspace owner", async () => {

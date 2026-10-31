@@ -108,8 +108,8 @@ async function assertEligible(workspacePath: string, seed: string): Promise<{ ro
   const repositoryFacts = repositoryOutput.split(/\r?\n/);
   if (repositoryFacts.length !== 5) throw new Error("Checkpoint repository identity is unavailable.");
   const [topLevel, bare, commonDirectory, indexFile, seedCommit] = repositoryFacts;
-  const root = fs.realpathSync(path.resolve(topLevel));
-  if (root !== fs.realpathSync(path.resolve(workspacePath))) throw new Error("Checkpoint workspace must be the Git worktree root.");
+  const root = fs.realpathSync.native(path.resolve(topLevel));
+  if (root !== fs.realpathSync.native(path.resolve(workspacePath))) throw new Error("Checkpoint workspace must be the Git worktree root.");
   if (bare !== "false") throw new Error("Bare repositories cannot be checkpointed.");
   const commonDir = path.resolve(root, commonDirectory);
   if (!fs.existsSync(commonDir)) throw new Error("Git common directory is unavailable.");
@@ -291,7 +291,7 @@ export async function materializeCheckpointWorktree(input: {
     created = true;
     await git(target, ["read-tree", "--reset", "-u", commit]);
     await git(target, ["read-tree", indexTree]);
-    if (fs.realpathSync(path.resolve(await git(target, ["rev-parse", "--show-toplevel"]))) !== fs.realpathSync(target)
+    if (fs.realpathSync.native(path.resolve(await git(target, ["rev-parse", "--show-toplevel"]))) !== fs.realpathSync.native(target)
       || await git(target, ["rev-parse", "HEAD"]) !== head
       || await git(target, ["write-tree"]) !== indexTree) {
       throw new Error("Materialized checkpoint worktree failed validation.");

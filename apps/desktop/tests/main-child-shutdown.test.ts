@@ -18,8 +18,11 @@ test("shutdown escalates a real child that ignores termination and does not mist
     stopChild(child);
     stopChild(child);
     assert.equal(stopRequested(child), true);
-    assert.equal(child.killed, true);
+    // Windows uses external taskkill, which does not update this Node flag.
+    if (process.platform !== "win32") assert.equal(child.killed, true);
     const [code, signal] = await exited;
+    assert.equal(child.exitCode, code);
+    assert.equal(child.signalCode, signal);
     if (process.platform === "win32") assert.ok(code !== null || signal !== null);
     else assert.equal(signal, "SIGKILL");
   } finally {
