@@ -93,3 +93,34 @@ func TestDeploymentLockReleasesAfterProcessExit(t *testing.T) {
 	}
 	next.Close()
 }
+
+func TestDeploymentLockRemainsExclusiveAcrossDirectoryRename(t *testing.T) {
+	root := t.TempDir()
+	before, after := filepath.Join(root, "before"), filepath.Join(root, "after")
+	if err := os.Mkdir(before, 0700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireDeploymentLock(filepath.Join(before, "deploy-lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := os.Rename(before, after); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(after, "deploy-lock")
+	if other, err := acquireDeploymentLock(moved); err == nil {
+		other.Close()
+		t.Fatal("renaming the directory released the deployment lock")
+	} else if !strings.Contains(err.Error(), "another deployment is running") {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := acquireDeploymentLock(moved)
+	if err != nil {
+		t.Fatalf("closing the moved lock did not release it: %v", err)
+	}
+	next.Close()
+}

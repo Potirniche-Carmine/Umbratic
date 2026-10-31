@@ -132,7 +132,7 @@ loadable backend it is simply absent there.
 `-DGGML_NATIVE=OFF` is not optional. Left at its default it compiles
 `-march=native` against the build machine's CPU, and a release built that way
 crashes with an illegal instruction on any older user CPU, at first launch.
-macOS builds also pin `CMAKE_OSX_DEPLOYMENT_TARGET` to Electron's own minimum.
+Native macOS sidecars target macOS 12; the Electron desktop app requires macOS 13 or later.
 
 `-DLLAMA_CURL=OFF` removes llama.cpp's `-hf` remote-download path. Umbratic
 fetches weights itself from revision-pinned URLs it checksums against
@@ -169,9 +169,9 @@ No security advisory is suppressed.
 The October 2026 refresh updates Electron, Vite, matching and HTTP dependencies,
 Rust TLS/certificate roots, Tokio and archive consumers. ZIP codecs beyond deflate
 are disabled, removing the unused vulnerable zstd chain. Go modules require 1.26.10
-for standard-library security fixes. The build runtime is pinned to Node26.12.1
-and its bundled npm11.20.0 for the [October21 Node security fixes](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases).
-Electron44.10.0 embeds the fixed Node24.22.1 runtime; an npm-only audit does not
+for standard-library security fixes. The build runtime is pinned to Node 26.12.1
+and its bundled npm 11.20.0 for the [October 21 Node security fixes](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases).
+Electron 44.10.0 embeds the fixed Node 24.22.1 runtime; an npm-only audit does not
 cover the embedded runtime, so its [official release notes](https://releases.electronjs.org/release/v44.10.0) are reviewed too. Native and procedural-code allowlists track the
 reviewed graph; the Brotli decompressor's `BSD-3-Clause/MIT` license expression is
 reviewed alongside the already allowed individual licenses.

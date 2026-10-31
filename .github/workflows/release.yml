@@ -94,7 +94,7 @@ jobs:
             const required = process.platform === "darwin"
               ? ["MACOS_CERTIFICATE_P12", "MACOS_CERTIFICATE_PASSWORD"]
               : ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"];
-            for (const key of required) if (!process.env[key]?.trim()) throw new Error(`Missing release secret ${key}`);
+            for (const key of required) if (!process.env[key]?.trim()) throw new Error("Missing release secret " + key);
           '
       - name: Configure temporary macOS signing identity
         if: runner.os == 'macOS'

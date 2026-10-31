@@ -26,7 +26,7 @@ jobs:
       matrix:
         os: [macos-15, windows-2025, windows-11-arm]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -50,12 +50,18 @@ jobs:
       - run: npm run dependencies:provision
       - name: Run complete verification suite
         run: npm run test:all
-      - name: Package and smoke-test native resources
-        env:
-          # Unsigned CI packages exercise local packaging; release jobs require
-          # signatures, notarization and the Windows x64 Vulkan backend.
-          UMBRATIC_LLAMA_CPU_ONLY: '1'
-        run: npm run desktop:release -- --unsigned --dir
+      - name: Provision and verify reviewed Windows signing tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/install-windows-signing.ps1
+      - name: Install reviewed Vulkan SDK
+        if: matrix.os == 'windows-2025'
+        shell: pwsh
+        run: ./scripts/ci/install-vulkan.ps1
+      - name: Build installers and smoke-test production native resources
+        run: npm run desktop:release -- --unsigned
+      - name: Verify installer archives and actual updater checksums
+        run: node scripts/ci/verify-installer-artifacts.ts
 
   audit:
     name: Dependency and workflow audit
@@ -77,6 +83,12 @@ jobs:
       - run: npm ci --ignore-scripts --omit=peer
       - run: cargo install cargo-audit --locked --version "$(node -p 'JSON.parse(require("fs").readFileSync("supply-chain-policy.json")).cargoAuditVersion')"
       - run: go install "golang.org/x/vuln/cmd/govulncheck@v$(node -p 'JSON.parse(require("fs").readFileSync("supply-chain-policy.json")).govulncheckVersion')"
+      - name: Race-test both Go services on Linux
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          go -C infrastructure/veil test -race ./...
+          go -C infrastructure/veil-console test -race ./...
       - run: npm run supply-chain:audit
       - name: Fetch locked Cargo sources for offline SBOM generation
         run: cargo fetch --locked

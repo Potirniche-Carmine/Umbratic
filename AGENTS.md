@@ -84,4 +84,4 @@ npm run test:all
 
 Also run the nearest project build, lint, packaging, or formatting check when the root suite does not cover the changed behavior.
 
-Two things the root suite does not cover on Windows: `go test -race` is skipped because CGO is off, so run it on Linux or WSL when Go concurrency changed; and `scripts/check-source-size.ts` gates file length, with `apps/desktop/src/renderer/main.tsx` already over budget. Leave that file no worse than you found it.
+On Windows, the root suite runs all Go tests without race instrumentation when CGO is off or the target is ARM64; run `go test -race` on Linux or WSL when Go concurrency changed. Also, `scripts/check-source-size.ts` gates file length, with `apps/desktop/src/renderer/main.tsx` already over budget. Leave that file no worse than you found it.

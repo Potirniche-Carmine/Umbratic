@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { hashFile, verifyReleaseArtifacts } from "../../../scripts/ci/release-artifacts.ts";
+import { hashFile, verifyReleaseArtifacts, verifyUpdateChannel } from "../../../scripts/ci/release-artifacts.ts";
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-release-"));
@@ -56,4 +56,16 @@ test("stale versions and extra assets cannot be included in an otherwise valid r
   metadata.version = "0.0.1";
   fs.writeFileSync(file, JSON.stringify(metadata));
   assert.throws(() => verifyReleaseArtifacts(directory, "0.0.2"), /Invalid release metadata/);
+});
+
+test("native CI validates each architecture's actual updater metadata before publication staging", (t) => {
+  const directory = fixture(t);
+  assert.deepEqual(verifyUpdateChannel(directory, "0.0.2", "latest.yml", "Umbratic-0.0.2-x64.exe"), [
+    "latest.yml", "Umbratic-0.0.2-x64.exe",
+  ]);
+  fs.copyFileSync(path.join(directory, "latest-arm64.yml"), path.join(directory, "latest.yml"));
+  assert.deepEqual(verifyUpdateChannel(directory, "0.0.2", "latest.yml", "Umbratic-0.0.2-arm64.exe"), [
+    "latest.yml", "Umbratic-0.0.2-arm64.exe",
+  ]);
+  assert.throws(() => verifyUpdateChannel(directory, "0.0.2", "latest.yml", "Umbratic-0.0.2-x64.exe"), /Wrong platform asset/);
 });

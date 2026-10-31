@@ -21,10 +21,7 @@ func TestSigningKeyCreatesOnceAndReuses(t *testing.T) {
 	if err != nil || len(seed) != 32 {
 		t.Fatal("invalid seed")
 	}
-	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0600 {
-		t.Fatal("unsafe key permissions")
-	}
+	assertPrivateSigningKey(t, path)
 	second, created, err := signingKey(path)
 	if err != nil || created || !bytes.Equal(first, second) {
 		t.Fatal("existing key was replaced")
@@ -39,7 +36,15 @@ func TestSigningKeyCreatesOnceAndReuses(t *testing.T) {
 }
 func TestSigningKeyDoesNotReplaceInvalidFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "signing.key")
-	if err := os.WriteFile(path, []byte("invalid-existing-key"), 0600); err != nil {
+	file, err := createPrivateSigningKey(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("invalid-existing-key"); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
 	data, created, err := signingKey(path)
@@ -74,5 +79,26 @@ func TestDeploymentPolicyNeedsOnlyAdministratorSigningKey(t *testing.T) {
 	payload, err := entitlement.Verify(document, key)
 	if err != nil || payload.MaxAuthorizedUsers != 10 || payload.MaxDevicesPerUser != 2 {
 		t.Fatalf("signed deployment policy: %+v %v", payload, err)
+	}
+}
+
+func TestSigningKeyRejectsOversizedPrivateFileWithoutReplacingIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "signing.key")
+	file, err := createPrivateSigningKey(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(strings.Repeat("x", maxSigningKeyFileBytes+1)); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if data, created, err := signingKey(path); err == nil || created || data != nil {
+		t.Fatal("oversized private key input was accepted")
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() != maxSigningKeyFileBytes+1 {
+		t.Fatal("oversized private key input was replaced")
 	}
 }

@@ -95,8 +95,11 @@ packaging and cannot result in an unsigned public release.
    npm run release:version -- 0.0.3
    ```
 2. Open and merge a pull request. Require the **CI required** check on `main`.
-3. CI runs the complete verification suite and unsigned packaged-resource
-   smoke tests on all three native platforms. Dependency audits and workflow
+3. CI runs the complete verification suite, builds unsigned installers and
+   archives with production native backends, and validates archive integrity
+   plus actual updater checksums on all three native platforms. Windows x64
+   exercises the reviewed Vulkan SDK; both Windows hosts also verify the
+   credential-free signing-tool setup. Dependency audits and workflow
    validation also run. Pull requests never receive signing credentials.
 4. After a successful CI push run for current `main`, the Release workflow
    selects that exact commit and builds signed packages. macOS must pass

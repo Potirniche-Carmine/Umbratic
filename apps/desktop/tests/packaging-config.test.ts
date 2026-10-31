@@ -164,8 +164,13 @@ test("CI verifies every native platform on pull requests and main without releas
   assert.deepEqual(workflow.jobs.verify.strategy.matrix.os, ["macos-15", "windows-2025", "windows-11-arm"]);
   const commands = workflow.jobs.verify.steps.map((step) => step.run ?? "");
   assert.ok(commands.includes("npm run test:all"));
-  assert.ok(commands.includes("npm run desktop:release -- --unsigned --dir"));
+  assert.ok(commands.includes("npm run desktop:release -- --unsigned"));
   assert.ok(commands.includes("node scripts/check-release-version.ts"));
+  assert.ok(commands.includes("node scripts/ci/verify-installer-artifacts.ts"));
+  const vulkan = workflow.jobs.verify.steps.find((step) => step.run === "./scripts/ci/install-vulkan.ps1");
+  assert.equal(vulkan.if, "matrix.os == 'windows-2025'");
+  assert.ok(commands.includes("./scripts/ci/install-windows-signing.ps1"));
+  assert.doesNotMatch(source, /UMBRATIC_LLAMA_CPU_ONLY/);
   assert.doesNotMatch(source, /secrets\./);
   assert.deepEqual(workflow.jobs.required.needs, ["verify", "audit"]);
   assert.equal(workflow.jobs.required.if, "always()");
@@ -179,6 +184,10 @@ test("CI installs locked dependencies without lifecycle scripts and retains vuln
   }
   assert.ok(workflow.jobs.audit.steps.some((step) => step.run === "npm run supply-chain:audit"));
   assert.ok(workflow.jobs.audit.steps.some((step) => step.run === "npm run supply-chain:sbom"));
+  const linuxRace = workflow.jobs.audit.steps.find((step) => step.name === "Race-test both Go services on Linux");
+  assert.equal(linuxRace.env.CGO_ENABLED, "1");
+  assert.match(linuxRace.run, /go -C infrastructure\/veil test -race \.\/\.\.\./);
+  assert.match(linuxRace.run, /go -C infrastructure\/veil-console test -race \.\/\.\.\./);
 });
 
 test("CI pins actions and stays read-only", () => {
