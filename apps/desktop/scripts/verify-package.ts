@@ -1,7 +1,6 @@
-import { execFile, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
-import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -10,6 +9,7 @@ import { verifyPeArchitecture } from "./verify-pe.ts";
 import { resolveInstalledElectron } from "./electron-runtime.ts";
 import { verifyImageRuntimeGgufBounds } from "./build-image-runtime.ts";
 import { verifyWindowsDependencies } from "./windows-dependencies.ts";
+import { verifyLlamaDownloads } from "./verify-llama-downloads.ts";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const releaseRoot = path.resolve(desktopRoot, "../../target/release/desktop");
@@ -128,33 +128,6 @@ function verifyLlamaServer(directory: string) {
   }
 }
 
-async function verifyLlamaDownloads(file: string) {
-  // Deliberately omit --offline: the compiled patch must reject before any
-  // connection, even when a caller forgets the launch flag. A live listener
-  // independently catches a client that prints an error after contacting us.
-  let connected = false;
-  const listener = net.createServer((socket) => { connected = true; socket.destroy(); });
-  const probe = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-download-probe-"));
-  try {
-    await new Promise<void>((resolve, reject) => listener.once("error", reject).listen(0, "127.0.0.1", resolve));
-    const port = (listener.address() as net.AddressInfo).port;
-    for (const scheme of ["http", "https"]) {
-      await new Promise<void>((resolve, reject) => {
-        execFile(file, ["--model-url", `${scheme}://127.0.0.1:${port}/model.gguf`, "-m", path.join(probe, "model.gguf")], {
-          encoding: "utf8", timeout: 15_000, windowsHide: true, maxBuffer: 1024 * 1024,
-        }, (error, stdout, stderr) => {
-          if (!error || error.killed || !`${stdout}${stderr}`.includes("Remote downloads are disabled in the Umbratic runtime.")) {
-            reject(new Error(`Packaged llama-server did not reject ${scheme.toUpperCase()} model downloads.`));
-          } else resolve();
-        });
-      });
-    }
-  } finally {
-    if (listener.listening) await new Promise<void>((resolve) => listener.close(() => resolve()));
-    fs.rmSync(probe, { recursive: true, force: true });
-  }
-  if (connected) throw new Error("Packaged llama-server attempted a disabled remote download.");
-}
 
 /**
  * Proves a packaged Mach-O file resolves every library from the package

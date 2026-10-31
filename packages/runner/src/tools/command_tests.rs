@@ -16,7 +16,7 @@ async fn execute_command_in(
     let sink = crate::session::test_sink(directory.path());
     let mut events = sink.subscribe();
     let permissions = Arc::new(crate::permission::PermissionBroker::default());
-    let task = tokio::spawn(execute_tool(
+    let mut task = tokio::spawn(execute_tool(
         crate::session::test_session(directory.path()),
         sink.clone(),
         permissions.clone(),
@@ -28,7 +28,10 @@ async fn execute_command_in(
         },
     ));
     loop {
-        let event = events.recv().await.unwrap();
+        let event = tokio::select! {
+            result = &mut task => return (result.unwrap(), directory),
+            event = events.recv() => event.unwrap(),
+        };
         if event["type"] == "permission.requested" {
             permissions.reply(&sink, event["permissionId"].as_str().unwrap(), "allow");
             break;
@@ -179,5 +182,30 @@ async fn commands_do_not_inherit_runner_stdin() {
         "child test failed: {}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn command_module_search_stays_within_the_trusted_system_shell() {
+    let result = execute_command_for_test(
+        "Write-Output 'module-probe'; [Console]::Out.WriteLine('effective-modules=' + [Environment]::GetEnvironmentVariable('PSModulePath'))",
+        5_000,
+    )
+    .await;
+    assert_eq!(result.status, "success", "{:?}", result.error_message);
+    let effective = result
+        .content
+        .lines()
+        .find_map(|line| line.strip_prefix("effective-modules="))
+        .unwrap();
+    let expected = safe_command_environment().remove("PSModulePath").unwrap();
+    assert_eq!(
+        effective, expected,
+        "PowerShell expanded its restricted module search path"
+    );
+    assert!(
+        !effective.contains(';'),
+        "Only one trusted system module directory is allowed"
     );
 }

@@ -381,7 +381,12 @@ if (!preparePackageScript.includes(downloadPatchName) || !downloadPatch.includes
   fail("Packaged llama-server must apply the reviewed central model/media download rejection patch.");
 }
 const verifyPackageScript = fs.readFileSync(path.join(root, "apps/desktop/scripts/verify-package.ts"), "utf8");
-if (!verifyPackageScript.includes(downloadDenial) || !verifyPackageScript.includes('for (const scheme of ["http", "https"])')) {
+const verifyDownloadsScript = fs.readFileSync(path.join(root, "apps/desktop/scripts/verify-llama-downloads.ts"), "utf8");
+if (!verifyPackageScript.includes('import { verifyLlamaDownloads } from "./verify-llama-downloads.ts"')
+    || !verifyPackageScript.includes('await verifyLlamaDownloads(path.join(resources, "llama-server", executable("llama-server")))')) {
+  fail("Package verification must import and invoke the compiled llama-server download rejection probe.");
+}
+if (!verifyDownloadsScript.includes(downloadDenial) || !verifyDownloadsScript.includes('for (const scheme of ["http", "https"])')) {
   fail("Package verification must exercise the compiled HTTP and HTTPS download rejection.");
 }
 if (!preparePackageScript.includes("...llamaCpuBuildFlags(process.platform, process.arch)")) {

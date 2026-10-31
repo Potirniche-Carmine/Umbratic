@@ -539,6 +539,9 @@ pub(super) fn safe_command_environment() -> BTreeMap<String, String> {
         // Windows PowerShell otherwise probes user/global module locations
         // during cmdlet discovery even with -NoProfile/-NonInteractive. Only
         // the modules beside the trusted system shell may enter this path.
+        // Provider qualification prevents Windows PowerShell from treating it
+        // as its default path and inserting AllUsers module directories.
+        // https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_psmodulepath#windows-powershell-startup
         let root = std::env::var_os("SystemRoot")
             .or_else(|| std::env::var_os("WINDIR"))
             .unwrap_or_else(|| r"C:\Windows".into());
@@ -550,7 +553,7 @@ pub(super) fn safe_command_environment() -> BTreeMap<String, String> {
         env.retain(|name, _| !name.eq_ignore_ascii_case("PSModulePath"));
         env.insert(
             "PSModulePath".into(),
-            modules.to_string_lossy().into_owned(),
+            format!("FileSystem::{}", modules.display()),
         );
     }
     env

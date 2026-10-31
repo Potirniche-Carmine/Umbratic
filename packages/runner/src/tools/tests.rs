@@ -72,8 +72,11 @@ fn command_children_use_trusted_shell_and_minimal_path() {
     );
     #[cfg(windows)]
     assert_eq!(
-        env.get("PSModulePath").map(std::path::PathBuf::from),
-        Some(shell.parent().unwrap().join("Modules")),
+        env.get("PSModulePath").cloned(),
+        Some(format!(
+            "FileSystem::{}",
+            shell.parent().unwrap().join("Modules").display()
+        )),
         "PowerShell must discover only the modules beside the trusted system shell"
     );
     #[cfg(not(windows))]

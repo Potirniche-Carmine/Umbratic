@@ -101,8 +101,10 @@ test("desktop builds llama-server from the pinned commit and packages it", () =>
   const noDownloads = fs.readFileSync(new URL("../../../third_party/llama.cpp-disable-remote-downloads.patch", import.meta.url), "utf8");
   assert.match(noDownloads, /\+\s+throw std::runtime_error\("Remote downloads are disabled in the Umbratic runtime\."\);/);
   assert.doesNotMatch(noDownloads.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).join("\n"), /httplib::Client cli|common_http_parse_url\(/);
-  assert.match(verifyPackage, /for \(const scheme of \["http", "https"\]\)/);
-  assert.match(verifyPackage, /"--model-url"/);
+  assert.match(verifyPackage, /verifyLlamaDownloads\(path.join\(resources/);
+  const downloadProbe = fs.readFileSync(new URL("../scripts/verify-llama-downloads.ts", import.meta.url), "utf8");
+  assert.match(downloadProbe, /for \(const scheme of \["http", "https"\]\)/);
+  assert.match(downloadProbe, /"--model-url"/);
   // Never -march=native: a release binary must run on CPUs older than the one
   // that built it, and macOS older than the SDK that built it.
   const cpuBuild = fs.readFileSync(new URL("../scripts/llama-build-config.ts", import.meta.url), "utf8");
