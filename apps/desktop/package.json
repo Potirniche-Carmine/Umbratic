@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "@cantoo/pdf-lib": "2.8.1",
-    "@napi-rs/canvas": "1.0.6",
+    "@napi-rs/canvas": "1.0.11",
     "@xmldom/xmldom": "0.9.12",
     "electron-updater": "6.8.9",
     "fontkit": "2.0.4",
