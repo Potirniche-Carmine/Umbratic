@@ -20,11 +20,12 @@ Umbratic is a hybrid monorepo:
 | `packages/runner/` | Production Rust workspace runner |
 | `packages/code-index/` | Rust producer for the workspace-graph artifact the runner reads |
 | `packages/pdf/` | Rust PDF text extractor, used by the desktop and by Console document ingestion |
+| `packages/artifacts/` | Rust spreadsheet creation, inspection, and editing sidecar |
 | `infrastructure/veil/` | Go model gateway: auth, prompts, route/model policy, runtime calls |
 | `infrastructure/veil-console/` | Admin service that configures and supervises one Veil process, and the vLLM process per managed model |
 | `scripts/` | Repo-level launch, build, benchmark, supply-chain, and CI helpers |
 
-The Cargo workspace is `apps/desktop/native` plus the three `packages/` crates.
+The Cargo workspace is `apps/desktop/native` plus the four `packages/` crates.
 
 Treat each top-level area as its own project unless the task crosses an interface between them.
 

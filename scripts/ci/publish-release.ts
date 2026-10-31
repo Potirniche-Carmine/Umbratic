@@ -15,7 +15,7 @@ function gh(args: string[]) {
 function api(endpoint: string) { return JSON.parse(gh(["api", endpoint])); }
 const directory = path.resolve("target/release/upload");
 const files = verifyReleaseArtifacts(directory, version);
-const main = api(`repos/${repository}/commits/main`).sha;
+const main = api(`repos/${repository}/git/ref/heads/main`).object.sha;
 if (main !== commit) throw new Error("Main changed while packaging. Release the newest verified main instead.");
 const releases = api(`repos/${repository}/releases?per_page=100`);
 const existing = releases.find((release) => release.tag_name === tag);
@@ -43,6 +43,6 @@ if (existing) {
 // The release stays a draft until every platform artifact and its metadata
 // have uploaded; the public updater can never observe a partial release.
 gh(["release", "upload", tag, "--repo", repository, "--clobber", ...files.map((name) => path.join(directory, name)), path.join(directory, "SHA256SUMS")]);
-if (api(`repos/${repository}/commits/main`).sha !== commit) throw new Error("Main changed during upload. The release remains a draft.");
+if (api(`repos/${repository}/git/ref/heads/main`).object.sha !== commit) throw new Error("Main changed during upload. The release remains a draft.");
 gh(["release", "edit", tag, "--repo", repository, "--target", commit, "--draft=false", "--latest"]);
 console.log(`Published verified ${tag} from ${commit}.`);

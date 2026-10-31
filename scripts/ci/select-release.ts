@@ -7,7 +7,7 @@ function api(endpoint: string) {
   return JSON.parse(execFileSync("gh", ["api", endpoint], { encoding: "utf8" }));
 }
 if (process.env.GITHUB_REF !== "refs/heads/main") throw new Error("Releases must run from main.");
-const main = api(`repos/${repository}/commits/main`).sha;
+const main = api(`repos/${repository}/git/ref/heads/main`).object.sha;
 if (main !== process.env.GITHUB_SHA) throw new Error("Release event no longer identifies current main. Rerun from verified main.");
 const runId = process.env.CI_RUN_ID;
 const runs = runId ? [api(`repos/${repository}/actions/runs/${runId}`)]

@@ -9,7 +9,12 @@ source backports and wheel changes are recorded below and in the
 ## Set up a machine
 
 Use the exact versions in `.nvmrc`, `rust-toolchain.toml`, and
-`infrastructure/veil/go.mod`.
+`infrastructure/veil/go.mod`. CI provisions CPython 3.14.10 from
+`.python-version` through the full-SHA-pinned official `actions/setup-python`
+v7.1.0 action. The official `actions/python-versions` release supplies native
+macOS ARM64 and Windows x64/ARM64 archives; their release sizes and SHA-256
+digests were reviewed. This build-time interpreter is separate from the Metal
+kit's pinned Python 3.12.16 runtime.
 
 ```bash
 npm ci --ignore-scripts --omit=peer
@@ -108,6 +113,25 @@ newest allowed one without a message**, so a security fix published inside the
 cooldown looks like an override that did not take. Use `--min-release-age=0` —
 that is what "security updates are exempt" means in practice — and commit the
 resulting lockfile.
+
+## Reviewed routine updates
+
+The October 31 follow-up pins the official
+[`actions/setup-go` 7.0.0](https://github.com/actions/setup-go/releases/tag/v7.0.0) and
+[`actions/download-artifact` 8.0.2](https://github.com/actions/download-artifact/releases/tag/v8.0.2) commits. Both retain the Node 24 Action runtime;
+artifact digest mismatches remain fatal. The existing Go version file, cache
+settings and release permissions are unchanged.
+
+Console uses `golang.org/x/crypto` 0.58.0, `golang.org/x/sys` 0.49.0 and
+`modernc.org/sqlite` 1.60.1, verified against the public Go checksum database and
+upstream release tags. SQLite's required `modernc.org/libc` 1.77.1 is pinned
+exactly; the module requires Go 1.26, within the pinned toolchain. Its embedded
+SQLite 3.53.4 includes the upstream journal-rollback correction, and the driver
+handles mapped WAL read faults without terminating the process; see the
+[versioned changelog](https://gitlab.com/cznic/sqlite/-/blob/v1.60.1/CHANGELOG.md). Console uses
+the standard driver and its existing WAL migrations; it does not use the removed
+constants, custom VFS or page-cache APIs. The separately locked Caddy build and
+reviewed JOSE source backport are unchanged.
 
 ## The bundled llama.cpp runtime
 

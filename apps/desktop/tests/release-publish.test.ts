@@ -24,12 +24,16 @@ function publication(t, mainMoves) {
       "./release-artifacts.ts": artifacts,
       "node:path": { ...path, resolve: (...parts) => parts[0] === "target/release/upload" ? directory : path.resolve(...parts) },
       "node:fs": { ...fs, readFileSync: (file, ...options) => file === "package.json" ? JSON.stringify({ version: "0.0.3" }) : fs.readFileSync(file, ...options) },
-      "node:child_process": { execFileSync(command, args) {
+      "node:child_process": { execFileSync(command, args, options) {
+        assert.equal(options.encoding, "utf8");
+        assert.equal(Object.hasOwn(options, "maxBuffer"), false);
         if (command === "git") return commit;
         assert.equal(command, "gh");
         calls.push([...args]);
         if (args[0] !== "api") { if (args[1] === "upload") uploaded = true; return ""; }
-        if (args[1].endsWith("/commits/main")) return JSON.stringify({ sha: mainMoves && uploaded ? "b".repeat(40) : commit });
+        if (args[1].endsWith("/git/ref/heads/main")) return JSON.stringify({ object: {
+          sha: mainMoves === "before" || (mainMoves && uploaded) ? "b".repeat(40) : commit,
+        } });
         if (args[1].includes("matching-refs")) return "[]";
         if (args[1].includes("/assets")) return "[]";
         if (args[1].endsWith("/releases?per_page=100")) return JSON.stringify([{ id: 1, tag_name: "v0.0.3", draft: true, target_commitish: "stale-branch" }]);
@@ -49,7 +53,13 @@ test("retrying an untagged stale draft pins its target to the verified commit be
   assert.equal(calls[reset][calls[reset].indexOf("--target") + 1], commit);
   const publish = calls.find((args) => args.includes("--draft=false"));
   assert.equal(publish[publish.indexOf("--target") + 1], commit);
-  assert.equal(calls.filter((args) => args[1].endsWith("/commits/main")).length, 2);
+  assert.equal(calls.filter((args) => args[1].endsWith("/git/ref/heads/main")).length, 2);
+});
+
+test("main advancing before upload rejects publication without changing a draft", (t) => {
+  const { execute, calls } = publication(t, "before");
+  assert.throws(execute, /Main changed while packaging/);
+  assert.ok(!calls.some((args) => args[0] === "release"));
 });
 
 test("main advancing during asset upload leaves the existing release unpublished", (t) => {
