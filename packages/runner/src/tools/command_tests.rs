@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(unix)]
 use std::fs;
 
 async fn execute_command_for_test(command: &str, timeout_ms: u64) -> ToolResult {

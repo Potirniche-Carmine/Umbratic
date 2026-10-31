@@ -78,6 +78,8 @@ jobs:
       - run: cargo install cargo-audit --locked --version "$(node -p 'JSON.parse(require("fs").readFileSync("supply-chain-policy.json")).cargoAuditVersion')"
       - run: go install "golang.org/x/vuln/cmd/govulncheck@v$(node -p 'JSON.parse(require("fs").readFileSync("supply-chain-policy.json")).govulncheckVersion')"
       - run: npm run supply-chain:audit
+      - name: Fetch locked Cargo sources for offline SBOM generation
+        run: cargo fetch --locked
       - run: npm run supply-chain:sbom
       - name: Validate GitHub workflows
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color

@@ -452,14 +452,20 @@ pub fn compress_tool_result(
 }
 
 fn encoded_json_string_len(value: &str) -> usize {
-    2 + value
-        .chars()
-        .map(|character| match character {
-            '"' | '\\' | '\u{0008}' | '\u{000c}' | '\n' | '\r' | '\t' => 2,
-            '\u{0000}'..='\u{001f}' => 6,
-            _ => character.len_utf8(),
-        })
-        .sum::<usize>()
+    // JSON preserves UTF-8 bytes; only ASCII quotes, backslashes and controls
+    // add escape bytes. Avoid decoding every character in the active view.
+    let mut length = 2 + value.len();
+    for &byte in value.as_bytes() {
+        if byte < 0x20 {
+            length += match byte {
+                b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 1,
+                _ => 5,
+            };
+        } else if byte == b'"' || byte == b'\\' {
+            length += 1;
+        }
+    }
+    length
 }
 
 fn encoded_json_len(value: &Value) -> usize {

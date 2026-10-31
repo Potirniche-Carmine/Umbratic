@@ -399,3 +399,27 @@ fn breakdown_rows_reconcile_to_the_reported_headline() {
     .sum::<u64>();
     assert_eq!(rows, event["contentTokens"].as_u64().unwrap());
 }
+
+#[test]
+fn json_string_byte_accounting_matches_serde_for_controls_escapes_and_unicode() {
+    let ascii = (0..=127).map(char::from).collect::<String>();
+    for text in [
+        "",
+        "plain text",
+        "quotes \" and backslashes \\",
+        "é你好🙂\u{2028}\u{2029}",
+        "\u{7f}\u{80}\u{7ff}\u{800}\u{ffff}\u{10000}\u{10ffff}",
+        ascii.as_str(),
+    ] {
+        assert_eq!(
+            encoded_json_string_len(text),
+            serde_json::to_vec(text).unwrap().len(),
+            "JSON length for {text:?}"
+        );
+        let object = json!({(text): "value"});
+        assert_eq!(
+            encoded_json_len(&object),
+            serde_json::to_vec(&object).unwrap().len()
+        );
+    }
+}
