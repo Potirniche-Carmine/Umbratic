@@ -69,6 +69,7 @@ Administrator browser → Veil Console → Veil + managed model processes
 | `packages/runner/` | Rust workspace tools, permissions, task execution, and context |
 | `packages/code-index/` | Workspace graph producer |
 | `packages/pdf/` | PDF text extraction |
+| `packages/artifacts/` | Rust spreadsheet creation, inspection, and editing sidecar |
 | `infrastructure/veil/` | Model gateway, authentication, prompts, routing, and runtime calls |
 | `infrastructure/veil-console/` | Self-hosted administration and service supervision |
 | `scripts/` | Build, release, verification, and supply-chain tooling |
