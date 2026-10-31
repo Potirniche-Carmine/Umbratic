@@ -8,7 +8,9 @@
   "reason": "Stable 3.0.1 requires zip 8, affected by RUSTSEC-2026-0367/0368/0369. Prerelease 4 is the only published upgrade using fixed zip 9. The source patch prevents validation formulas from disappearing during workbook editing. No advisory is suppressed.",
   "changes": [
     "src/structs/data_validation.rs: is_inner tests nonempty formula1 OR nonempty formula2 instead of empty formula1 OR empty formula2.",
-    "Cargo.toml: removed example/test targets and dev-dependencies because only production source is vendored."
+    "Cargo.toml: removed example/test targets and dev-dependencies because only production source is vendored.",
+    "All included text files: normalize upstream CRLF line endings to LF, with no other whitespace changes.",
+    ".gitattributes: force text eol=lf so Git checkout bytes match the reviewed checksum manifest on every platform."
   ],
   "omitted": [
     "examples",

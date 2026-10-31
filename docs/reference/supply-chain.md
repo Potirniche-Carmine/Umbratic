@@ -167,7 +167,7 @@ Actions, and the Windows Vulkan SDK installer is pinned by SHA-256 in
 and the isolated x64 .NET runtime are pinned by official package/archive checksums
 in `third_party/windows-signing.json`; no moving PowerShell module is installed.
 Signing credentials
-stay in GitHub environment secrets. The updater sends ordinary GitHub release
+stay in GitHub Actions secrets. The updater sends ordinary GitHub release
 requests and can be disabled in Settings → About. It does not need a company token.
 
 Runbook: [../guides/release-desktop.md](../guides/release-desktop.md).

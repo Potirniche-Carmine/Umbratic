@@ -251,7 +251,7 @@
       "name": "umya-spreadsheet",
       "version": "4.0.0-beta.1",
       "path": "third_party/umya-spreadsheet",
-      "manifestSha256": "d28f6f2ba9cb11a661f92e0737917a657e6b98b911a510d114ea89d5808cfca5",
+      "manifestSha256": "5ec80b4034fdc11ba81fe9ec449f73535c5fb54bab6ef2061bfb1187b80e50ef",
       "reason": "Only published fix for the vulnerable zip8 dependency chain; nonempty validation-formula condition corrected locally. See PROVENANCE.json and artifact round-trip regression tests."
     }
   ]
