@@ -2,10 +2,10 @@
   "scope": "Exact official action sources and known production dependency inventories, with conditional advisory applicability; not a claim that every upstream code path is patched.",
   "controls": {
     ".github/workflows/release.yml": "0f13bbd74a9aa51dd6580de7721854e8a982d47451fbed947b1f23ac7ca28ea4",
-    ".github/workflows/verify.yml": "f6325793d4e9935e03771a895c1e3a75894bc7553041d71ebe49b39760756dcb",
+    ".github/workflows/verify.yml": "bc6cd2ab888793702c0048d8d3513a3df249d70487cdb44bec93ff6164c7c4b8",
     "scripts/ci/release-attestations.ts": "a169643ae5e758df0f26350e2c7786aa2ef20f375b7d3db5a3fc8399794840f2",
     "scripts/ci/verify-ci-attestation.ts": "46032be3b8d418fd2e0cb2eb444127626f7f5543ad3fdc724313de8efb801c51",
-    "scripts/ci/windows-signing.ts": "16bf966202378bcaf3147a64122e40ecb5c386ec58fa318c07e0e3827be7f540",
+    "scripts/ci/windows-signing.ts": "e348da063d649ca93fa8fcd7de397e543453aa22d53c06731d038eea0428eba4",
     "scripts/ci/windows-signpath-build.ts": "b20e2ca5cb6daf1d283f900dbe56e37dd47f0893370204cd7cbdb37dcd872ba3"
   },
   "actions": [

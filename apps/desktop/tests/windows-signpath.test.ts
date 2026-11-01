@@ -4,9 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import childProcess from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { fileURLToPath } from "node:url";
-import { applySigningResponse, requireProjectIdentity, requestSignature, unsignedPeDigest } from "../../../scripts/ci/windows-signing.ts";
+import { applySigningResponse, requireProjectIdentity, requestSignature, stampProjectMetadata, unsignedPeDigest } from "../../../scripts/ci/windows-signing.ts";
 import { cleanupWindowsFixture } from "../../../scripts/ci/windows-fixture-cleanup.ts";
 
 const releaseVersion = JSON.parse(fs.readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version;
@@ -58,6 +58,37 @@ test("every project binary requires the exact trusted publisher, timestamp, prod
   for (const changed of [{ status: "NotSigned" }, { publisher: "Another legitimate publisher" }, { timestamp: false }, { sha256Signature: false },
     { productName: "Another product" }, { productVersion: "0.0.0" }]) {
     assert.throws(() => requireProjectIdentity({ ...valid, ...changed }, valid.publisher, releaseVersion), /required publisher/);
+  }
+});
+
+test("PE metadata stamps resource-less and multilingual executables without ambiguous version strings", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-pe-metadata-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { NtExecutable, NtExecutableResource, Resource } = createRequire(import.meta.url)("resedit");
+  for (const multilingual of [false, true]) {
+    const executable = NtExecutable.createEmpty(false, false);
+    if (multilingual) {
+      const resource = NtExecutableResource.from(executable);
+      const info = Resource.VersionInfo.createEmpty();
+      info.setStringValues({ lang: 0, codepage: 1200 }, { ProductName: "Old", ProductVersion: "0.0.0.0" });
+      info.setStringValues({ lang: 1033, codepage: 1252 }, { ProductName: "Old", ProductVersion: "0.0.0.0" });
+      info.outputToResourceEntries(resource.entries);
+      resource.outputResource(executable);
+    }
+    const file = path.join(root, multilingual ? "multilingual.exe" : "empty.exe");
+    fs.writeFileSync(file, Buffer.from(executable.generate()));
+    stampProjectMetadata(file, releaseVersion);
+    const resource = NtExecutableResource.from(NtExecutable.from(fs.readFileSync(file)));
+    const info = Resource.VersionInfo.fromEntries(resource.entries)[0];
+    const languages = info.getAllLanguagesForStringValues();
+    if (!multilingual) assert.deepEqual(languages, [{ lang: 1033, codepage: 1200 }]);
+    else assert.equal(languages.length, 2);
+    for (const language of languages) {
+      const values = info.getStringValues(language);
+      assert.equal(values.ProductName, "Umbratic");
+      assert.equal(values.ProductVersion, releaseVersion);
+      assert.equal(values.FileVersion, releaseVersion);
+    }
   }
 });
 

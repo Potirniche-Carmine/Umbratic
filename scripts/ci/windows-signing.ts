@@ -272,15 +272,17 @@ export async function signWindows(file: string): Promise<void> {
   // typed inventory is checked before any installer can be released.
 }
 
-function stampProjectMetadata(file: string, version: string): void {
+export function stampProjectMetadata(file: string, version: string): void {
   const { NtExecutable, NtExecutableResource, Resource } = require("resedit");
   const executable = NtExecutable.from(fs.readFileSync(file));
   const resource = NtExecutableResource.from(executable);
   const info = Resource.VersionInfo.fromEntries(resource.entries)[0] ?? Resource.VersionInfo.createEmpty();
-  const languages = info.getAllLanguagesForStringValues();
-  info.setFileVersion(version);
-  info.setProductVersion(version);
-  for (const language of languages.length ? languages : [{ lang: 1033, codepage: 1200 }]) {
+  const language = info.getAllLanguagesForStringValues()[0]?.lang ?? 1033;
+  // Explicit selection prevents an empty Go PE from acquiring a neutral
+  // table with normalized x.y.z.0 values alongside the intended x.y.z table.
+  info.setFileVersion(version, language);
+  info.setProductVersion(version, language);
+  for (const language of info.getAllLanguagesForStringValues()) {
     info.setStringValues(language, { ProductName: "Umbratic", ProductVersion: version, FileVersion: version, CompanyName: "Umbratic" });
   }
   info.outputToResourceEntries(resource.entries);

@@ -6,7 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { repository, stages } from "./windows-signing.ts";
+import { repository, sha256, stages } from "./windows-signing.ts";
 import { cleanupWindowsFixture } from "./windows-fixture-cleanup.ts";
 
 if (process.platform !== "win32" || process.env.GITHUB_ACTIONS !== "true" || process.env.RUNNER_ENVIRONMENT !== "github-hosted") {
@@ -15,6 +15,8 @@ if (process.platform !== "win32" || process.env.GITHUB_ACTIONS !== "true" || pro
 const root = path.join(process.env.RUNNER_TEMP!, "umbratic-signpath-fixture");
 const desktop = path.join(repository, "target/release/desktop");
 const upload = path.join(repository, "target/release/upload");
+const mode = process.argv[2];
+if (mode !== undefined && !["cleanup", "preflight"].includes(mode)) throw new Error("Unknown Windows fixture operation.");
 process.env.UMBRATIC_SIGNPATH_STAGING = path.join(root, "handoff");
 function run(script: string, args: string[] = [], timeout = 65 * 60_000): void {
   execFileSync(process.execPath, [path.join(repository, "scripts/ci", script), ...args], { cwd: repository, stdio: "inherit", timeout });
@@ -26,7 +28,7 @@ function certificate(operation: string): void {
 function cleanup(): void {
   cleanupWindowsFixture(root, desktop, upload, () => run("windows-signpath-build.ts", ["stop"], 60_000), () => certificate("cleanup"));
 }
-if (process.argv[2] === "cleanup") {
+if (mode === "cleanup") {
   cleanup();
 } else {
   if (fs.existsSync(root)) throw new Error("Stale fixture signing state; cleanup must succeed before retrying.");
@@ -75,38 +77,56 @@ if (process.argv[2] === "cleanup") {
     // evaluation before executing its Microsoft-signed native utility.
     const { inspect } = await import("./windows-signing.ts");
     const identity = inspect([tool])[0];
-    if (identity.status !== "Valid" || !["Microsoft Corporation", "Microsoft Windows Software Compatibility Publisher"].includes(identity.publisher ?? "")
-        || !identity.subject?.match(/(?:^|,\s*)O=Microsoft Corporation(?:,|$)/)) throw new Error("Fixture SignTool is not a valid Microsoft utility.");
-    certificate("create");
-    const fixture = JSON.parse(fs.readFileSync(path.join(root, "identity.json"), "utf8"));
-    process.env.SIGNPATH_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000000";
-    process.env.SIGNPATH_PROJECT_SLUG = "ci-fixture";
-    process.env.SIGNPATH_SIGNING_POLICY_SLUG = "ci-fixture";
-    process.env.SIGNPATH_PUBLISHER = publisher;
-    fs.renameSync(desktop, path.join(root, "unsigned-desktop"));
-    if (fs.existsSync(upload)) fs.renameSync(upload, path.join(root, "unsigned-upload"));
-    run("windows-signpath-build.ts", ["start"]);
-    for (const stage of stages) {
-      run("windows-signpath-build.ts", ["wait", stage]);
-      const directory = path.join(root, "handoff", stage);
-      const input = path.join(directory, "input");
-      const output = path.join(directory, "signed");
-      fs.mkdirSync(output);
-      const files = fs.readdirSync(input);
-      if (files.length !== (stage === "payload" ? 7 : 1)) throw new Error("Unexpected fixture signing batch.");
-      for (const name of files) {
-        const file = path.join(output, name);
-        fs.copyFileSync(path.join(input, name), file);
-        execFileSync(tool, ["sign", "/sha1", fixture.thumbprint, "/s", "My", "/fd", "SHA256", "/tr", "http://timestamp.digicert.com", "/td", "SHA256", file], {
-          stdio: "inherit", timeout: 120_000,
-        });
-      }
-      run("windows-signpath-build.ts", ["resume", stage]);
+    // Exact public leaf/executable tuples inspected in the reviewed SDK ZIP.
+    // The ARM SDK uses a different Microsoft publisher from its x64 utility;
+    // this exception belongs to this build-only tool, never runtime DLLs.
+    const expected = {
+      x64: { publisher: "Microsoft Corporation", thumbprint: "6ACE61BAE3F09F4DD2697806D73E022CBFE70EB4",
+        sha256: "f72bda523e9a03f502386f8407e21fc06e9d21baccc9e14c17b0e22a19fbed38" },
+      arm64: { publisher: "Microsoft Windows Kits Publisher", thumbprint: "5D61AA32E63982A575DB3307EE51024AFFFBD6F2",
+        sha256: "904b5f913b7b3681cfea7a38fbbf73431e033c659f865a13d959e287438135a7" },
+    }[process.arch];
+    if (!expected || identity.status !== "Valid" || identity.publisher !== expected.publisher
+        || identity.thumbprint !== expected.thumbprint || sha256(tool) !== expected.sha256
+        || !identity.subject?.match(/(?:^|,\s*)O=Microsoft Corporation(?:,|$)/)) {
+      throw new Error("Fixture SignTool is not a valid Microsoft utility: " + JSON.stringify({
+        status: identity.status, publisher: identity.publisher, subject: identity.subject, thumbprint: identity.thumbprint,
+      }).slice(0, 2000));
     }
-    run("windows-signpath-build.ts", ["finish"]);
-    run("verify-release.ts");
-    run("verify-installer-artifacts.ts");
-    for (const stage of stages) if (!fs.existsSync(path.join(root, "handoff", stage, "result.json"))) throw new Error(`Missing ${stage} transition.`);
-    console.log("Qualified all three real Windows signing handoffs, strict signatures, native resources and final updater checksums with an ephemeral fixture certificate.");
+    certificate("create");
+    if (mode === "preflight") {
+      console.log("Preflight verified the pinned SDK utility, process-tree cancellation and ephemeral certificate/trust-store support.");
+    } else {
+      const fixture = JSON.parse(fs.readFileSync(path.join(root, "identity.json"), "utf8"));
+      process.env.SIGNPATH_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000000";
+      process.env.SIGNPATH_PROJECT_SLUG = "ci-fixture";
+      process.env.SIGNPATH_SIGNING_POLICY_SLUG = "ci-fixture";
+      process.env.SIGNPATH_PUBLISHER = publisher;
+      fs.renameSync(desktop, path.join(root, "unsigned-desktop"));
+      if (fs.existsSync(upload)) fs.renameSync(upload, path.join(root, "unsigned-upload"));
+      run("windows-signpath-build.ts", ["start"]);
+      for (const stage of stages) {
+        run("windows-signpath-build.ts", ["wait", stage]);
+        const directory = path.join(root, "handoff", stage);
+        const input = path.join(directory, "input");
+        const output = path.join(directory, "signed");
+        fs.mkdirSync(output);
+        const files = fs.readdirSync(input);
+        if (files.length !== (stage === "payload" ? 7 : 1)) throw new Error("Unexpected fixture signing batch.");
+        for (const name of files) {
+          const file = path.join(output, name);
+          fs.copyFileSync(path.join(input, name), file);
+          execFileSync(tool, ["sign", "/sha1", fixture.thumbprint, "/s", "My", "/fd", "SHA256", "/tr", "http://timestamp.digicert.com", "/td", "SHA256", file], {
+            stdio: "inherit", timeout: 120_000,
+          });
+        }
+        run("windows-signpath-build.ts", ["resume", stage]);
+      }
+      run("windows-signpath-build.ts", ["finish"]);
+      run("verify-release.ts");
+      run("verify-installer-artifacts.ts");
+      for (const stage of stages) if (!fs.existsSync(path.join(root, "handoff", stage, "result.json"))) throw new Error(`Missing ${stage} transition.`);
+      console.log("Qualified all three real Windows signing handoffs, strict signatures, native resources and final updater checksums with an ephemeral fixture certificate.");
+    }
   } finally { cleanup(); }
 }
