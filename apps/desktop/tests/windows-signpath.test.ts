@@ -157,3 +157,23 @@ test("worker startup atomically refuses existing signing state without changing 
   assert.equal(fs.readFileSync(response, "utf8"), "previous approval");
   assert.deepEqual(fs.readdirSync(root), ["old-response"]);
 });
+
+test("worker failure reports only the bounded log tail and tolerates a missing optional log", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-signpath-log-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "exit.json"), JSON.stringify({ code: 1, signal: null }));
+  const invoke = () => childProcess.spawnSync(process.execPath, [fileURLToPath(new URL("../../../scripts/ci/windows-signpath-build.ts", import.meta.url)), "wait", "payload"], {
+    env: { ...process.env, UMBRATIC_SIGNPATH_STAGING: root }, encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024,
+  });
+  fs.writeFileSync(path.join(root, "build.log"), `early-log-marker-must-not-print\n${"x".repeat(1024 * 1024)}\nbounded-tail-marker`);
+  const logged = invoke();
+  assert.equal(logged.status, 1);
+  assert.match(logged.stderr, /bounded-tail-marker/);
+  assert.ok(!logged.stderr.includes("early-log-marker-must-not-print"));
+  assert.ok(logged.stderr.length < 40_000);
+  fs.unlinkSync(path.join(root, "build.log"));
+  const missing = invoke();
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /SignPath packaging stopped/);
+  assert.ok(!missing.stderr.includes("ENOENT"));
+});

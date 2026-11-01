@@ -6,7 +6,7 @@
     "scripts/ci/release-attestations.ts": "a169643ae5e758df0f26350e2c7786aa2ef20f375b7d3db5a3fc8399794840f2",
     "scripts/ci/verify-ci-attestation.ts": "46032be3b8d418fd2e0cb2eb444127626f7f5543ad3fdc724313de8efb801c51",
     "scripts/ci/windows-signing.ts": "16bf966202378bcaf3147a64122e40ecb5c386ec58fa318c07e0e3827be7f540",
-    "scripts/ci/windows-signpath-build.ts": "ed21cac53eb24a019dbc48d455fd0b6e122ce7bc496ddde775ed94e05ff38bc8"
+    "scripts/ci/windows-signpath-build.ts": "b20e2ca5cb6daf1d283f900dbe56e37dd47f0893370204cd7cbdb37dcd872ba3"
   },
   "actions": [
     {

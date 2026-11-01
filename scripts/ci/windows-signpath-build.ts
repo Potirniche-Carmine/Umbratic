@@ -28,8 +28,11 @@ function workerAlive(): boolean {
 function buildError(): Error {
   const log = path.join(root, "build.log");
   let tail = "";
-  if (fs.existsSync(log)) {
-    const fd = fs.openSync(log, "r");
+  let fd: number | undefined;
+  try { fd = fs.openSync(log, "r"); } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (fd !== undefined) {
     try {
       const size = fs.fstatSync(fd).size;
       const bytes = Buffer.alloc(Math.min(size, 16_000));
