@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { llamaCpuBuildFlags } from "../apps/desktop/scripts/llama-build-config.ts";
+import { verifyActionControls } from "./audit-release-actions.ts";
 
 const root = process.cwd();
 const manifestPaths = [
@@ -51,6 +52,7 @@ function compareExactSet(label, actualValues, allowedValues) {
 
 const rootManifest = readJson("package.json");
 const supplyChainPolicy = readJson("supply-chain-policy.json");
+verifyActionControls(readJson("third_party/release-actions-security.json"), (name) => fs.readFileSync(path.join(root, name)));
 
 for (const manifestPath of manifestPaths) {
   const manifest = readJson(manifestPath);

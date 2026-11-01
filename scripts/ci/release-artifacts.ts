@@ -62,8 +62,8 @@ export function verifyUpdateChannel(directory: string, version: string, channel:
   return [...names];
 }
 
-/** Verify the complete platform set and every updater checksum before publishing. */
-export function verifyReleaseArtifacts(directory: string, version: string): string[] {
+/** Validate all platform payloads and return their exact expected asset names. */
+export function releaseArtifactNames(directory: string, version: string): string[] {
   const prefix = `Umbratic-${version}`;
   const channels: [string, string][] = [
     ["latest-mac.yml", `${prefix}.zip`],
@@ -78,8 +78,27 @@ export function verifyReleaseArtifacts(directory: string, version: string): stri
     if (!fs.statSync(path.join(directory, name)).isFile()) throw new Error(`Missing release asset ${name}.`);
     if (fs.existsSync(path.join(directory, `${name}.blockmap`))) expected.add(`${name}.blockmap`);
   }
-  for (const name of fs.readdirSync(directory)) {
-    if (!expected.has(name)) throw new Error(`Unexpected release asset ${name}.`);
-  }
   return [...expected].sort();
+}
+
+/** Every expected file is required; links, directories and extra files fail. */
+export function verifyExactAssetSet(directory: string, expected: readonly string[]): void {
+  const names = new Set(expected);
+  if (names.size !== expected.length) throw new Error("Duplicate release asset name.");
+  for (const name of names) {
+    if (path.basename(name) !== name || /[/\\?#%]/.test(name)
+        || !fs.lstatSync(path.join(directory, name)).isFile()) {
+      throw new Error(`Invalid release asset ${name}.`);
+    }
+  }
+  for (const name of fs.readdirSync(directory)) {
+    if (!names.has(name)) throw new Error(`Unexpected release asset ${name}.`);
+  }
+}
+
+/** Verify the complete unsigned platform set and every updater checksum. */
+export function verifyReleaseArtifacts(directory: string, version: string): string[] {
+  const files = releaseArtifactNames(directory, version);
+  verifyExactAssetSet(directory, files);
+  return files;
 }

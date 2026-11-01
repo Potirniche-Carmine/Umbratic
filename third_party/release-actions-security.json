@@ -1,0 +1,370 @@
+{
+  "scope": "Exact official action sources and known production dependency inventories, with conditional advisory applicability; not a claim that every upstream code path is patched.",
+  "controls": {
+    ".github/workflows/release.yml": "0f13bbd74a9aa51dd6580de7721854e8a982d47451fbed947b1f23ac7ca28ea4",
+    ".github/workflows/verify.yml": "f6325793d4e9935e03771a895c1e3a75894bc7553041d71ebe49b39760756dcb",
+    "scripts/ci/release-attestations.ts": "3d15e49c8cf5d8e5aedd97208d5876625b997f7ceed7adf81cd8918475b16cf7",
+    "scripts/ci/verify-ci-attestation.ts": "46032be3b8d418fd2e0cb2eb444127626f7f5543ad3fdc724313de8efb801c51",
+    "scripts/ci/windows-signing.ts": "604e83e97b020060b9d86130411e769bba5b2ef0a70d4ac94f80e5f5a5206550",
+    "scripts/ci/windows-signpath-build.ts": "98bbff38691096a1c79b78535151f3881b2496d98b0f68f7c97107bb497ce6c9"
+  },
+  "actions": [
+    {
+      "repository": "actions/attest",
+      "commit": "1e69f48acb82d1966a394da916b4c1698aa569d6",
+      "release": "v4.2.2",
+      "inventoryScope": "Conservative non-dev npm lock graph (a superset of bundled reachable code).",
+      "blobs": {
+        "action.yml": "9e4a1b808433f9ec87120b534e11fc35469a039bdbdc62b019441444c9ad0449",
+        "dist/index.js": "3ca89e06ffcb09ff97e9b1633575865cad0b23310ac82176d72990d7554836b5",
+        "package-lock.json": "9ce7a0d9a26390198735ee66a7d935ee7d871e1a7081e360856474d0d296fcf8"
+      },
+      "findings": [
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-2m5v-pch6-74hx",
+          "modified": "2026-10-27T19:15:22.407771Z",
+          "reason": "No custom TLS options or transport-level pinning are supplied to Undici Agent; default Node CA/hostname validation is used for fixed official HTTPS services. The dropped custom-TLS-option path does not remove a configured control here."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-35p6-xmwp-9g52",
+          "modified": "2026-09-10T03:51:07.666603Z",
+          "reason": "Only fixed official GitHub/Sigstore HTTPS services supply responses; no attacker-selected origin or raw response can poison a reused HTTP response queue in the configured input path."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-3wwx-pv8p-q78v",
+          "modified": "2026-09-28T22:00:08.266327Z",
+          "reason": "The action does not construct WebSocket clients or process WebSocket frames/subprotocols."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-4qv8-2p9j-2685",
+          "modified": "2026-10-23T22:30:04.104974Z",
+          "reason": "The action does not construct EventSource clients or accept event-stream inputs."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-8xcm-r25x-g524",
+          "modified": "2026-09-10T03:51:13.567076Z",
+          "reason": "No Undici retry interceptor is configured; GitHub API retry orchestration does not select the affected response-forwarding interceptor."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-9fm3-97px-rjf6",
+          "modified": "2026-10-27T19:15:22.400702Z",
+          "reason": "The action does not construct WebSocket clients or process WebSocket frames/subprotocols."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-g8m3-5g58-fq7m",
+          "modified": "2026-09-10T03:51:08.663204Z",
+          "reason": "Undici cookie parsing/serialization helpers are not used; authenticated API requests use explicit token headers, not these cookie helpers."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-m8rv-5g2x-5cg5",
+          "modified": "2026-09-10T03:51:14.281925Z",
+          "reason": "Only generated JSON request bodies are sent; no user-supplied Blob-like body/type reaches the affected request-header conversion."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-p88m-4jfj-68fv",
+          "modified": "2026-09-10T03:51:09.228344Z",
+          "reason": "Undici cookie parsing/serialization helpers are not used; authenticated API requests use explicit token headers, not these cookie helpers."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-qrxm-fqhp-jwvm",
+          "modified": "2026-10-27T19:15:22.403573Z",
+          "reason": "Only fixed official GitHub/Sigstore HTTPS services are contacted; no attacker-selected TLS endpoint is accepted. A compromised trusted endpoint could still deny service; this is not a claim that the upstream TLS1.2 path is patched."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-r53p-7pc4-xj5r",
+          "modified": "2026-09-29T18:30:41.154532Z",
+          "reason": "No Undici retry interceptor is configured; GitHub API retry orchestration does not select the affected response-forwarding interceptor."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-rfgv-xxqx-mfg5",
+          "modified": "2026-09-29T18:30:41.167602Z",
+          "reason": "The action does not construct WebSocket clients or process WebSocket frames/subprotocols."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-v3r7-h72x-cjcm",
+          "modified": "2026-09-10T03:51:14.535204Z",
+          "reason": "Undici cookie parsing/serialization helpers are not used; authenticated API requests use explicit token headers, not these cookie helpers."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-vxpw-j846-p89q",
+          "modified": "2026-09-10T03:50:12.291121Z",
+          "reason": "The action does not construct WebSocket clients or process WebSocket frames/subprotocols."
+        },
+        {
+          "package": "undici",
+          "version": "6.25.0",
+          "id": "GHSA-xjj6-f33q-929c",
+          "modified": "2026-10-23T22:30:05.007687Z",
+          "reason": "Response Content-Encoding is supplied by fixed official GitHub/Sigstore services, not an attacker-selected server. A compromised provider could deny service; the upstream response-decoding path is not claimed patched."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "5.0.9",
+          "id": "GHSA-6j4f-fj2g-mc7p",
+          "modified": "2026-09-30T00:00:03.836613Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided brace or glob expression is accepted."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "5.0.9",
+          "id": "GHSA-q2hr-2g5m-vwhr",
+          "modified": "2026-09-30T00:00:03.849541Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided brace or glob expression is accepted."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "5.0.9",
+          "id": "GHSA-qhr7-859c-m2p7",
+          "modified": "2026-09-30T00:00:04.402763Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided brace or glob expression is accepted."
+        },
+        {
+          "package": "minimatch",
+          "version": "10.2.5",
+          "id": "GHSA-g3hv-75wg-m249",
+          "modified": "2026-10-30T23:15:07.420159Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided glob expression is accepted."
+        },
+        {
+          "package": "@sigstore/core",
+          "version": "2.0.0",
+          "id": "GHSA-jfc7-64v2-mr8c",
+          "modified": "2026-09-10T03:51:08.786207Z",
+          "reason": "Generation uses the fixed ASCII DSSE type application/vnd.in-toto+json. Verification is delegated to the independent Go GitHub CLI and the exact ASCII envelope type is required; no non-ASCII DSSE type or JS bundle verification is accepted."
+        },
+        {
+          "package": "glob",
+          "version": "13.0.6",
+          "id": "GHSA-3g3m-2fjr-6pw4",
+          "modified": "2026-10-30T23:15:04.503965Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob over the validated release set; AbortSignal cancellation is not used as a filesystem authorization boundary."
+        },
+        {
+          "package": "minimatch",
+          "version": "10.2.6",
+          "id": "GHSA-g3hv-75wg-m249",
+          "modified": "2026-10-30T23:15:07.420159Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided glob expression is accepted."
+        },
+        {
+          "package": "csv-parse",
+          "version": "7.0.1",
+          "id": "GHSA-8cw4-87c7-c6xx",
+          "modified": "2026-09-08T18:15:03.989241Z",
+          "reason": "The subject-checksums CSV parser is unused: both attestation steps use only the fixed subject-path glob; no CSV columns or headers are accepted."
+        },
+        {
+          "package": "glob",
+          "version": "10.5.0",
+          "id": "GHSA-3g3m-2fjr-6pw4",
+          "modified": "2026-10-30T23:15:04.503965Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob over the validated release set; AbortSignal cancellation is not used as a filesystem authorization boundary."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "2.1.4",
+          "id": "GHSA-6j4f-fj2g-mc7p",
+          "modified": "2026-09-30T00:00:03.836613Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided brace or glob expression is accepted."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "2.1.4",
+          "id": "GHSA-q2hr-2g5m-vwhr",
+          "modified": "2026-09-30T00:00:03.849541Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided brace or glob expression is accepted."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "2.1.4",
+          "id": "GHSA-qhr7-859c-m2p7",
+          "modified": "2026-09-30T00:00:04.402763Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided brace or glob expression is accepted."
+        },
+        {
+          "package": "minimatch",
+          "version": "9.0.9",
+          "id": "GHSA-g3hv-75wg-m249",
+          "modified": "2026-10-30T23:15:07.420159Z",
+          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided glob expression is accepted."
+        },
+        {
+          "package": "ip-address",
+          "version": "10.4.0",
+          "id": "GHSA-2vr4-cq9g-pvrc",
+          "modified": "2026-09-28T21:00:05.355682Z",
+          "reason": "No IP classifier is used to authorize destinations; only fixed official service endpoints are selected. No untrusted IPv6 address or zone identifier is supplied to an address parser."
+        },
+        {
+          "package": "ip-address",
+          "version": "10.4.0",
+          "id": "GHSA-h3mg-xc3c-68pw",
+          "modified": "2026-09-30T00:00:04.407982Z",
+          "reason": "No IP classifier is used to authorize destinations; only fixed official service endpoints are selected. No untrusted IPv6 address or zone identifier is supplied to an address parser."
+        },
+        {
+          "package": "ip-address",
+          "version": "10.4.0",
+          "id": "GHSA-j6r3-76f7-8jcv",
+          "modified": "2026-09-30T00:00:03.843448Z",
+          "reason": "No IP classifier is used to authorize destinations; only fixed official service endpoints are selected. No untrusted IPv6 address or zone identifier is supplied to an address parser."
+        },
+        {
+          "package": "ip-address",
+          "version": "10.4.0",
+          "id": "GHSA-rpw4-54j3-4h4q",
+          "modified": "2026-09-28T21:00:05.359993Z",
+          "reason": "No IP classifier is used to authorize destinations; only fixed official service endpoints are selected. No untrusted IPv6 address or zone identifier is supplied to an address parser."
+        },
+        {
+          "package": "ip-address",
+          "version": "10.4.0",
+          "id": "GHSA-rxp7-6hxx-x8q5",
+          "modified": "2026-10-22T16:30:30.129356Z",
+          "reason": "No IP classifier is used to authorize destinations; only fixed official service endpoints are selected. No untrusted IPv6 address or zone identifier is supplied to an address parser."
+        }
+      ]
+    },
+    {
+      "repository": "signpath/github-action-submit-signing-request",
+      "commit": "f6d04783b4569d051e0c80105fe66e82819d0092",
+      "release": "v3.0",
+      "inventoryScope": "Only the version-identifiable bundled Axios and Moment dependencies; upstream publishes no action release lockfile, so this is not a complete transitive SBOM.",
+      "blobs": {
+        "action.yml": "9afe14756752bb0b43421bf94e7cebdc3fead29765be4f07fbc60d82421ebc23",
+        "index.js": "40af2e2581648d7357de3c13ca081ce87ac97f0aa66fdd2c5e3f1468d3232751"
+      },
+      "embeddedPackages": [
+        {
+          "name": "axios",
+          "version": "1.19.0"
+        },
+        {
+          "name": "moment",
+          "version": "2.29.4"
+        }
+      ],
+      "findings": [
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-3pq3-5fj3-cg6v",
+          "modified": "2026-09-30T15:15:04.067807Z",
+          "reason": "The action uses the default Node HTTP/1 adapter; httpVersion:2 is never enabled."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-44g4-m2mj-wpvx",
+          "modified": "2026-09-30T15:45:41.069795Z",
+          "reason": "Only the fixed official public-DNS HTTPS connector is used, not internal IP targets whose CIDR NO_PROXY exclusion would be security-critical."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-4hqw-qxg8-jxx2",
+          "modified": "2026-09-30T15:46:17.701967Z",
+          "reason": "The Node HTTP adapter is used; the affected fetch adapter is not selected."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-542g-h47m-68v8",
+          "modified": "2026-09-30T15:15:04.061469Z",
+          "reason": "The action uses the default Node HTTP/1 adapter; httpVersion:2 is never enabled."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-9fr6-4gfg-395g",
+          "modified": "2026-09-30T15:30:03.718390Z",
+          "reason": "All requests use explicit get/post method aliases, which are unaffected by the default-instance inherited-method path."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-c29m-xwm3-cm6r",
+          "modified": "2026-09-30T15:15:04.064301Z",
+          "reason": "All requests use fixed official HTTPS connector routes; no data: URL is accepted."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-j8rh-479h-cp32",
+          "modified": "2026-09-30T15:46:18.108444Z",
+          "reason": "The logging interceptor returns the original null-prototype config including its own headers; it never replaces config with a minimal plain object."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-m8m8-qj5v-23w3",
+          "modified": "2026-09-30T15:46:18.253717Z",
+          "reason": "The socket-hijack gadget requires prior same-process Object.prototype pollution; the pinned action has no untrusted config/object merge or prototype-pollution source. Fixed HTTPS routes remain mandatory."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-mghh-pgcx-3jjj",
+          "modified": "2026-09-30T15:15:04.048176Z",
+          "reason": "The connector URL and route construction are fixed to the official trusted HTTPS service; untrusted origins or redirect Locations are not accepted as inputs. Availability remains dependent on that service."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-r4gj-5m52-g5wh",
+          "modified": "2026-09-30T15:45:41.466464Z",
+          "reason": "The Node HTTP adapter is used; the affected fetch adapter is not selected."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-vh66-26gq-q6x8",
+          "modified": "2026-09-30T15:30:04.438497Z",
+          "reason": "The Node HTTP adapter is used; the affected fetch adapter is not selected."
+        },
+        {
+          "package": "axios",
+          "version": "1.19.0",
+          "id": "GHSA-x97p-jq2g-jp4f",
+          "modified": "2026-09-30T15:15:04.052506Z",
+          "reason": "The action posts JSON and downloads streams; multipart/URL-encoded form serialization is not used."
+        },
+        {
+          "package": "moment",
+          "version": "2.29.4",
+          "id": "GHSA-4p3w-j4w9-5jqw",
+          "modified": "2026-09-30T00:00:03.858466Z",
+          "reason": "Only numeric timeout/duration formatting is used; no attacker-influenced locale or object is passed to moment.locale()."
+        }
+      ]
+    }
+  ]
+}

@@ -4,14 +4,11 @@ import path from "node:path";
 import { hashFile, verifyMacSigningTeam, verifyUpdaterPublisher } from "./release-artifacts.ts";
 import { createRequire } from "node:module";
 import { execFileSync, spawnSync } from "node:child_process";
+import { inspect, requireProjectIdentity, sha256, signingRoot, verifyInventory } from "./windows-signing.ts";
 
 const root = path.resolve("target/release/desktop");
 function run(command: string, args: string[]) {
   execFileSync(command, args, { stdio: "inherit" });
-}
-function walk(directory: string): string[] {
-  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => entry.isDirectory()
-    ? walk(path.join(directory, entry.name)) : [path.join(directory, entry.name)]);
 }
 const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
 const stage = path.resolve("target/release/upload");
@@ -50,17 +47,28 @@ if (process.platform === "darwin") {
 } else if (process.platform === "win32") {
   const unpacked = process.arch === "x64" ? "win-unpacked" : "win-arm64-unpacked";
   const { load } = createRequire(import.meta.url)("js-yaml");
-  verifyUpdaterPublisher(load(fs.readFileSync(path.join(root, unpacked, "resources/app-update.yml"), "utf8")), process.env.UMBRATIC_WIN_SIGN_PUBLISHER!);
-  // Check the installer AND all shipped native executables/libraries. A signed
-  // wrapper around unsigned sidecars does not meet the release contract.
-  const files = walk(root).filter((file) => /\.(exe|dll|node)$/i.test(file));
-  if (files.length === 0) throw new Error("No Windows executables found.");
-  const manifest = path.join(stage, "windows-signatures.json");
-  fs.writeFileSync(manifest, JSON.stringify(files));
-  try {
-    run("pwsh", ["-NoProfile", "-File", "scripts/ci/verify-windows-signatures.ps1", "-Manifest", manifest,
-      "-Publisher", process.env.UMBRATIC_WIN_SIGN_PUBLISHER!]);
-  } finally { fs.rmSync(manifest, { force: true }); }
+  const app = path.join(root, unpacked);
+  const publisher = process.env.SIGNPATH_PUBLISHER!;
+  verifyUpdaterPublisher(load(fs.readFileSync(path.join(app, "resources/app-update.yml"), "utf8")), publisher);
+  const inventory = JSON.parse(fs.readFileSync(path.join(app, "resources/windows-signing-provenance.json"), "utf8"));
+  verifyInventory(app, inventory, publisher);
+  const installerName = `Umbratic-${version}-${process.arch}.exe`;
+  const installer = path.join(root, installerName);
+  requireProjectIdentity(inspect([installer])[0], publisher, version);
+  const result = JSON.parse(fs.readFileSync(path.join(signingRoot(), "uninstaller/result.json"), "utf8"));
+  if (result.length !== 1 || result[0].name !== `Umbratic-${version}-${process.arch}.__uninstaller.exe`) throw new Error("Missing signed uninstaller provenance.");
+  requireProjectIdentity(result[0].identity, publisher, version);
+  const archiveTool = await createRequire(import.meta.url)("app-builder-lib/out/toolsets/7zip").getPath7za();
+  const listing = execFileSync(archiveTool, ["l", "-slt", installer], { encoding: "utf8", timeout: 120_000, maxBuffer: 16 * 1024 * 1024 });
+  const uninstallers = [...listing.matchAll(/^Path = (.+)\r?$/gm)].map((match) => match[1].trim())
+    .filter((name) => path.posix.basename(name.replaceAll("\\", "/")) === "Uninstall Umbratic.exe");
+  if (uninstallers.length !== 1) throw new Error("Installer must embed exactly one signed Umbratic uninstaller.");
+  const embedded = execFileSync(archiveTool, ["e", "-so", installer, uninstallers[0]], { timeout: 120_000, maxBuffer: 16 * 1024 * 1024 });
+  const { createHash } = await import("node:crypto");
+  if (createHash("sha256").update(embedded).digest("hex") !== result[0].sha256) throw new Error("The embedded uninstaller differs from the approved signed bytes.");
+  fs.writeFileSync(path.join(stage, `Umbratic-${version}-${process.arch}-windows-provenance.json`), JSON.stringify({
+    ...inventory, installer: { name: installerName, sha256: sha256(installer) }, uninstaller: result[0],
+  }, null, 2) + "\n");
 } else throw new Error("Unsupported release host.");
 const channel = process.platform === "darwin" ? "latest-mac.yml" : "latest.yml";
 const expected = process.platform === "darwin" ? [`.dmg`, `.zip`] : [`-${process.arch}.exe`];

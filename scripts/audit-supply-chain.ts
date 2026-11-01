@@ -64,6 +64,7 @@ run(
   path.join(root, "infrastructure/veil-console/deploy/caddy"),
 );
 run("Locked Python and native-server module OSV audit", process.execPath, ["scripts/audit-managed-runtimes.ts"]);
+run("Pinned release-action source and advisory audit", process.execPath, ["scripts/audit-release-actions.ts"]);
 
 // govulncheck reports these under Module Results with no called or imported
 // symbols. Listing them here keeps a reviewed, unreachable advisory from

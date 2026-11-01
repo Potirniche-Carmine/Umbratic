@@ -228,14 +228,27 @@ reviewed alongside the already allowed individual licenses.
 
 Desktop releases publish to public GitHub Releases. Build workflows pin their
 Actions, and the Windows Vulkan SDK installer is pinned by SHA-256 in
-`third_party/vulkan-sdk.json` and verified before execution. Windows signing tools
-and the isolated x64 .NET runtime are pinned by official package/archive checksums
-in `third_party/windows-signing.json`; no moving PowerShell module is installed.
-Signing credentials
-stay in GitHub Actions secrets. The updater sends ordinary GitHub release
+`third_party/vulkan-sdk.json` and verified before execution. Windows project
+signatures use the full-SHA-pinned official SignPath Action, trusted GitHub
+artifacts and human approvals. Repository-reviewed XML configurations name
+permitted files and enforce product/version metadata. Foundation acceptance,
+including the Electron-derived launcher scope, remains pending. Upstream
+binaries retain recorded original bytes and valid signatures or an explicit
+unsigned status. Signing tokens stay in Actions secrets and are passed only to
+the provider Action. The updater sends ordinary GitHub release
 requests and can be disabled in Settings → About. It does not need a company token.
 
+Publication attests the final signed payload and `SHA256SUMS` using GitHub OIDC,
+then verifies exact repository, release workflow, main source/signer commit,
+hosted-runner identity and complete digest-bound subjects before publishing.
+Credential-free CI attestations have a different workflow identity and cannot
+satisfy signed-release verification.
+Reviewed Action-bundle findings and their controls are recorded in
+[release action security](release-actions-security.md).
+
 Runbook: [../guides/release-desktop.md](../guides/release-desktop.md).
+Download checks: [../guides/verify-release.md](../guides/verify-release.md).
+Public scope: [Code signing policy](../../CODE_SIGNING_POLICY.md).
 
 Windows packaging inspects normal and delay-load PE imports with the installed
 MSVC `dumpbin`. Only the explicit Windows OS/API-set contract list remains

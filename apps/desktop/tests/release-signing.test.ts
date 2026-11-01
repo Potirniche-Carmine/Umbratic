@@ -19,7 +19,7 @@ test("signed release identities cannot omit updater verification or switch Apple
 
 test("signed packages fail closed on missing credentials and development CPU-only mode", (t) => {
   const names = ["APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID",
-    "UMBRATIC_WIN_SIGN_ENDPOINT", "UMBRATIC_WIN_SIGN_ACCOUNT", "UMBRATIC_WIN_SIGN_PROFILE", "UMBRATIC_WIN_SIGN_PUBLISHER", "UMBRATIC_LLAMA_CPU_ONLY"];
+    "SIGNPATH_ORGANIZATION_ID", "SIGNPATH_PROJECT_SLUG", "SIGNPATH_SIGNING_POLICY_SLUG", "SIGNPATH_PUBLISHER", "UMBRATIC_LLAMA_CPU_ONLY"];
   const original = Object.fromEntries(names.map((name) => [name, process.env[name]]));
   t.after(() => {
     for (const [name, value] of Object.entries(original)) {

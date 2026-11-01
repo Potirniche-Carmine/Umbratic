@@ -102,8 +102,8 @@ win:
   # release as Umbratic-${version}.exe and one silently replaces the other.
   # The updater picks the file whose name carries its own architecture.
   artifactName: Umbratic-${version}-${arch}.${ext}
-  # Signing is Azure Trusted Signing, configured per release machine: the
-  # package script supplies a hook using pinned Microsoft signing tooling.
+  # Signing uses the approved SignPath project and trusted GitHub artifacts.
+  # The package script supplies the bounded workflow handoff hook.
   # It is not written here because every unsigned developer package
   # would then try to sign and fail.
   target:

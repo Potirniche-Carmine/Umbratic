@@ -1,146 +1,146 @@
 # Releasing the desktop app
 
-GitHub Actions tests, builds and publishes Umbratic. GitHub Releases hosts the
-public installers and updater metadata. No Cloudflare account, bucket, Worker,
-company enrollment or update token is required.
+GitHub Actions builds verified `main` commits and publishes installers and updater
+metadata to GitHub Releases. No Cloudflare bucket, company enrollment or update
+token is needed. Targets are macOS 13+ on Apple Silicon and Windows x64/ARM64.
 
-Supported release targets are macOS 13 or later on Apple Silicon, Windows x64
-and Windows ARM64. Each native runner builds the Rust helpers, Veil, Electron shell and
-pinned local runtimes for its own architecture.
+The [Code signing policy](../../CODE_SIGNING_POLICY.md) records current status and
+scope. SignPath Foundation acceptance and account setup are still pending;
+preparing this integration does not grant a certificate or make a signed release.
 
-## Configure signing once
+## Configure Apple signing
 
-In the repository's **Settings → Secrets and variables → Actions**, configure:
+Use the same valid Developer ID Application identity and Apple Developer team
+used by GamePack. Keep Umbratic's bundle ID `ai.umbratic.desktop` distinct and
+stable. Configure these Umbratic repository Actions settings:
 
 | Kind | Name | Value |
 | --- | --- | --- |
-| Secret | `MACOS_CERTIFICATE_P12` | Base64-encoded Developer ID Application certificate exported with its private key |
+| Secret | `MACOS_CERTIFICATE_P12` | Base64 of the existing protected Developer ID Application P12, including its private key |
 | Secret | `MACOS_CERTIFICATE_PASSWORD` | Password protecting that P12 |
-| Secret | `APPLE_NOTARY_APPLE_ID` | Apple account authorized to notarize for the team |
-| Secret | `APPLE_NOTARY_PASSWORD` | App-specific password for that account |
-| Variable | `APPLE_TEAM_ID` | Apple Developer team identifier |
-| Secret | `AZURE_TENANT_ID` | Tenant of the signing service principal |
-| Secret | `AZURE_CLIENT_ID` | Signing service principal's application ID |
-| Secret | `AZURE_CLIENT_SECRET` | Service principal credential |
-| Variable | `UMBRATIC_WIN_SIGN_ENDPOINT` | Trusted Signing endpoint, for example `https://eus.codesigning.azure.net` |
-| Variable | `UMBRATIC_WIN_SIGN_ACCOUNT` | Trusted Signing account name |
-| Variable | `UMBRATIC_WIN_SIGN_PROFILE` | Public-trust certificate profile name |
-| Variable | `UMBRATIC_WIN_SIGN_PUBLISHER` | Exact certificate subject common name |
+| Secret | `APPLE_NOTARY_APPLE_ID` | Existing Apple account authorized to notarize for the team |
+| Secret | `APPLE_NOTARY_PASSWORD` | That account's app-specific notarization password |
+| Variable | `APPLE_TEAM_ID` | The team associated with the certificate and notarization account |
 
-The Azure principal needs **Artifact Signing Certificate Profile Signer** on
-that profile. Microsoft now calls Trusted Signing **Artifact Signing**; the
-existing `UMBRATIC_WIN_SIGN_*` names still name that service. Keep the Apple team, app ID and Windows publisher stable so
-installed copies can verify future updates. The Apple secret names match
-GamePack; secrets must be configured separately for this repository.
+GamePack's checked-in configuration identifies team `P3UF4Y6ASK` and certificate
+SHA-1 `FB6753A6FCBE197440100A34EB795D25C2F259AC`. These are public configuration
+identifiers, not evidence that the private key is available or the certificate
+is currently valid. The reviewed local keychain contained no valid signing
+identity or public Developer ID Application certificate.
 
-The workflow uses its short-lived `GITHUB_TOKEN` to publish. A personal access
-token is unnecessary. Missing signing credentials fail the release before
-packaging and cannot result in an unsigned public release.
+Restore the original protected P12 from its secure backup, or let the owner
+prepare it on the actual GamePack signing machine. No new certificate is needed
+merely because Umbratic is another app; the certificate must still be valid and
+belong to the selected team. Reuse the existing authorized notarization account
+and password if available. Never place credentials in the repository or chat.
 
-## Add the signing credentials step by step
+The four secret names match GamePack, but personal-account repositories have
+separate secret stores. [GitHub does not return stored secret values](https://docs.github.com/en/rest/actions/secrets#get-a-repository-secret),
+so they cannot be copied back through the API. Configure Umbratic from the
+original protected material in [Actions secrets settings](https://github.com/Potirniche-Carmine/Umbratic/settings/secrets/actions).
+The workflow imports the identity into a temporary hosted-runner keychain,
+derives its fingerprint for the selected team, checks signing/notarization
+access and cleans up the keychain. GamePack itself is not modified.
 
-1. On the Mac that signs GamePack, open **Keychain Access → My Certificates**.
-   Select the same **Developer ID Application** identity, including its private
-   key, and choose **File → Export Items**. Save a password-protected `.p12`
-   outside the repository. Copy its base64 directly to the clipboard without
-   printing the private key in the terminal:
-   ```sh
-   base64 -i /absolute/path/to/Developer-ID.p12 | pbcopy
-   ```
-2. Open [Umbratic's Actions secrets settings](https://github.com/Potirniche-Carmine/Umbratic/settings/secrets/actions).
-   Choose **New repository secret**, name it `MACOS_CERTIFICATE_P12`, and paste
-   the clipboard. Add `MACOS_CERTIFICATE_PASSWORD` with the export password.
-   Existing GamePack secrets cannot be read back from GitHub; reuse the
-   original certificate or export the same identity again.
-3. At [Apple Account](https://account.apple.com), choose **Sign-In and Security
-   → App-Specific Passwords → Generate an app-specific password**. Store it as
-   `APPLE_NOTARY_PASSWORD`, and store that account's email as
-   `APPLE_NOTARY_APPLE_ID`. Two-factor authentication is required. In GitHub's
-   **Secrets and variables → Actions → Variables → New repository variable**,
-   add `APPLE_TEAM_ID` using the team shown in the Apple Developer membership
-   details. Use the same team as the exported certificate.
-   [Apple's instructions](https://support.apple.com/en-us/102654).
-4. In the [Azure portal](https://portal.azure.com), create or select an
-   **Artifact Signing** account, complete identity validation, and create a
-   **Public Trust** certificate profile. Record its endpoint, account name,
-   profile name and certificate subject common name in the four
-   `UMBRATIC_WIN_SIGN_*` repository variables from the table. Private Trust and
-   test profiles do not provide the public installer trust this release needs.
-   [Microsoft's setup guide](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart).
-5. In **Microsoft Entra ID → App registrations → New registration**, create a
-   signing application. Its **Overview** supplies the tenant and application
-   IDs for `AZURE_TENANT_ID` and `AZURE_CLIENT_ID`. Under **Certificates & secrets
-   → Client secrets → New client secret**, copy the secret **Value** into
-   `AZURE_CLIENT_SECRET`. Assign that application **Artifact Signing Certificate
-   Profile Signer** through the signing profile/account's **Access control
-   (IAM) → Add role assignment**. Scope it to the profile where possible.
-   [Service principal setup](https://learn.microsoft.com/en-us/entra/identity-platform/howto-create-service-principal-portal),
-   [signing roles](https://learn.microsoft.com/en-us/azure/artifact-signing/concept-resources-roles).
-6. After `main` has passed **CI required**, open **Actions → Release → Run
-   workflow**, select `main`, and run it. The existing `0.0.3` version can be
-   released without another bump while it has no published release. All three
-   signed builds must pass before the draft becomes public. The pipeline
-   provisions its reviewed build/signing tools automatically.
-7. Download and install the resulting signed build. For the first GitHub
-   release, install it manually if the previous app points at the former feed.
-   Qualify automatic installation using a later signed GitHub release with a
-   higher version: the installed build must show the update ready, restart,
-   and report the new version. This final installed-upgrade check requires
-   real signing credentials and two signed versions.
+## Configure SignPath after acceptance
 
-## Cut a release
+First review the [application preparation](../setup/signpath-application.md).
+The owner submits it, supplies contact details and explicitly reviews the
+required Code of Conduct and personal-data-processing agreements. Optional
+marketing consent is the owner's choice. The project has no published release;
+prior-release and reputation eligibility must be resolved with the Foundation.
 
-1. Update all workspace versions together:
-   ```sh
-   npm run release:version -- 0.0.3
-   ```
-2. Open and merge a pull request. Require the **CI required** check on `main`.
-3. CI runs the complete verification suite, builds unsigned installers and
-   archives with production native backends, and validates archive integrity
-   plus actual updater checksums on all three native platforms. Windows x64
-   exercises the reviewed Vulkan SDK; both Windows hosts also verify the
-   credential-free signing-tool setup. Dependency audits and workflow
-   validation also run. Pull requests never receive signing credentials.
-4. After a successful CI push run for current `main`, the Release workflow
-   selects that exact commit and builds signed packages. macOS must pass
-   notarization, stapling, code-signature and Gatekeeper checks. Windows must
-   pass Authenticode verification for the installer and shipped native files.
-5. Publication waits for every platform, validates updater metadata checksums,
-   writes `SHA256SUMS`, uploads assets to a draft, and publishes it atomically
-   as `v0.0.3`.
+Install the [SignPath GitHub App](https://github.com/apps/signpath) only after
+reviewing its permissions. The reviewed screen requests read access to Actions,
+code and metadata, and **read/write repository administration**. Choose the
+personal account, **Only select repositories**, and **Potirniche-Carmine/Umbratic**
+only. Neither installation nor the final permission grant has been performed.
 
-Merges that keep an already published version skip release publication. For a
-failed release, fix the cause and rerun **Actions → Release → Run workflow**
-from `main`. That still requires a successful CI push run for the current
-commit. A published release is immutable: bump the version to replace it.
-An unpublished draft can be retried; unexpected stale assets make the retry
-fail until the draft is removed.
+In SignPath, link the GitHub trusted build system and this repository. Require
+origin verification for `main`, manual approval of every signing request, MFA
+for the people in the public policy, and a CI submitter that cannot approve its
+own requests. Obtain explicit Foundation approval for the Electron-derived
+launcher and exact artifact scope; changing Electron's branding is insufficient.
 
-If `main` changes while packaging, publication stops. Run the release against
-the newest verified `main` instead of publishing stale output.
+Create these artifact configurations from the reviewed repository XML:
+
+| Slug | Source | Scope |
+| --- | --- | --- |
+| `umbratic-payload-v1` | [payload XML](../../scripts/ci/signpath/umbratic-payload-v1.xml) | Declared project executables, including the explicitly reviewed Electron-derived launcher |
+| `umbratic-uninstaller-v1` | [uninstaller XML](../../scripts/ci/signpath/umbratic-uninstaller-v1.xml) | Generated NSIS uninstaller |
+| `umbratic-installer-v1` | [installer XML](../../scripts/ci/signpath/umbratic-installer-v1.xml) | Final NSIS installer |
+
+They enforce the Umbratic product name and matching release version. Do not
+broaden patterns to cover upstream libraries or disable origin/approval checks.
+After acceptance, add these Actions settings:
+
+| Kind | Name | Value |
+| --- | --- | --- |
+| Secret | `SIGNPATH_API_TOKEN` | Restricted CI submitter token; used only by the official SignPath Action |
+| Variable | `SIGNPATH_ORGANIZATION_ID` | SignPath organization identifier |
+| Variable | `SIGNPATH_PROJECT_SLUG` | Approved project slug |
+| Variable | `SIGNPATH_SIGNING_POLICY_SLUG` | Approved release policy requiring manual approval and trusted origin |
+| Variable | `SIGNPATH_PUBLISHER` | Exact certificate subject common name supplied for the approved project |
+
+Do not guess the publisher or use a test certificate. Missing configuration
+stops release signing; it never falls back to publishing unsigned packages.
+
+## Cut and approve a release
+
+1. Update all workspace versions with `npm run release:version -- VERSION`,
+   merge the reviewed change and wait for the complete `CI required` check.
+   CI builds unsigned production installers on every target, checks native
+   resources, archives and updater digests, and produces separate CI provenance.
+   Pull requests receive no distribution signing credentials.
+2. A successful CI push for current `main` triggers **Release**. Source selection
+   rejects stale, fork, PR, failed or unrelated builds. macOS signing includes
+   notarization, stapling, signature and Gatekeeper checks.
+3. For each Windows architecture, the same packaging process pauses for three
+   SignPath requests: payload, NSIS uninstaller and final installer. Review the
+   exact source commit, workflow, artifact configuration and requested files,
+   then approve each request in SignPath. Expect **six requests per release**
+   across x64 and ARM64, each with a 30-minute completion window.
+4. The builder resumes with the checked signed bytes, including the exact
+   uninstaller used by NSIS. Project executables need the approved publisher,
+   timestamp, product name and version. Upstream binaries retain verified
+   original bytes and recorded signature status; they are not blanket-signed
+   with the project certificate. The per-architecture provenance inventory
+   records this distinction. Unsigned upstream code can still be blocked by
+   Windows Smart App Control.
+5. Publication waits for all platforms. It validates the complete final signed
+   asset set and updater metadata, writes `SHA256SUMS`, generates GitHub build
+   provenance over those final bytes, and cryptographically verifies the
+   attestation's exact workflow, `main` commit, hosted runner and subjects.
+   Assets upload to a draft; a final live-main check precedes publication.
+
+For the first release, the existing version can be used while it remains
+unpublished. Set account configuration first, wait for successful current-main
+CI, then run **Actions → Release → Run workflow** on `main` if the automatic run
+stopped on missing credentials. Already-published versions are immutable and
+skipped; bump the version to publish different bytes. A stale main commit or
+unexpected draft asset stops publication.
 
 ## Inspect the result
 
-The release must contain:
+A signed release contains:
 
 - `Umbratic-VERSION.dmg` and `Umbratic-VERSION.zip` for macOS ARM64.
 - `Umbratic-VERSION-x64.exe` and `Umbratic-VERSION-arm64.exe` for Windows.
-- `latest-mac.yml`, `latest.yml`, `latest-arm64.yml`, blockmaps when produced,
-  and `SHA256SUMS`.
+- `latest-mac.yml`, `latest.yml`, `latest-arm64.yml` and generated blockmaps.
+- `Umbratic-VERSION-x64-windows-provenance.json` and
+  `Umbratic-VERSION-arm64-windows-provenance.json`.
+- `SHA256SUMS` and the authenticated `release-provenance.jsonl` bundle.
 
-Install the signed previous version, leave automatic updates enabled in
-**Settings → About**, and confirm it downloads and installs the newer signed
-release. Unit tests verify updater state transitions and signature-error
-handling; a real installed upgrade additionally verifies the OS trust path.
+Follow [download verification](verify-release.md) before installing. Then qualify
+an installed upgrade from a signed earlier version to a later signed version:
+check **Settings → About**, download, restart and confirm the new version and
+preserved user data. This requires real signing accounts and two signed releases;
+unit tests and unsigned CI builds do not replace it.
 
-## Local packaging
+## Local inspection
 
-For a reversible packaging smoke test without signing credentials:
-
-```sh
-npm run desktop:release -- --unsigned --dir
-```
-
-`--unsigned` is for local inspection only. Signed local packages require the
-credentials described in [release-machine.md](../setup/release-machine.md).
-Only GitHub Actions publishes releases; there is no unsigned publishing flag.
+Use `npm run desktop:release -- --unsigned --dir` for a reversible local package.
+Signed local macOS inspection is described in
+[release-machine.md](../setup/release-machine.md). Windows distribution signing
+runs only through the approved hosted workflow; a local token or binary upload
+cannot substitute for trusted origin. Only GitHub Actions publishes releases.

@@ -57,7 +57,7 @@ jobs:
       matrix:
         os: [macos-15, windows-2025, windows-11-arm]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 240
     defaults:
       run:
         shell: bash
@@ -67,13 +67,10 @@ jobs:
       APPLE_ID: ${{ matrix.os == 'macos-15' && secrets.APPLE_NOTARY_APPLE_ID || '' }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.os == 'macos-15' && secrets.APPLE_NOTARY_PASSWORD || '' }}
       APPLE_TEAM_ID: ${{ matrix.os == 'macos-15' && vars.APPLE_TEAM_ID || '' }}
-      UMBRATIC_WIN_SIGN_ENDPOINT: ${{ matrix.os != 'macos-15' && vars.UMBRATIC_WIN_SIGN_ENDPOINT || '' }}
-      UMBRATIC_WIN_SIGN_ACCOUNT: ${{ matrix.os != 'macos-15' && vars.UMBRATIC_WIN_SIGN_ACCOUNT || '' }}
-      UMBRATIC_WIN_SIGN_PROFILE: ${{ matrix.os != 'macos-15' && vars.UMBRATIC_WIN_SIGN_PROFILE || '' }}
-      UMBRATIC_WIN_SIGN_PUBLISHER: ${{ matrix.os != 'macos-15' && vars.UMBRATIC_WIN_SIGN_PUBLISHER || '' }}
-      AZURE_TENANT_ID: ${{ matrix.os != 'macos-15' && secrets.AZURE_TENANT_ID || '' }}
-      AZURE_CLIENT_ID: ${{ matrix.os != 'macos-15' && secrets.AZURE_CLIENT_ID || '' }}
-      AZURE_CLIENT_SECRET: ${{ matrix.os != 'macos-15' && secrets.AZURE_CLIENT_SECRET || '' }}
+      SIGNPATH_ORGANIZATION_ID: ${{ matrix.os != 'macos-15' && vars.SIGNPATH_ORGANIZATION_ID || '' }}
+      SIGNPATH_PROJECT_SLUG: ${{ matrix.os != 'macos-15' && vars.SIGNPATH_PROJECT_SLUG || '' }}
+      SIGNPATH_SIGNING_POLICY_SLUG: ${{ matrix.os != 'macos-15' && vars.SIGNPATH_SIGNING_POLICY_SLUG || '' }}
+      SIGNPATH_PUBLISHER: ${{ matrix.os != 'macos-15' && vars.SIGNPATH_PUBLISHER || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,22 +84,30 @@ jobs:
           node-version-file: .nvmrc
           package-manager-cache: false
       - name: Require release credentials
+        env:
+          SIGNPATH_API_TOKEN: ${{ runner.os == 'Windows' && secrets.SIGNPATH_API_TOKEN || '' }}
         run: |
           node --input-type=module -e '
             import { requireSigningEnvironment } from "./scripts/release-env.ts";
             requireSigningEnvironment();
             const required = process.platform === "darwin"
               ? ["MACOS_CERTIFICATE_P12", "MACOS_CERTIFICATE_PASSWORD"]
-              : ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"];
+              : ["SIGNPATH_API_TOKEN"];
             for (const key of required) if (!process.env[key]?.trim()) throw new Error("Missing release secret " + key);
           '
       - name: Configure temporary macOS signing identity
         if: runner.os == 'macOS'
         run: bash scripts/ci/configure-macos-signing.sh
-      - name: Provision reviewed Windows signing tools
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/ci/install-windows-signing.ps1
+      - name: Read exact signing metadata
+        id: metadata
+        env:
+          UMBRATIC_SIGNPATH_STAGING: ${{ runner.temp }}/umbratic-signpath
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "version=" + JSON.parse(fs.readFileSync("package.json")).version + "\narchitecture=" + process.arch + "\n");
+            if (process.platform === "win32") fs.appendFileSync(process.env.GITHUB_ENV, "UMBRATIC_SIGNPATH_STAGING=" + process.env.UMBRATIC_SIGNPATH_STAGING + "\n");
+          '
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: infrastructure/veil/go.mod
@@ -115,7 +120,109 @@ jobs:
       - run: npm ci --ignore-scripts --omit=peer
       - run: npm run dependencies:provision
       - name: Build, sign, notarize and smoke-test
+        if: runner.os == 'macOS'
         run: npm run desktop:release
+      - name: Start the bounded Windows packaging worker
+        if: runner.os == 'Windows'
+        run: node scripts/ci/windows-signpath-build.ts start
+      - name: Wait for the declared Umbratic payload
+        if: runner.os == 'Windows'
+        run: node scripts/ci/windows-signpath-build.ts wait payload
+      - name: Upload immutable payload signing input
+        if: runner.os == 'Windows'
+        id: unsigned_payload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-payload-${{ matrix.os }}
+          path: ${{ runner.temp }}/umbratic-signpath/payload/input/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Request approved Umbratic payload signatures
+        if: runner.os == 'Windows'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: umbratic-payload-v1
+          github-artifact-id: ${{ steps.unsigned_payload.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: ${{ runner.temp }}/umbratic-signpath/payload/signed
+          parameters: |
+            version: ${{ toJSON(steps.metadata.outputs.version) }}
+            architecture: ${{ toJSON(steps.metadata.outputs.architecture) }}
+      - name: Verify payload signatures and resume packaging
+        if: runner.os == 'Windows'
+        run: node scripts/ci/windows-signpath-build.ts resume payload
+      - name: Wait for the generated NSIS uninstaller
+        if: runner.os == 'Windows'
+        run: node scripts/ci/windows-signpath-build.ts wait uninstaller
+      - name: Upload immutable uninstaller signing input
+        if: runner.os == 'Windows'
+        id: unsigned_uninstaller
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-uninstaller-${{ matrix.os }}
+          path: ${{ runner.temp }}/umbratic-signpath/uninstaller/input/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Request an approved NSIS uninstaller signature
+        if: runner.os == 'Windows'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: umbratic-uninstaller-v1
+          github-artifact-id: ${{ steps.unsigned_uninstaller.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: ${{ runner.temp }}/umbratic-signpath/uninstaller/signed
+          parameters: |
+            version: ${{ toJSON(steps.metadata.outputs.version) }}
+            architecture: ${{ toJSON(steps.metadata.outputs.architecture) }}
+      - name: Verify and embed the same signed uninstaller
+        if: runner.os == 'Windows'
+        run: node scripts/ci/windows-signpath-build.ts resume uninstaller
+      - name: Wait for the final NSIS installer
+        if: runner.os == 'Windows'
+        run: node scripts/ci/windows-signpath-build.ts wait installer
+      - name: Upload immutable installer signing input
+        if: runner.os == 'Windows'
+        id: unsigned_installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-installer-${{ matrix.os }}
+          path: ${{ runner.temp }}/umbratic-signpath/installer/input/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Request an approved final installer signature
+        if: runner.os == 'Windows'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: umbratic-installer-v1
+          github-artifact-id: ${{ steps.unsigned_installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: ${{ runner.temp }}/umbratic-signpath/installer/signed
+          parameters: |
+            version: ${{ toJSON(steps.metadata.outputs.version) }}
+            architecture: ${{ toJSON(steps.metadata.outputs.architecture) }}
+      - name: Verify the installer and finish updater metadata and native smoke tests
+        if: runner.os == 'Windows'
+        run: |
+          node scripts/ci/windows-signpath-build.ts resume installer
+          node scripts/ci/windows-signpath-build.ts finish
       - name: Verify signatures and stage installers and updater metadata
         run: node scripts/ci/verify-release.ts
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -131,16 +238,21 @@ jobs:
           keychain="$RUNNER_TEMP/umbratic-release.keychain-db"
           if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi
           rm -f "$RUNNER_TEMP/umbratic-signing.p12" "$RUNNER_TEMP/umbratic-signing-probe"
+      - name: Stop Windows packaging and remove signing handoff files
+        if: always() && runner.os == 'Windows'
+        run: node scripts/ci/windows-signpath-build.ts stop
 
 
   publish:
     name: Publish verified GitHub release
     needs: [source, package]
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
       contents: write
       actions: read
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ needs.source.outputs.tag }}
@@ -163,5 +275,18 @@ jobs:
           pattern: signed-*
           path: target/release/upload
           merge-multiple: true
+      - name: Validate final signed bytes and prepare attestation subjects
+        run: node scripts/ci/prepare-release-attestation.ts
+      - name: Attest every final release asset
+        id: attest_release
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: target/release/upload/*
+          create-storage-record: false
+          push-to-registry: false
+      - name: Preserve the authenticated release provenance bundle
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attest_release.outputs.bundle-path }}
+        run: cp "$ATTESTATION_BUNDLE" target/release/upload/release-provenance.jsonl
       - name: Validate complete release and publish atomically
         run: node scripts/ci/publish-release.ts

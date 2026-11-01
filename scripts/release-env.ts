@@ -54,30 +54,30 @@ export function requireReleaseEnv(key: string): string {
 }
 
 /**
- * The Windows signing configuration, when this machine has one. All four
- * values are public identifiers of the Trusted Signing account; the secret is
- * the Azure sign-in itself, which the signing module takes from `az login` or
- * the AZURE_* variables.
+ * Public identity of the approved SignPath project. The API token belongs only
+ * to the official GitHub action, never to the packaging process.
  */
 export function windowsSigningConfig(): {
-  endpoint: string;
-  codeSigningAccountName: string;
-  certificateProfileName: string;
+  organizationId: string;
+  projectSlug: string;
+  signingPolicySlug: string;
   publisherName: string;
 } | null {
-  const endpoint = process.env.UMBRATIC_WIN_SIGN_ENDPOINT?.trim();
-  const codeSigningAccountName = process.env.UMBRATIC_WIN_SIGN_ACCOUNT?.trim();
-  const certificateProfileName = process.env.UMBRATIC_WIN_SIGN_PROFILE?.trim();
-  const publisherName = process.env.UMBRATIC_WIN_SIGN_PUBLISHER?.trim();
-  const set = [endpoint, codeSigningAccountName, certificateProfileName, publisherName].filter(Boolean).length;
+  const organizationId = process.env.SIGNPATH_ORGANIZATION_ID?.trim();
+  const projectSlug = process.env.SIGNPATH_PROJECT_SLUG?.trim();
+  const signingPolicySlug = process.env.SIGNPATH_SIGNING_POLICY_SLUG?.trim();
+  const publisherName = process.env.SIGNPATH_PUBLISHER?.trim();
+  const set = [organizationId, projectSlug, signingPolicySlug, publisherName].filter(Boolean).length;
   if (set === 0) return null;
   if (set < 4) {
     throw new Error(
-      "Windows signing needs all of UMBRATIC_WIN_SIGN_ENDPOINT, UMBRATIC_WIN_SIGN_ACCOUNT, "
-      + `UMBRATIC_WIN_SIGN_PROFILE and UMBRATIC_WIN_SIGN_PUBLISHER in ${releaseEnvPath}.`,
+      "Windows signing needs SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, "
+      + "SIGNPATH_SIGNING_POLICY_SLUG and SIGNPATH_PUBLISHER.",
     );
   }
-  return { endpoint: endpoint!, codeSigningAccountName: codeSigningAccountName!, certificateProfileName: certificateProfileName!, publisherName: publisherName! };
+  if (!/^[0-9a-fA-F-]{36}$/.test(organizationId!) || !/^[A-Za-z0-9_-]+$/.test(projectSlug!)
+      || !/^[A-Za-z0-9_-]+$/.test(signingPolicySlug!) || /[\r\n\0]/.test(publisherName!)) throw new Error("Invalid SignPath project identity.");
+  return { organizationId: organizationId!, projectSlug: projectSlug!, signingPolicySlug: signingPolicySlug!, publisherName: publisherName! };
 }
 
 /** Signed builds must never silently fall back to an unsigned or unnotarized app. */
@@ -86,7 +86,7 @@ export function requireSigningEnvironment(platform = process.platform): void {
     throw new Error("CPU-only development packages cannot be released.");
   }
   if (platform === "win32") {
-    if (!windowsSigningConfig()) throw new Error("Windows release signing is required. Configure UMBRATIC_WIN_SIGN_* or use --unsigned for local testing.");
+    if (!windowsSigningConfig()) throw new Error("Windows release signing is required. Configure the approved SIGNPATH_* project identity.");
     return;
   }
   if (platform !== "darwin") throw new Error("Desktop releases support macOS and Windows only.");
