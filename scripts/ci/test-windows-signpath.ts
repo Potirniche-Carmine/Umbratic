@@ -6,7 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { repository, sha256, stages } from "./windows-signing.ts";
+import { repository, requireProjectIdentity, sha256, stages, stampProjectMetadata, unsignedPeDigest } from "./windows-signing.ts";
 import { cleanupWindowsFixture } from "./windows-fixture-cleanup.ts";
 
 if (process.platform !== "win32" || process.env.GITHUB_ACTIONS !== "true" || process.env.RUNNER_ENVIRONMENT !== "github-hosted") {
@@ -94,10 +94,29 @@ if (mode === "cleanup") {
       }).slice(0, 2000));
     }
     certificate("create");
+    const fixture = JSON.parse(fs.readFileSync(path.join(root, "identity.json"), "utf8"));
+    function sign(file: string): void {
+      execFileSync(tool, ["sign", "/sha1", fixture.thumbprint, "/s", "My", "/fd", "SHA256", "/tr", "http://timestamp.digicert.com", "/td", "SHA256", file], {
+        stdio: "inherit", timeout: 120_000,
+      });
+    }
+    // Prove the key, root-only Authenticode trust and timestamp service before
+    // compiling the real payload. This resource-only PE is never executed.
+    const { NtExecutable } = createRequire(import.meta.url)("resedit");
+    const executable = NtExecutable.createEmpty(false, false);
+    executable.newHeader.fileHeader.machine = process.arch === "arm64" ? 0xaa64 : 0x8664;
+    const probe = path.join(root, "trust-probe.exe");
+    fs.writeFileSync(probe, Buffer.from(executable.generate()));
+    const version = JSON.parse(fs.readFileSync(path.join(repository, "package.json"), "utf8")).version;
+    stampProjectMetadata(probe, version);
+    const digest = unsignedPeDigest(fs.readFileSync(probe));
+    sign(probe);
+    requireProjectIdentity(inspect([probe])[0], publisher, version);
+    if (unsignedPeDigest(fs.readFileSync(probe)) !== digest) throw new Error("Fixture signing changed PE contents.");
+    console.log("Verified root-only trust, exact project identity, SHA256 signature, timestamp and unchanged PE contents.");
     if (mode === "preflight") {
       console.log("Preflight verified the pinned SDK utility, process-tree cancellation and ephemeral certificate/trust-store support.");
     } else {
-      const fixture = JSON.parse(fs.readFileSync(path.join(root, "identity.json"), "utf8"));
       process.env.SIGNPATH_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000000";
       process.env.SIGNPATH_PROJECT_SLUG = "ci-fixture";
       process.env.SIGNPATH_SIGNING_POLICY_SLUG = "ci-fixture";
@@ -116,9 +135,7 @@ if (mode === "cleanup") {
         for (const name of files) {
           const file = path.join(output, name);
           fs.copyFileSync(path.join(input, name), file);
-          execFileSync(tool, ["sign", "/sha1", fixture.thumbprint, "/s", "My", "/fd", "SHA256", "/tr", "http://timestamp.digicert.com", "/td", "SHA256", file], {
-            stdio: "inherit", timeout: 120_000,
-          });
+          sign(file);
         }
         run("windows-signpath-build.ts", ["resume", stage]);
       }

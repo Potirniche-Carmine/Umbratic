@@ -15,12 +15,11 @@ if ($Operation -eq 'create') {
   # disposable hosted VM already runs as administrator; its machine root store
   # supports the noninteractive fixture, and cleanup removes this exact leaf.
   Import-Certificate -FilePath $publicFile -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-  Import-Certificate -FilePath $publicFile -CertStoreLocation Cert:\CurrentUser\TrustedPublisher | Out-Null
   $identity | Add-Member -MemberType NoteProperty -Name thumbprint -Value $certificate.Thumbprint
   $identity | ConvertTo-Json | Set-Content -LiteralPath $identityPath -Encoding utf8
 } else {
   $cleanupErrors = [System.Collections.Generic.List[string]]::new()
-  foreach ($store in @('Cert:\LocalMachine\Root', 'Cert:\CurrentUser\TrustedPublisher', 'Cert:\CurrentUser\My')) {
+  foreach ($store in @('Cert:\LocalMachine\Root', 'Cert:\CurrentUser\My')) {
     try { $certificates = @(Get-ChildItem -LiteralPath $store | Where-Object { $_.Subject -ceq $subject }) }
     catch { $cleanupErrors.Add("Unable to inspect fixture store $store."); continue }
     foreach ($certificate in $certificates) {
