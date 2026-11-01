@@ -87,3 +87,22 @@ test("Electron Kits Publisher trust is restricted to its two original signed DLL
   for (const file of ["ffmpeg.dll", "resources/dxil.dll", "../dxil.dll"]) assert.throws(() => upstreamIdentity(identity, "Electron", file), /Unapproved upstream/);
   assert.doesNotThrow(() => upstreamIdentity({ ...identity, status: "NotSigned" }, "Electron", "ffmpeg.dll"));
 });
+
+test("Electron OS catalog trust requires its exact files, publisher, OS classification and valid signature", () => {
+  const identity = { status: "Valid", publisher: "Microsoft Windows", subject: "CN=Microsoft Windows, O=Microsoft Corporation, C=US",
+    thumbprint: "AD714D3C4B2B794A95441375C954130E9109EF4C", signatureType: "Catalog", osBinary: true,
+    timestamp: true, sha256Signature: true, productName: "", productVersion: "" };
+  for (const file of ["d3dcompiler_47.dll", "dxil.dll"]) {
+    assert.doesNotThrow(() => upstreamIdentity(identity, "Electron", file));
+    // Catalog leaves rotate with Windows images, independently of Electron.
+    assert.doesNotThrow(() => upstreamIdentity({ ...identity, thumbprint: "667BBA1E1F478221AA65DE4F75187A751B03A453" }, "Electron", file));
+    for (const changed of [{ status: "NotSigned" }, { status: "NotTrusted" }, { status: "HashMismatch" },
+      { signatureType: "Authenticode" }, { signatureType: undefined }, { osBinary: false }, { osBinary: undefined },
+      { publisher: "Microsoft Windows Impostor" }, { subject: "CN=Microsoft Windows Impostor, O=Microsoft Corporation, C=US" },
+      { subject: "CN=Microsoft Windows, O=Other Corporation, C=US" }]) {
+      assert.throws(() => upstreamIdentity({ ...identity, ...changed }, "Electron", file), /Unapproved upstream/);
+    }
+    for (const component of ["Microsoft runtime", "llama.cpp"]) assert.throws(() => upstreamIdentity(identity, component, file), /Unapproved upstream/);
+  }
+  for (const file of ["ffmpeg.dll", "resources/dxil.dll", "../dxil.dll"]) assert.throws(() => upstreamIdentity(identity, "Electron", file), /Unapproved upstream/);
+});

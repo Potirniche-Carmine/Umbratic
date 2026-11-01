@@ -62,6 +62,10 @@ for the people in the public policy, and a CI submitter that cannot approve its
 own requests. Obtain explicit Foundation approval for the Electron-derived
 launcher and exact artifact scope; changing Electron's branding is insufficient.
 
+Before enabling production signing, merge a reviewed PR updating the public
+[Code signing policy](../../CODE_SIGNING_POLICY.md) with the accepted scope,
+exact publisher, active roles and approval status.
+
 Create these artifact configurations from the reviewed repository XML:
 
 | Slug | Source | Scope |

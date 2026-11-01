@@ -5,7 +5,7 @@
     ".github/workflows/verify.yml": "73ffdccb43d7556b7a68b44635cce6f5d9117c5d263fa47d779bcc09a7e0b056",
     "scripts/ci/release-attestations.ts": "a169643ae5e758df0f26350e2c7786aa2ef20f375b7d3db5a3fc8399794840f2",
     "scripts/ci/verify-ci-attestation.ts": "46032be3b8d418fd2e0cb2eb444127626f7f5543ad3fdc724313de8efb801c51",
-    "scripts/ci/windows-signing.ts": "1963275fa00891833d075c2c794244d566c2259753637ba3797972daa3e55b6d",
+    "scripts/ci/windows-signing.ts": "e05a783758ae407fb93b533675855f66c459461d7a5a16667d55aaf774d1d2ea",
     "scripts/ci/windows-signpath-build.ts": "b20e2ca5cb6daf1d283f900dbe56e37dd47f0893370204cd7cbdb37dcd872ba3"
   },
   "actions": [

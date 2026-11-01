@@ -126,8 +126,14 @@ export function upstreamIdentity(identity: Identity, component: string, file: st
   // use this ARM leaf. Their original bytes are checked before this policy.
   const electronWindowsKit = signedElectronDll && microsoftOrganization && identity.publisher === "Microsoft Windows Kits Publisher"
     && identity.thumbprint === "F5359B80D22CA41C7469C884188557307FE06390";
+  // Windows prefers a matching OS catalog over the DLL's embedded signature.
+  // Only the two original Electron DLLs above may use this OS-release identity;
+  // record the catalog leaf rather than pinning a rotating runner-image leaf.
+  const electronCatalog = signedElectronDll && microsoftOrganization && identity.publisher === "Microsoft Windows"
+    && /(?:^|,\s*)CN=Microsoft Windows(?:,|$)/.test(identity.subject ?? "")
+    && identity.signatureType === "Catalog" && identity.osBinary === true;
   const electron = component === "Electron" && identity.publisher === "OpenJS Foundation";
-  if (identity.status !== "Valid" || (!microsoft && !electron && !electronWindowsKit)) throw new Error(`Unapproved upstream signing identity: ${component} ` + JSON.stringify({
+  if (identity.status !== "Valid" || (!microsoft && !electron && !electronWindowsKit && !electronCatalog)) throw new Error(`Unapproved upstream signing identity: ${component} ` + JSON.stringify({
     file, status: identity.status, publisher: identity.publisher, subject: identity.subject, thumbprint: identity.thumbprint,
     signatureType: identity.signatureType, osBinary: identity.osBinary,
   }).slice(0, 2000));
