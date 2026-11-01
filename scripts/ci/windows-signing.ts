@@ -53,7 +53,7 @@ export function unsignedPeDigest(bytes: Buffer): string {
 }
 
 export type Identity = { status: string; publisher: string | null; subject: string | null; thumbprint: string | null;
-  timestamp: boolean; sha256Signature: boolean; productName: string; productVersion: string };
+  signatureType: string; osBinary: boolean; timestamp: boolean; sha256Signature: boolean; productName: string; productVersion: string };
 export function inspect(files: string[]): Identity[] {
   const directory = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP ?? repository, "windows-identities-"));
   try {
@@ -129,6 +129,7 @@ export function upstreamIdentity(identity: Identity, component: string, file: st
   const electron = component === "Electron" && identity.publisher === "OpenJS Foundation";
   if (identity.status !== "Valid" || (!microsoft && !electron && !electronWindowsKit)) throw new Error(`Unapproved upstream signing identity: ${component} ` + JSON.stringify({
     file, status: identity.status, publisher: identity.publisher, subject: identity.subject, thumbprint: identity.thumbprint,
+    signatureType: identity.signatureType, osBinary: identity.osBinary,
   }).slice(0, 2000));
 }
 

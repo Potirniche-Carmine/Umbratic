@@ -11,7 +11,9 @@ const identities = inspect(files);
 for (const [index, file] of files.entries()) {
   const relative = path.relative(directory, file).split(path.sep).join("/");
   const identity = identities[index];
-  upstreamIdentity(identity, "Electron", relative);
-  console.log(JSON.stringify({ file: relative, status: identity.status, publisher: identity.publisher, thumbprint: identity.thumbprint }));
+  // Report the complete observed set before validation stops at a rejection.
+  console.log(JSON.stringify({ file: relative, status: identity.status, publisher: identity.publisher, subject: identity.subject,
+    thumbprint: identity.thumbprint, signatureType: identity.signatureType, osBinary: identity.osBinary }).slice(0, 2000));
 }
+for (const [index, file] of files.entries()) upstreamIdentity(identities[index], "Electron", path.relative(directory, file).split(path.sep).join("/"));
 console.log("Verified all upstream Electron PE signing identities before native compilation.");

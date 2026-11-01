@@ -32,7 +32,7 @@ function signed(original: Buffer): Buffer {
 }
 function identity() {
   return { status: "Valid", publisher: "Fixture publisher", subject: "CN=Fixture publisher", thumbprint: "ABCD", timestamp: true, sha256Signature: true,
-    productName: "Umbratic", productVersion: releaseVersion };
+    signatureType: "Authenticode", osBinary: false, productName: "Umbratic", productVersion: releaseVersion };
 }
 
 test("signed PE binding excludes only signature data, checksum and required alignment", () => {

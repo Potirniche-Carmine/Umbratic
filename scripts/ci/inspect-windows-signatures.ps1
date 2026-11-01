@@ -22,6 +22,8 @@ $result = @(foreach ($file in $files) {
   }
   @{
     status = $signature.Status.ToString()
+    signatureType = $signature.SignatureType.ToString()
+    osBinary = [bool]$signature.IsOSBinary
     publisher = if ($signature.SignerCertificate) { $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) } else { $null }
     subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { $null }
     thumbprint = if ($signature.SignerCertificate) { $signature.SignerCertificate.Thumbprint } else { $null }

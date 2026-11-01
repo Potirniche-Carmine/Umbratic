@@ -58,7 +58,8 @@ test("all redistributable trust paths accept only the two observed Microsoft ide
     assert.equal(accepted("CN=Microsoft Corporation, O=Microsoft Corporation Impostor, C=US"), false, file);
     assert.match(source, /\$signature\.Status -ne 'Valid'/);
   }
-  const identity = { status: "Valid", publisher: "", subject: "", thumbprint: "ABCD", timestamp: true, sha256Signature: true, productName: "", productVersion: "" };
+  const identity = { status: "Valid", publisher: "", subject: "", thumbprint: "ABCD", timestamp: true, sha256Signature: true,
+    signatureType: "Authenticode", osBinary: false, productName: "", productVersion: "" };
   for (const publisher of ["Microsoft Corporation", "Microsoft Windows Software Compatibility Publisher"]) {
     assert.doesNotThrow(() => upstreamIdentity({ ...identity, publisher, subject: `CN=${publisher}, O=Microsoft Corporation, C=US` }, "Microsoft runtime", "vcruntime140.dll"));
     for (const subject of [`CN=${publisher}, O=Other Corporation, C=US`, `CN=${publisher}, O=Microsoft Corporation Impostor, C=US`]) {
@@ -73,7 +74,8 @@ test("all redistributable trust paths accept only the two observed Microsoft ide
 
 test("Electron Kits Publisher trust is restricted to its two original signed DLLs and exact leaf", () => {
   const identity = { status: "Valid", publisher: "Microsoft Windows Kits Publisher", subject: "CN=Microsoft Windows Kits Publisher, O=Microsoft Corporation, C=US",
-    thumbprint: "F5359B80D22CA41C7469C884188557307FE06390", timestamp: true, sha256Signature: true, productName: "", productVersion: "" };
+    thumbprint: "F5359B80D22CA41C7469C884188557307FE06390", timestamp: true, sha256Signature: true,
+    signatureType: "Authenticode", osBinary: false, productName: "", productVersion: "" };
   for (const file of ["d3dcompiler_47.dll", "dxil.dll"]) {
     assert.doesNotThrow(() => upstreamIdentity(identity, "Electron", file));
     for (const changed of [{ status: "NotSigned" }, { status: "HashMismatch" }, { status: "NotTrusted" }, { thumbprint: "OTHER" },
