@@ -131,7 +131,8 @@ if (mode === "cleanup") {
       });
     }
     compile("nsis-uninstaller.nsi", generator);
-    execFileSync(generator, ["/S"], { timeout: 30_000, stdio: "inherit", windowsHide: true });
+    const { UninstallerReader } = createRequire(import.meta.url)("app-builder-lib/out/targets/nsis/nsisUtil");
+    await UninstallerReader.exec(generator, uninstaller);
     sign(uninstaller);
     requireProjectIdentity(inspect([uninstaller])[0], publisher, version);
     await withWindowsArchiveTool((archiveTool) => {

@@ -48,7 +48,7 @@ test("full-format NSIS verification extracts the exact generated uninstaller and
   }
   compile(fs.readFileSync(new URL("nsis-uninstaller.nsi", fixtures), "utf8"), "generator");
   // The pinned builder reads its generated uninstaller without executing the
-  // generator on this host. Native preflight executes that same tiny stub.
+  // generator. Native preflight uses this same compiler/reader pair.
   await UninstallerReader.exec(generator, uninstaller);
   certificateTable(uninstaller);
   const expected = crypto.createHash("sha256").update(fs.readFileSync(uninstaller)).digest("hex");
