@@ -60,7 +60,11 @@ jobs:
         run: node scripts/ci/test-windows-signpath.ts cleanup
       - run: node scripts/check-release-version.ts
       - id: electron
-        run: npm run dependencies:provision
+        run: |
+          npm run dependencies:provision
+          if [[ "$RUNNER_OS" == 'Windows' ]]; then
+            node scripts/ci/preflight-windows-upstream.ts
+          fi
       - name: Run complete verification suite
         run: npm run test:all
       - name: Install reviewed Vulkan SDK

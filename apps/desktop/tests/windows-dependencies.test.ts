@@ -60,13 +60,28 @@ test("all redistributable trust paths accept only the two observed Microsoft ide
   }
   const identity = { status: "Valid", publisher: "", subject: "", thumbprint: "ABCD", timestamp: true, sha256Signature: true, productName: "", productVersion: "" };
   for (const publisher of ["Microsoft Corporation", "Microsoft Windows Software Compatibility Publisher"]) {
-    assert.doesNotThrow(() => upstreamIdentity({ ...identity, publisher, subject: `CN=${publisher}, O=Microsoft Corporation, C=US` }, "Microsoft runtime"));
+    assert.doesNotThrow(() => upstreamIdentity({ ...identity, publisher, subject: `CN=${publisher}, O=Microsoft Corporation, C=US` }, "Microsoft runtime", "vcruntime140.dll"));
     for (const subject of [`CN=${publisher}, O=Other Corporation, C=US`, `CN=${publisher}, O=Microsoft Corporation Impostor, C=US`]) {
-      assert.throws(() => upstreamIdentity({ ...identity, publisher, subject }, "Microsoft runtime"), /Unapproved upstream/);
+      assert.throws(() => upstreamIdentity({ ...identity, publisher, subject }, "Microsoft runtime", "vcruntime140.dll"), /Unapproved upstream/);
     }
   }
   for (const publisher of ["Other Publisher", "Microsoft Corporation Impostor", "Microsoft Windows Software Compatibility Publisher Impostor"]) {
-    assert.throws(() => upstreamIdentity({ ...identity, publisher, subject: `CN=${publisher}, O=Microsoft Corporation, C=US` }, "Microsoft runtime"), /Unapproved upstream/);
+    assert.throws(() => upstreamIdentity({ ...identity, publisher, subject: `CN=${publisher}, O=Microsoft Corporation, C=US` }, "Microsoft runtime", "vcruntime140.dll"), /Unapproved upstream/);
   }
-  assert.throws(() => upstreamIdentity({ ...identity, status: "HashMismatch", publisher: "Microsoft Corporation", subject: "CN=Microsoft Corporation, O=Microsoft Corporation" }, "Microsoft runtime"), /Unapproved upstream/);
+  assert.throws(() => upstreamIdentity({ ...identity, status: "HashMismatch", publisher: "Microsoft Corporation", subject: "CN=Microsoft Corporation, O=Microsoft Corporation" }, "Microsoft runtime", "vcruntime140.dll"), /"file":"vcruntime140.dll","status":"HashMismatch"/);
+});
+
+test("Electron Kits Publisher trust is restricted to its two original signed DLLs and exact leaf", () => {
+  const identity = { status: "Valid", publisher: "Microsoft Windows Kits Publisher", subject: "CN=Microsoft Windows Kits Publisher, O=Microsoft Corporation, C=US",
+    thumbprint: "F5359B80D22CA41C7469C884188557307FE06390", timestamp: true, sha256Signature: true, productName: "", productVersion: "" };
+  for (const file of ["d3dcompiler_47.dll", "dxil.dll"]) {
+    assert.doesNotThrow(() => upstreamIdentity(identity, "Electron", file));
+    for (const changed of [{ status: "NotSigned" }, { status: "HashMismatch" }, { status: "NotTrusted" }, { thumbprint: "OTHER" },
+      { publisher: "Microsoft Windows Kits Publisher Impostor" }, { subject: "CN=Microsoft Windows Kits Publisher, O=Other Corporation, C=US" }]) {
+      assert.throws(() => upstreamIdentity({ ...identity, ...changed }, "Electron", file), /Unapproved upstream/);
+    }
+    for (const component of ["Microsoft runtime", "llama.cpp"]) assert.throws(() => upstreamIdentity(identity, component, file), /Unapproved upstream/);
+  }
+  for (const file of ["ffmpeg.dll", "resources/dxil.dll", "../dxil.dll"]) assert.throws(() => upstreamIdentity(identity, "Electron", file), /Unapproved upstream/);
+  assert.doesNotThrow(() => upstreamIdentity({ ...identity, status: "NotSigned" }, "Electron", "ffmpeg.dll"));
 });

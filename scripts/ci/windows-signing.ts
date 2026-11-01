@@ -116,12 +116,20 @@ function upstreamSource(relative: string, architecture: string): { file: string;
   throw new Error(`Unclassified Windows binary: ${relative}`);
 }
 
-export function upstreamIdentity(identity: Identity, component: string): void {
-  if (identity.status === "NotSigned") return;
-  const microsoft = identity.subject?.match(/(?:^|,\s*)O=Microsoft Corporation(?:,|$)/)
+export function upstreamIdentity(identity: Identity, component: string, file: string): void {
+  const signedElectronDll = component === "Electron" && ["d3dcompiler_47.dll", "dxil.dll"].includes(file);
+  if (identity.status === "NotSigned" && !signedElectronDll) return;
+  const microsoftOrganization = identity.subject?.match(/(?:^|,\s*)O=Microsoft Corporation(?:,|$)/);
+  const microsoft = microsoftOrganization
     && ["Microsoft Corporation", "Microsoft Windows Software Compatibility Publisher"].includes(identity.publisher ?? "");
+  // Only these two signed DLLs in the checksum-verified Electron distribution
+  // use this ARM leaf. Their original bytes are checked before this policy.
+  const electronWindowsKit = signedElectronDll && microsoftOrganization && identity.publisher === "Microsoft Windows Kits Publisher"
+    && identity.thumbprint === "F5359B80D22CA41C7469C884188557307FE06390";
   const electron = component === "Electron" && identity.publisher === "OpenJS Foundation";
-  if (identity.status !== "Valid" || (!microsoft && !electron)) throw new Error(`Unapproved upstream signing identity: ${component}`);
+  if (identity.status !== "Valid" || (!microsoft && !electron && !electronWindowsKit)) throw new Error(`Unapproved upstream signing identity: ${component} ` + JSON.stringify({
+    file, status: identity.status, publisher: identity.publisher, subject: identity.subject, thumbprint: identity.thumbprint,
+  }).slice(0, 2000));
 }
 
 export function createInventory(app: string, publisher: string): Inventory {
@@ -154,13 +162,13 @@ export function createInventory(app: string, publisher: string): Inventory {
       const matches = manifest.files.filter((entry: { name: string; sha256: string; thumbprint: string }) =>
         entry.name.toLowerCase() === path.basename(relative).toLowerCase() && entry.sha256 === sha256(file) && entry.thumbprint === identity.thumbprint);
       if (matches.length !== 1 || identity.status !== "Valid") throw new Error("Unrecorded Microsoft runtime binary.");
-      upstreamIdentity(identity, "Microsoft runtime");
+      upstreamIdentity(identity, "Microsoft runtime", relative);
       return { path: relative, sha256: sha256(file), role: "upstream", component: "Microsoft runtime", version: identity.productVersion,
         source: `Visual Studio ${manifest.toolset};${matches[0].source}`, sourceSha256: sha256(file), identity };
     }
     const source = upstreamSource(relative, architecture);
     if (!fs.existsSync(source.file) || sha256(file) !== sha256(source.file)) throw new Error(`Upstream Windows bytes changed: ${relative}`);
-    upstreamIdentity(identity, source.component);
+    upstreamIdentity(identity, source.component, relative);
     return { path: relative, sha256: sha256(file), role: "upstream", component: source.component, version: source.version,
       source: source.source, sourceSha256: sha256(source.file), identity };
   });

@@ -191,7 +191,9 @@ test("CI verifies every native platform on pull requests and main without releas
   const preflight = workflow.jobs.verify.steps.find((step) => step.run === "node scripts/ci/test-windows-signpath.ts preflight");
   assert.equal(preflight.if, "runner.os == 'Windows'");
   assert.equal(preflight["timeout-minutes"], 5);
-  assert.ok(commands.indexOf(preflight.run) < commands.indexOf("npm run dependencies:provision"));
+  const electron = workflow.jobs.verify.steps.find((step) => step.id === "electron");
+  assert.ok(commands.indexOf(preflight.run) < commands.indexOf(electron.run));
+  assert.match(electron.run, /npm run dependencies:provision[\s\S]+if \[\[ "\$RUNNER_OS" == 'Windows' \]\][\s\S]+node scripts\/ci\/preflight-windows-upstream\.ts/);
   const fullFixture = workflow.jobs.verify.steps.find((step) => step.run === "node scripts/ci/test-windows-signpath.ts");
   assert.equal(fullFixture.if, "${{ !cancelled() && steps.archives.outcome == 'success' && runner.os == 'Windows' }}");
   const cleanups = workflow.jobs.verify.steps.filter((step) => step.run === "node scripts/ci/test-windows-signpath.ts cleanup");
@@ -284,7 +286,8 @@ test("credential-free installer qualification still runs after suite failure wit
   const electron = steps.find((step) => step.id === "electron");
   const installers = steps.find((step) => step.id === "installers");
   const archives = steps.find((step) => step.run === "node scripts/ci/verify-installer-artifacts.ts");
-  assert.equal(electron.run, "npm run dependencies:provision");
+  assert.match(electron.run, /^npm run dependencies:provision\n/);
+  assert.match(electron.run, /node scripts\/ci\/preflight-windows-upstream\.ts/);
   assert.equal(installers.if, "${{ !cancelled() && steps.electron.outcome == 'success' }}");
   assert.equal(archives.if, "${{ !cancelled() && steps.installers.outcome == 'success' }}");
   assert.equal(suite["continue-on-error"], undefined);
