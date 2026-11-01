@@ -234,8 +234,27 @@ function imageRuntimeComponents() {
   }));
 }
 
+function archiveToolComponents() {
+  const pin = readJson("third_party/7zip.json");
+  return Object.entries(pin.targets).map(([target, asset]: [string, any]) => ({
+    type: "application",
+    "bom-ref": `pkg:generic/7zip@${pin.version}?platform=${target}`,
+    name: "7-Zip full archive verifier",
+    version: pin.version,
+    hashes: [{ alg: "SHA-256", content: asset.sha256 }],
+    licenses: [{ expression: "LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-unRAR-restriction" }],
+    externalReferences: [{ type: "distribution", url: asset.url }, { type: "distribution", url: pin.source.url }],
+    properties: [
+      { name: "umbratic:scope", value: "build-only; never bundled in Umbratic installers" },
+      { name: "umbratic:platform", value: target },
+      { name: "umbratic:source:sha256", value: pin.source.sha256 },
+      ...Object.entries(asset.files).map(([name, hash]) => ({ name: `umbratic:member:${name}:sha256`, value: String(hash) })),
+    ],
+  }));
+}
+
 const rootManifest = readJson("package.json");
-const components = [...npmComponents(), ...cargoComponents(), ...goComponents(), ...metalWheelComponents(), ...metalNativeComponents(), ...llamaRuntimeComponents(), ...imageRuntimeComponents()].sort((left, right) =>
+const components = [...npmComponents(), ...cargoComponents(), ...goComponents(), ...metalWheelComponents(), ...metalNativeComponents(), ...llamaRuntimeComponents(), ...imageRuntimeComponents(), ...archiveToolComponents()].sort((left, right) =>
   left["bom-ref"].localeCompare(right["bom-ref"]),
 );
 const sbom = {

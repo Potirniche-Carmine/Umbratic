@@ -61,6 +61,8 @@ const descriptiveVersionFiles = new Set([
   "scripts/ci/windows-signing.ts",
   "scripts/audit-release-actions.ts",
   "apps/desktop/tests/release-actions-audit.test.ts",
+  "scripts/audit-archive-tool.ts",
+  "apps/desktop/tests/archive-tool-audit.test.ts",
   "apps/desktop/tests/no-versioning-guard.test.ts",
 ]);
 

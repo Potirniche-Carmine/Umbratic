@@ -5,6 +5,8 @@ import { hashFile, verifyMacSigningTeam, verifyUpdaterPublisher } from "./releas
 import { createRequire } from "node:module";
 import { execFileSync, spawnSync } from "node:child_process";
 import { inspect, requireProjectIdentity, sha256, signingRoot, verifyInventory } from "./windows-signing.ts";
+import { withWindowsArchiveTool } from "./windows-archive-tool.ts";
+import { verifyNsisUninstaller } from "./nsis-archive.ts";
 
 const root = path.resolve("target/release/desktop");
 function run(command: string, args: string[]) {
@@ -58,14 +60,7 @@ if (process.platform === "darwin") {
   const result = JSON.parse(fs.readFileSync(path.join(signingRoot(), "uninstaller/result.json"), "utf8"));
   if (result.length !== 1 || result[0].name !== `Umbratic-${version}-${process.arch}.__uninstaller.exe`) throw new Error("Missing signed uninstaller provenance.");
   requireProjectIdentity(result[0].identity, publisher, version);
-  const archiveTool = await createRequire(import.meta.url)("app-builder-lib/out/toolsets/7zip").getPath7za();
-  const listing = execFileSync(archiveTool, ["l", "-slt", installer], { encoding: "utf8", timeout: 120_000, maxBuffer: 16 * 1024 * 1024 });
-  const uninstallers = [...listing.matchAll(/^Path = (.+)\r?$/gm)].map((match) => match[1].trim())
-    .filter((name) => path.posix.basename(name.replaceAll("\\", "/")) === "Uninstall Umbratic.exe");
-  if (uninstallers.length !== 1) throw new Error("Installer must embed exactly one signed Umbratic uninstaller.");
-  const embedded = execFileSync(archiveTool, ["e", "-so", installer, uninstallers[0]], { timeout: 120_000, maxBuffer: 16 * 1024 * 1024 });
-  const { createHash } = await import("node:crypto");
-  if (createHash("sha256").update(embedded).digest("hex") !== result[0].sha256) throw new Error("The embedded uninstaller differs from the approved signed bytes.");
+  await withWindowsArchiveTool((tool) => verifyNsisUninstaller(tool, installer, result[0].sha256));
   fs.writeFileSync(path.join(stage, `Umbratic-${version}-${process.arch}-windows-provenance.json`), JSON.stringify({
     ...inventory, installer: { name: installerName, sha256: sha256(installer) }, uninstaller: result[0],
   }, null, 2) + "\n");

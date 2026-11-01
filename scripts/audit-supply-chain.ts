@@ -65,6 +65,7 @@ run(
 );
 run("Locked Python and native-server module OSV audit", process.execPath, ["scripts/audit-managed-runtimes.ts"]);
 run("Pinned release-action source and advisory audit", process.execPath, ["scripts/audit-release-actions.ts"]);
+run("Build-only full archive tool provenance and primary advisory audit", process.execPath, ["scripts/audit-archive-tool.ts"]);
 
 // govulncheck reports these under Module Results with no called or imported
 // symbols. Listing them here keeps a reviewed, unreachable advisory from

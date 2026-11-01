@@ -8,6 +8,8 @@ import { execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { repository, requireProjectIdentity, sha256, stages, stampProjectMetadata, unsignedPeDigest } from "./windows-signing.ts";
 import { cleanupWindowsFixture } from "./windows-fixture-cleanup.ts";
+import { withWindowsArchiveTool } from "./windows-archive-tool.ts";
+import { verifyNsisUninstaller } from "./nsis-archive.ts";
 
 if (process.platform !== "win32" || process.env.GITHUB_ACTIONS !== "true" || process.env.RUNNER_ENVIRONMENT !== "github-hosted") {
   throw new Error("The fixture signing test requires a disposable GitHub-hosted Windows runner.");
@@ -114,6 +116,33 @@ if (mode === "cleanup") {
     requireProjectIdentity(inspect([probe])[0], publisher, version);
     if (unsignedPeDigest(fs.readFileSync(probe)) !== digest) throw new Error("Fixture signing changed PE contents.");
     console.log("Verified root-only trust, exact project identity, SHA256 signature, timestamp and unchanged PE contents.");
+    // Exercise a real generated NSIS uninstaller and signed outer container
+    // before the large build. Never execute the outer installer.
+    if (process.env.ELECTRON_BUILDER_NSIS_DIR || /[$"\r\n]/.test(root) || !/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Invalid reviewed NSIS fixture environment.");
+    const nsis = await createRequire(import.meta.url)("app-builder-lib/out/toolsets/windows").getMakeNsisPath();
+    const generator = path.join(root, "uninstaller-generator.exe");
+    const uninstaller = path.join(root, "preflight-uninstaller.exe");
+    const installer = path.join(root, "preflight-installer.exe");
+    const appArchive = path.join(root, "app.7z");
+    function compile(template: string, output: string): void {
+      execFileSync(nsis.path, ["-V2", `-DOUT_FILE=${output}`, `-DUNINSTALLER_FILE=${uninstaller}`, `-DAPP_ARCHIVE=${appArchive}`,
+        `-DRELEASE=${version}`, path.join(repository, "scripts/ci/fixtures", template)], {
+        env: { ...process.env, ...nsis.env }, timeout: 30_000, stdio: "inherit", windowsHide: true,
+      });
+    }
+    compile("nsis-uninstaller.nsi", generator);
+    execFileSync(generator, ["/S"], { timeout: 30_000, stdio: "inherit", windowsHide: true });
+    sign(uninstaller);
+    requireProjectIdentity(inspect([uninstaller])[0], publisher, version);
+    await withWindowsArchiveTool((archiveTool) => {
+      execFileSync(archiveTool, ["a", "-t7z", appArchive, probe], { timeout: 30_000, stdio: "inherit" });
+      compile("nsis-installer.nsi", installer);
+      sign(installer);
+      requireProjectIdentity(inspect([installer])[0], publisher, version);
+      execFileSync(archiveTool, ["t", "-tNsis", installer], { timeout: 30_000, stdio: "inherit" });
+      verifyNsisUninstaller(archiveTool, installer, sha256(uninstaller));
+    });
+    console.log("Verified explicit outer NSIS integrity and exact embedded signed-uninstaller bytes with the native full-format tool.");
     if (mode === "preflight") {
       console.log("Preflight verified the pinned SDK utility, process-tree cancellation and ephemeral certificate/trust-store support.");
     } else {
