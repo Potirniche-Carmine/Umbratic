@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
+import { fileURLToPath } from "node:url";
 import { applySigningResponse, requireProjectIdentity, requestSignature, unsignedPeDigest } from "../../../scripts/ci/windows-signing.ts";
+import { cleanupWindowsFixture } from "../../../scripts/ci/windows-fixture-cleanup.ts";
 
 const releaseVersion = JSON.parse(fs.readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version;
 function pe(): Buffer {
@@ -109,4 +111,49 @@ test("handoff rejects wrong-stage, missing, extra, changed, stale and invalidly 
   assert.equal(unsignedPeDigest(fs.readFileSync(file)), unsignedPeDigest(pe()));
   assert.throws(() => applySigningResponse("installer"), /not awaiting/);
   await assert.rejects(requestSignature("installer", [file]), /stale requests/);
+});
+
+test("fixture stop and certificate failures preserve retry state and never restore beneath a writer", (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-fixture-cleanup-"));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "state");
+  const desktop = path.join(temporary, "desktop");
+  const upload = path.join(temporary, "upload");
+  for (const directory of [root, path.join(root, "handoff"), path.join(root, "unsigned-desktop"), path.join(root, "unsigned-upload"), desktop, upload]) fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(root, "identity.json"), "{}");
+  fs.writeFileSync(path.join(root, "handoff/pid"), "1234");
+  fs.writeFileSync(path.join(root, "unsigned-desktop/normal"), "original installer");
+  fs.writeFileSync(path.join(root, "unsigned-upload/normal"), "original upload");
+  fs.writeFileSync(path.join(desktop, "fixture"), "fixture installer");
+  fs.writeFileSync(path.join(upload, "fixture"), "fixture upload");
+  const failure = new Error("worker still running");
+  let removed = 0;
+  assert.throws(() => cleanupWindowsFixture(root, desktop, upload, () => { throw failure; }, () => { removed++; }), (error) => error === failure);
+  assert.equal(removed, 1);
+  assert.equal(fs.readFileSync(path.join(root, "handoff/pid"), "utf8"), "1234");
+  assert.ok(fs.existsSync(path.join(root, "unsigned-desktop/normal")));
+  assert.ok(fs.existsSync(path.join(desktop, "fixture")));
+  assert.ok(fs.existsSync(path.join(upload, "fixture")));
+  assert.throws(() => cleanupWindowsFixture(root, desktop, upload, () => {}, () => { throw new Error("certificate cleanup failed"); }), /certificate cleanup failed/);
+  assert.ok(fs.existsSync(path.join(root, "handoff/pid")));
+  assert.ok(fs.existsSync(path.join(desktop, "fixture")));
+  cleanupWindowsFixture(root, desktop, upload, () => {}, () => { removed++; });
+  assert.equal(fs.existsSync(root), false);
+  assert.equal(fs.readFileSync(path.join(desktop, "normal"), "utf8"), "original installer");
+  assert.equal(fs.readFileSync(path.join(upload, "normal"), "utf8"), "original upload");
+  assert.equal(fs.existsSync(path.join(desktop, "fixture")), false);
+});
+
+test("worker startup atomically refuses existing signing state without changing its response", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-signpath-stale-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const response = path.join(root, "old-response");
+  fs.writeFileSync(response, "previous approval");
+  const result = childProcess.spawnSync(process.execPath, [fileURLToPath(new URL("../../../scripts/ci/windows-signpath-build.ts", import.meta.url)), "start"], {
+    env: { ...process.env, UMBRATIC_SIGNPATH_STAGING: root }, encoding: "utf8", timeout: 5000,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /already exists; refuse stale responses/);
+  assert.equal(fs.readFileSync(response, "utf8"), "previous approval");
+  assert.deepEqual(fs.readdirSync(root), ["old-response"]);
 });

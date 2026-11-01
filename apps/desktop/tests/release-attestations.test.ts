@@ -31,9 +31,9 @@ function fixture(t) {
   return directory;
 }
 
-function helper(run = () => "") {
+function helper(run = () => "", filesystem = fs) {
   return loadTypeScriptModule(new URL("../../../scripts/ci/release-attestations.ts", import.meta.url), {
-    mocks: { "node:child_process": { execFileSync: run }, "./release-artifacts.ts": artifacts },
+    mocks: { "node:fs": filesystem, "node:child_process": { execFileSync: run }, "./release-artifacts.ts": artifacts },
   });
 }
 
@@ -97,7 +97,7 @@ test("altered disk images, checksum omissions and extra assets fail before crypt
 test("missing or empty bundles and failed identity verification cannot be accepted", (t) => {
   const { directory, module } = prepared(t);
   fs.writeFileSync(path.join(directory, module.provenanceName), "");
-  assert.throws(() => module.verifyReleaseAttestations(directory, version, identity.repository, commit), /Invalid attestation bundle/);
+  assert.throws(() => module.verifyReleaseAttestations(directory, version, identity.repository, commit), /Invalid bounded release evidence/);
   fs.rmSync(path.join(directory, module.provenanceName));
   assert.throws(() => module.verifyReleaseAttestations(directory, version, identity.repository, commit), /ENOENT/);
   const failure = new Error("certificate workflow or digest rejected");
@@ -126,12 +126,45 @@ test("unsigned CI requires the same complete platform payload and never claims t
   for (const architecture of ["x64", "arm64"]) fs.rmSync(path.join(directory, `Umbratic-${version}-${architecture}-windows-provenance.json`));
   const module = helper((command, args) => { calls.push(args); });
   const files = module.prepareAttestation(directory, version, "ci", commit);
-  const bundle = path.join(os.tmpdir(), `umbratic-ci-${path.basename(directory)}.jsonl`);
-  t.after(() => fs.rmSync(bundle, { force: true }));
+  const evidence = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-ci-evidence-"));
+  t.after(() => fs.rmSync(evidence, { recursive: true, force: true }));
+  const bundle = path.join(evidence, "bundle.jsonl");
   fs.writeFileSync(bundle, "mock verifier input");
   module.verifyAttestations(files.map((name) => path.join(directory, name)), bundle, { ...identity, workflow: "verify.yml" });
   assert.equal(calls.length, 8);
   assert.ok(calls.every((args) => args[args.indexOf("--cert-identity") + 1].endsWith("/verify.yml@refs/heads/main")));
+});
+
+test("evidence reads reject an oversized or replaced opened file without leaking its descriptor", (t) => {
+  const { directory, module } = prepared(t);
+  const bundle = path.join(directory, module.provenanceName);
+  fs.truncateSync(bundle, 16 * 1024 * 1024 + 1);
+  assert.throws(() => module.verifyAttestationSubjects([], bundle), /Invalid bounded release evidence/);
+  fs.writeFileSync(bundle, "original evidence");
+  let opened, closed = false;
+  const raced = helper(() => "", { ...fs,
+    openSync(file, ...options) {
+      const descriptor = fs.openSync(file, ...options);
+      if (file === bundle) {
+        opened = descriptor;
+        fs.renameSync(bundle, `${bundle}.old`);
+        fs.writeFileSync(bundle, "replaced evidence");
+      }
+      return descriptor;
+    },
+    closeSync(descriptor) { if (descriptor === opened) closed = true; return fs.closeSync(descriptor); },
+  });
+  assert.throws(() => raced.verifyAttestationSubjects([], bundle), /Invalid bounded release evidence/);
+  assert.equal(closed, true);
+  assert.throws(() => fs.fstatSync(opened), /EBADF/);
+  const growing = helper(() => "", { ...fs,
+    fstatSync(descriptor) {
+      const stat = fs.fstatSync(descriptor);
+      fs.appendFileSync(bundle, "growth");
+      return stat;
+    },
+  });
+  assert.throws(() => growing.verifyAttestationSubjects([], bundle), /changed while reading/);
 });
 
 test("tamper negative control requires cryptographic rejection, preserves original bytes and cleans temporary files", (t) => {

@@ -41,8 +41,10 @@ function buildError(): Error {
 }
 
 if (command === "start") {
-  if (fs.existsSync(root)) throw new Error("Signing staging directory already exists; refuse stale responses.");
-  fs.mkdirSync(root, { recursive: true });
+  try { fs.mkdirSync(root); } catch (error) {
+    if (error.code === "EEXIST") throw new Error("Signing staging directory already exists; refuse stale responses.");
+    throw error;
+  }
   const log = fs.openSync(path.join(root, "build.log"), "wx");
   const environment = { ...process.env };
   // Signing approval is exclusively in the official workflow action. The

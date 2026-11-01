@@ -116,7 +116,7 @@ function upstreamSource(relative: string, architecture: string): { file: string;
   throw new Error(`Unclassified Windows binary: ${relative}`);
 }
 
-function upstreamIdentity(identity: Identity, component: string): void {
+export function upstreamIdentity(identity: Identity, component: string): void {
   if (identity.status === "NotSigned") return;
   const microsoft = identity.subject?.match(/(?:^|,\s*)O=Microsoft Corporation(?:,|$)/)
     && ["Microsoft Corporation", "Microsoft Windows Software Compatibility Publisher"].includes(identity.publisher ?? "");
@@ -192,8 +192,11 @@ export function signingRoot(): string {
 export async function requestSignature(stage: Stage, files: string[]): Promise<void> {
   const root = signingRoot();
   const input = path.join(root, stage, "input");
-  if (fs.existsSync(path.join(root, stage))) throw new Error("Signing stage already exists; refuse stale requests.");
-  fs.mkdirSync(input, { recursive: true });
+  try { fs.mkdirSync(path.join(root, stage)); } catch (error) {
+    if (error.code === "EEXIST") throw new Error("Signing stage already exists; refuse stale requests.");
+    throw error;
+  }
+  fs.mkdirSync(input);
   const names = files.map((file) => path.basename(file));
   if (new Set(names).size !== names.length || names.some((name) => !/^[A-Za-z0-9_.-]+\.exe$/.test(name))) throw new Error("Ambiguous signing input filenames.");
   const manifest = files.map((file) => ({ file, name: path.basename(file), digest: unsignedPeDigest(fs.readFileSync(file)) }));

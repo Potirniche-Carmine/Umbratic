@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { isWindowsOsDependency, parseWindowsDependents } from "../scripts/windows-dependencies.ts";
+import { upstreamIdentity } from "../../../scripts/ci/windows-signing.ts";
 
 test("Windows import inspection includes normal and delay-loaded dependencies without accepting paths", () => {
   assert.deepEqual(parseWindowsDependents(`Dump of file C:\\build\\library.dll
@@ -31,18 +32,18 @@ test("Windows OS contracts never excuse toolchain or arbitrary host-installed ru
 test("packaging verifies import closure and preserves only recorded original Microsoft redistributable signatures", () => {
   const prepare = fs.readFileSync(new URL("../scripts/prepare-package.ts", import.meta.url), "utf8");
   const verify = fs.readFileSync(new URL("../scripts/verify-package.ts", import.meta.url), "utf8");
-  const signer = fs.readFileSync(new URL("../../../scripts/ci/sign-windows.ps1", import.meta.url), "utf8");
+  const signer = fs.readFileSync(new URL("../../../scripts/ci/windows-signing.ts", import.meta.url), "utf8");
   const config = fs.readFileSync(new URL("../electron-builder.yml", import.meta.url), "utf8");
   assert.match(prepare, /prepareWindowsDependencies\(desktopRoot\)/);
   assert.match(verify, /verifyWindowsDependencies\(path.resolve\(resources, "\.\."\)\)/);
   assert.match(config, /win:\r?\n\s+extraFiles:\r?\n\s+- from: \.package\/windows-runtime/);
-  for (const guard of ["provenance.json", "Get-FileHash", "sha256", "Thumbprint", "Unverified Microsoft redistributable"]) {
+  for (const guard of ["provenance.json", "entry.sha256 === sha256(file)", "entry.thumbprint === identity.thumbprint", 'identity.status !== "Valid"', "Unrecorded Microsoft runtime binary"]) {
     assert.ok(signer.includes(guard));
   }
 });
 
 test("all redistributable trust paths accept only the two observed Microsoft identities and organization", () => {
-  for (const file of ["inspect-msvc-redist.ps1", "sign-windows.ps1", "verify-windows-signatures.ps1"]) {
+  for (const file of ["inspect-msvc-redist.ps1"]) {
     const source = fs.readFileSync(new URL(`../../../scripts/ci/${file}`, import.meta.url), "utf8");
     const policies = [...source.matchAll(/Subject -notmatch '([^']+)'/g)].map((match) => new RegExp(match[1], "i"));
     assert.equal(policies.length, 2, file);
@@ -57,4 +58,15 @@ test("all redistributable trust paths accept only the two observed Microsoft ide
     assert.equal(accepted("CN=Microsoft Corporation, O=Microsoft Corporation Impostor, C=US"), false, file);
     assert.match(source, /\$signature\.Status -ne 'Valid'/);
   }
+  const identity = { status: "Valid", publisher: "", subject: "", thumbprint: "ABCD", timestamp: true, sha256Signature: true, productName: "", productVersion: "" };
+  for (const publisher of ["Microsoft Corporation", "Microsoft Windows Software Compatibility Publisher"]) {
+    assert.doesNotThrow(() => upstreamIdentity({ ...identity, publisher, subject: `CN=${publisher}, O=Microsoft Corporation, C=US` }, "Microsoft runtime"));
+    for (const subject of [`CN=${publisher}, O=Other Corporation, C=US`, `CN=${publisher}, O=Microsoft Corporation Impostor, C=US`]) {
+      assert.throws(() => upstreamIdentity({ ...identity, publisher, subject }, "Microsoft runtime"), /Unapproved upstream/);
+    }
+  }
+  for (const publisher of ["Other Publisher", "Microsoft Corporation Impostor", "Microsoft Windows Software Compatibility Publisher Impostor"]) {
+    assert.throws(() => upstreamIdentity({ ...identity, publisher, subject: `CN=${publisher}, O=Microsoft Corporation, C=US` }, "Microsoft runtime"), /Unapproved upstream/);
+  }
+  assert.throws(() => upstreamIdentity({ ...identity, status: "HashMismatch", publisher: "Microsoft Corporation", subject: "CN=Microsoft Corporation, O=Microsoft Corporation" }, "Microsoft runtime"), /Unapproved upstream/);
 });

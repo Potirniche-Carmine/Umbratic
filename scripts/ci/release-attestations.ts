@@ -7,6 +7,26 @@ import { hashFile, releaseArtifactNames, verifyExactAssetSet, verifyReleaseArtif
 export const checksumName = "SHA256SUMS";
 export const provenanceName = "release-provenance.jsonl";
 
+/** Bound the opened file itself, including replacement and growth checks. */
+function readEvidence(file: string): string {
+  const descriptor = fs.openSync(file, "r");
+  try {
+    const stat = fs.fstatSync(descriptor);
+    const name = fs.lstatSync(file);
+    if (!stat.isFile() || !name.isFile() || stat.dev !== name.dev || stat.ino !== name.ino
+        || stat.size === 0 || stat.size > 16 * 1024 * 1024) throw new Error("Invalid bounded release evidence file.");
+    const bytes = Buffer.alloc(stat.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const read = fs.readSync(descriptor, bytes, length, bytes.length - length, null);
+      if (read === 0) break;
+      length += read;
+    }
+    if (length !== stat.size) throw new Error("Release evidence changed while reading.");
+    return bytes.subarray(0, length).toString("utf8");
+  } finally { fs.closeSync(descriptor); }
+}
+
 type Identity = {
   repository: string;
   commit: string;
@@ -27,8 +47,7 @@ function signedReleaseFiles(directory: string, releaseVersion: string): string[]
 function verifyWindowsProvenance(directory: string, releaseVersion: string, commit: string): void {
   for (const architecture of ["x64", "arm64"]) {
     const file = path.join(directory, `Umbratic-${releaseVersion}-${architecture}-windows-provenance.json`);
-    if (fs.statSync(file).size > 16 * 1024 * 1024) throw new Error("Oversized Windows provenance.");
-    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    const record = JSON.parse(readEvidence(file));
     const installer = `Umbratic-${releaseVersion}-${architecture}.exe`;
     if (record.sourceCommit !== commit || record.architecture !== architecture || record.version !== releaseVersion
         || record.installer?.name !== installer
@@ -55,8 +74,7 @@ export function verifyAttestations(files: readonly string[], bundle: string, ide
       || !/^[0-9a-f]{40}$/.test(identity.commit)
       || !/^refs\/heads\/[A-Za-z0-9_./-]+$/.test(identity.sourceRef)
       || !["release.yml", "verify.yml"].includes(identity.workflow)) throw new Error("Invalid attestation identity.");
-  const stat = fs.lstatSync(bundle);
-  if (!stat.isFile() || stat.size === 0 || stat.size > 16 * 1024 * 1024) throw new Error("Invalid attestation bundle.");
+  readEvidence(bundle);
   const workflow = `${identity.repository}/.github/workflows/${identity.workflow}`;
   for (const file of files) {
     execFileSync("gh", ["attestation", "verify", file,
@@ -75,9 +93,7 @@ export function verifyAttestations(files: readonly string[], bundle: string, ide
 
 /** The one signed statement must name exactly the published bytes, without extras. */
 export function verifyAttestationSubjects(files: readonly string[], bundle: string): void {
-  const stat = fs.lstatSync(bundle);
-  if (!stat.isFile() || stat.size === 0 || stat.size > 16 * 1024 * 1024) throw new Error("Invalid attestation bundle.");
-  const envelope = JSON.parse(fs.readFileSync(bundle, "utf8")).dsseEnvelope;
+  const envelope = JSON.parse(readEvidence(bundle)).dsseEnvelope;
   if (envelope?.payloadType !== "application/vnd.in-toto+json" || typeof envelope.payload !== "string") {
     throw new Error("Invalid attestation statement envelope.");
   }

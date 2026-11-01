@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { repository, stages } from "./windows-signing.ts";
+import { cleanupWindowsFixture } from "./windows-fixture-cleanup.ts";
 
 if (process.platform !== "win32" || process.env.GITHUB_ACTIONS !== "true" || process.env.RUNNER_ENVIRONMENT !== "github-hosted") {
   throw new Error("The fixture signing test requires a disposable GitHub-hosted Windows runner.");
@@ -23,18 +24,7 @@ function certificate(operation: string): void {
     "-Operation", operation, "-Directory", root], { stdio: "inherit", timeout: 120_000 });
 }
 function cleanup(): void {
-  if (!fs.existsSync(root)) return;
-  try { run("windows-signpath-build.ts", ["stop"], 60_000); }
-  finally {
-    if (fs.existsSync(path.join(root, "identity.json"))) certificate("cleanup");
-    if (fs.existsSync(path.join(root, "unsigned-desktop"))) {
-      fs.rmSync(desktop, { recursive: true, force: true });
-      fs.renameSync(path.join(root, "unsigned-desktop"), desktop);
-      fs.rmSync(upload, { recursive: true, force: true });
-      if (fs.existsSync(path.join(root, "unsigned-upload"))) fs.renameSync(path.join(root, "unsigned-upload"), upload);
-    }
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  cleanupWindowsFixture(root, desktop, upload, () => run("windows-signpath-build.ts", ["stop"], 60_000), () => certificate("cleanup"));
 }
 if (process.argv[2] === "cleanup") {
   cleanup();
