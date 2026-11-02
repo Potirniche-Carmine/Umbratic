@@ -1,6 +1,5 @@
 // Release-machine identity. Mac release work lives in the repository's ignored
 // artifacts/release-work directory; credentials must never be committed.
-// docs/release.env.example documents every key.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -48,7 +47,7 @@ export function loadReleaseEnv(): boolean {
 export function requireReleaseEnv(key: string): string {
   const value = process.env[key]?.trim();
   if (!value) {
-    throw new Error(`${key} is not set. Add it to ${releaseEnvPath} (see docs/release.env.example).`);
+    throw new Error(`${key} is not set. Add it to ${releaseEnvPath}.`);
   }
   return value;
 }

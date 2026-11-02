@@ -6,8 +6,7 @@
  * a name answers the only question a caller has — "can I send this?" — while a
  * version number would have to be translated through a table that goes stale.
  *
- * Two rules the root AGENTS.md states and this module exists to enforce:
- * a missing `features` field means no features, not "assume yes"; and any field
+ * A missing `features` field means no features, not "assume yes"; any field
  * with security meaning must be gated on a name here before it is sent, because
  * a silent no-op on an older server is a security regression, not degradation.
  */

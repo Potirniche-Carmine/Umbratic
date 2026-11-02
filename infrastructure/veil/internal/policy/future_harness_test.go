@@ -7,7 +7,7 @@ import (
 	"umbratic-veil/internal/prompts"
 )
 
-// This file is the compatibility guarantee described in the root AGENTS.md.
+// These fixtures verify that newer harness vocabulary remains accepted.
 //
 // Every case here is a request from a harness NEWER than this Veil build: it
 // carries vocabulary that did not exist when this code was written. All of them
