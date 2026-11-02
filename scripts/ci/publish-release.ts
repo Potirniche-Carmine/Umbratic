@@ -29,7 +29,7 @@ for (const release of releases.filter((release) => !release.draft && !release.pr
   const difference = current.map((part, index) => part - published[index]).find((part) => part !== 0) ?? 0;
   if (difference <= 0) throw new Error("A release cannot move the latest stable version backwards.");
 }
-const notes = `Windows x64 and ARM64 installers are unsigned. macOS builds are Developer ID signed and notarized. Code signing policy: https://github.com/${repository}/blob/${commit}/CODE_SIGNING_POLICY.md`;
+const notes = `Windows x64 and ARM64 installers are unsigned. SignPath Foundation Windows signing is pending approval. macOS builds are Developer ID signed and notarized. [Code signing policy](https://github.com/${repository}/blob/${commit}/CODE_SIGNING_POLICY.md)`;
 if (!existing) gh(["release", "create", tag, "--repo", repository, "--target", commit, "--title", `Umbratic ${version}`, "--generate-notes", "--notes", notes, "--draft"]);
 if (existing) {
   const allowed = new Set(files);

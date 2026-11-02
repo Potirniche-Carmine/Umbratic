@@ -75,7 +75,9 @@ test("retrying an untagged stale draft pins its target to the verified commit be
   assert.equal(calls[reset][calls[reset].indexOf("--target") + 1], commit);
   const notes = calls[reset][calls[reset].indexOf("--notes") + 1];
   assert.match(notes, /Windows x64 and ARM64 installers are unsigned/);
+  assert.match(notes, /SignPath Foundation Windows signing is pending approval/);
   assert.match(notes, /macOS builds are Developer ID signed and notarized/);
+  assert.ok(notes.includes(`[Code signing policy](https://github.com/owner/Umbratic/blob/${commit}/CODE_SIGNING_POLICY.md)`));
   const publish = calls.find((args) => args.includes("--draft=false"));
   assert.equal(publish[publish.indexOf("--target") + 1], commit);
   assert.equal(calls.filter((args) => args[1].endsWith("/git/ref/heads/main")).length, 2);
