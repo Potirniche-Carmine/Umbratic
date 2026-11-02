@@ -1,13 +1,10 @@
-const { spawnSync } = require("node:child_process");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 
-// electron-builder's Azure manager installs unpinned PowerShell modules.
-// A custom hook uses only the reviewed, checksum-verified Microsoft tools.
+// The official SignPath action runs between workflow steps. A bounded local
+// handoff pauses this same NSIS build, including its generated uninstaller.
 exports.default = async function signWindows(configuration) {
   if (configuration.hash !== "sha256") throw new Error("Windows releases require SHA-256 signing.");
-  const script = path.resolve(__dirname, "../../../scripts/ci/sign-windows.ps1");
-  const result = spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-File", script, "-File", configuration.path], {
-    stdio: "inherit", windowsHide: true,
-  });
-  if (result.error || result.status !== 0) throw new Error("Windows Trusted Signing failed.");
+  const { signWindows } = await import(pathToFileURL(path.resolve(__dirname, "../../../scripts/ci/windows-signing.ts")).href);
+  await signWindows(configuration.path);
 };

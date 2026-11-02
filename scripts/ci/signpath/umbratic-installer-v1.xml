@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" />
+    <parameter name="architecture" />
+  </parameters>
+  <zip-file>
+    <pe-file path="Umbratic-${version}-${architecture}.exe" product-name="Umbratic" product-version="${version}">
+      <authenticode-sign hash-algorithm="sha256" />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

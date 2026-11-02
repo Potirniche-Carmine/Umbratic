@@ -51,7 +51,7 @@ npm run desktop:release -- --unsigned --dir
 
 Build outputs go to `target/release/desktop`. Each operating system is built on that platform. Packaged applications include Veil and the local inference runtime; users do not need to start Veil separately or create a Veil `.env` file. Image generation includes its own runtime on supported platforms. Download model weights separately in the app.
 
-See [desktop releases](docs/guides/release-desktop.md) for signing, packaging, and GitHub publication, and [supply-chain rules](docs/reference/supply-chain.md) for dependency updates, audits, and SBOMs.
+See [desktop releases](docs/guides/release-desktop.md) for signing, packaging, and GitHub publication, the [Code signing policy](CODE_SIGNING_POLICY.md) for signing scope and status, and [supply-chain rules](docs/reference/supply-chain.md) for dependency updates, audits, and SBOMs.
 
 ## Architecture
 

@@ -35,10 +35,12 @@ triple or the complete App Store Connect API key triple from the example.
 A signed build requires notarization credentials and an available signing
 identity. Keep the app ID and Developer team stable across releases.
 
-On Windows, configure the four `UMBRATIC_WIN_SIGN_*` identifiers and Azure
-service-principal credentials. The publisher must exactly match the certificate
-subject common name. The release pipeline uses reviewed pinned Microsoft
-signing tooling and verifies all shipped native executable signatures.
+Windows distribution signing runs only through the approved SignPath GitHub
+workflow. Configure its account, manual approvals, Actions variables and API
+secret using the [release guide](../guides/release-desktop.md); do not store the
+SignPath token in this local file. Upstream executable signatures and provenance
+remain distinct from project signatures.
 
-Run `npm run desktop:release` to build and verify locally. It never uploads.
-An unsigned build always requires the explicit `--unsigned` flag.
+On macOS, `npm run desktop:release` builds and verifies a local signed package;
+it never publishes a GitHub release. Local Windows inspection uses the explicit
+`--unsigned` flag. Public releases never fall back to unsigned output.

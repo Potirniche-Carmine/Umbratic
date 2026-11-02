@@ -528,7 +528,9 @@ console.log(`Prepared packaged code index at ${path.relative(desktopRoot, packag
 fs.rmSync(veilTarget, { recursive: true, force: true });
 fs.mkdirSync(veilTarget, { recursive: true });
 const veilBinary = path.join(veilTarget, process.platform === "win32" ? "veil.exe" : "veil");
-const veilBuild = spawnSync("go", ["build", "-trimpath", "-o", veilBinary, "./cmd/veil"], {
+// Windows distribution binaries omit COFF/debug symbols, matching the Rust
+// release helpers. COFF symbols also prevent the required PE metadata edit.
+const veilBuild = spawnSync("go", ["build", "-trimpath", ...(process.platform === "win32" ? ["-ldflags=-s -w"] : []), "-o", veilBinary, "./cmd/veil"], {
   cwd: veilRoot,
   encoding: "utf8",
   stdio: ["ignore", "pipe", "pipe"],

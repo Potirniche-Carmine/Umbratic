@@ -119,9 +119,13 @@ test("the package declares a content type and a relationship for every part it c
   }
 });
 
-test("two builds of the same spec produce byte-identical files", async () => {
+test("two builds of the same spec produce byte-identical files", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 0, 1) });
   const root = workspace();
   const first = await build(everyLayoutSpec, root);
+  // ZIP timestamps have two-second precision. Separate builds must stay
+  // identical even when implicit ZIP entries would cross that boundary.
+  t.mock.timers.tick(4000);
   const second = await build(everyLayoutSpec, root);
   assert.ok(first.bytes.equals(second.bytes), "output must not depend on the clock");
 });

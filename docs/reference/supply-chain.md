@@ -228,14 +228,27 @@ reviewed alongside the already allowed individual licenses.
 
 Desktop releases publish to public GitHub Releases. Build workflows pin their
 Actions, and the Windows Vulkan SDK installer is pinned by SHA-256 in
-`third_party/vulkan-sdk.json` and verified before execution. Windows signing tools
-and the isolated x64 .NET runtime are pinned by official package/archive checksums
-in `third_party/windows-signing.json`; no moving PowerShell module is installed.
-Signing credentials
-stay in GitHub Actions secrets. The updater sends ordinary GitHub release
+`third_party/vulkan-sdk.json` and verified before execution. Windows project
+signatures use the full-SHA-pinned official SignPath Action, trusted GitHub
+artifacts and human approvals. Repository-reviewed XML configurations name
+permitted files and enforce product/version metadata. Foundation acceptance,
+including the Electron-derived launcher scope, remains pending. Upstream
+binaries retain recorded original bytes and valid signatures or an explicit
+unsigned status. Signing tokens stay in Actions secrets and are passed only to
+the provider Action. The updater sends ordinary GitHub release
 requests and can be disabled in Settings → About. It does not need a company token.
 
+Publication attests the final signed payload and `SHA256SUMS` using GitHub OIDC,
+then verifies exact repository, release workflow, main source/signer commit,
+hosted-runner identity and complete digest-bound subjects before publishing.
+Credential-free CI attestations have a different workflow identity and cannot
+satisfy signed-release verification.
+Reviewed Action-bundle findings and their controls are recorded in
+[release action security](release-actions-security.md).
+
 Runbook: [../guides/release-desktop.md](../guides/release-desktop.md).
+Download checks: [../guides/verify-release.md](../guides/verify-release.md).
+Public scope: [Code signing policy](../../CODE_SIGNING_POLICY.md).
 
 Windows packaging inspects normal and delay-load PE imports with the installed
 MSVC `dumpbin`. Only the explicit Windows OS/API-set contract list remains
@@ -264,3 +277,27 @@ of source control; follow the [release guide](../guides/release-desktop.md).
 Every supported image CLI is built from the same official stable-diffusion.cpp source and exact ggml submodule revision, with archive sizes and SHA-256 hashes pinned in `third_party/stable-diffusion.cpp.json`. This replaces the former Windows/Linux binaries, whose embedded ggml lacked later GGUF overflow checks. The macOS build targets macOS 12, links its libraries statically, and embeds Metal; its only dynamic dependencies are system frameworks and libraries. Windows x64 and Linux x64 retain their CPU backend. Packaging verifies the actual architecture, platform libraries and reported revision.
 
 The build uses bundled tokenizer/image helpers, disables CMake dependency downloads, and builds only the CLI. The app uses PNG output; optional WebP/WebM codecs and the upstream server frontend are excluded. Cached sources and build outputs live under `apps/desktop/.llama-cache/image-runtime/`. Delete that directory to rebuild. Model weights retain their own licenses.
+
+## Build-only NSIS verification
+
+Windows release verification uses the official full 7-Zip 26.05 decoder, pinned
+in `third_party/7zip.json`. Electron-builder's reduced Windows `7za` cannot read
+NSIS containers. The official installers are read as archives, never executed:
+only the exact hashed `7z.exe`, `7z.dll` and original `License.txt` are extracted
+into a private temporary directory and removed after verification. Native
+architecture and the full decoder's NSIS capability are checked. The verifier
+still requires exactly one embedded uninstaller with the approved signed bytes.
+
+These tools are build dependencies and are not distributed in Umbratic packages.
+Their original LGPL-2.1-or-later, BSD and unRAR license conditions remain in the
+vendor notice; the SBOM records both native distributions, source and member
+hashes. [The official release](https://github.com/ip7z/7zip/releases/tag/26.05)
+provides the corresponding source archive and checksums.
+
+`supply-chain:audit` verifies official release/source identity and the complete
+primary NVD `7-Zip` query against `third_party/7zip-security.json`. The review
+records each advisory's ID, modification time, full content hash and scoped
+disposition. Historical affected versions precede the reviewed release; NanaZip
+custom or disabled stock-build paths are distinguished explicitly. New, changed,
+removed or partial records fail for review. This covers known published
+advisories, not unknown defects or every binary in a hosted runner image.

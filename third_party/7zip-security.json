@@ -1,0 +1,282 @@
+{
+  "version": "26.05",
+  "pinSha256": "db1fff8ca6c21f756448f9367316f2219048770e8cfe9298e001ef3e41e3c925",
+  "sourceCommit": "b88c6bc09339de32f7d18bbab900686b244f42ba",
+  "reviewedAt": "2026-11-01",
+  "references": [
+    "https://github.com/ip7z/7zip/releases/tag/26.05",
+    "https://www.7-zip.org/history.txt",
+    "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=7-Zip&resultsPerPage=2000",
+    "https://github.com/M2Team/NanaZip/security/advisories/GHSA-mqqj-crf3-6q37",
+    "https://github.com/M2Team/NanaZip/security/advisories/GHSA-qhc5-mh6j-4g75",
+    "https://github.com/M2Team/NanaZip/security/advisories/GHSA-qcgf-c2vp-fwjr",
+    "https://github.com/M2Team/NanaZip/security/advisories/GHSA-95x5-qvvm-hmfp"
+  ],
+  "scope": "Build-only stock Windows 26.05 full decoder. Exact source/assets reviewed. Historical or unrelated records are classified individually; new/changed/removed records fail re-review. No claim about unknown vulnerabilities.",
+  "records": [
+    {
+      "id": "CVE-2005-3051",
+      "modified": "2026-06-16T22:16:09.537",
+      "sha256": "284efc6f391642cbf152279ad42cb8c075eb5742f457db9ae5a1911100a48bb3",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2007-4725",
+      "modified": "2026-06-16T22:44:39.590",
+      "sha256": "bddcd46a64600c008ad819b5eb758e27b4b7690e33361cb6d69abad6f93e2015",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2008-6536",
+      "modified": "2026-06-16T23:02:24.543",
+      "sha256": "eeb29a26d83a65312e3676591f8ec7ba810a9fceefb1057da107f1226ddeaa97",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2017-2107",
+      "modified": "2026-06-17T01:15:33.870",
+      "sha256": "c5268b27b82e746633f1b9177fe5e2aeef2a978bed253bff76be60caa7feca6d",
+      "reason": "Third-party 7-ZIP32.DLL self-extracting archives; neither that DLL nor its SFX execution path is used."
+    },
+    {
+      "id": "CVE-2017-17969",
+      "modified": "2026-06-17T01:11:58.160",
+      "sha256": "3cac02cefac45f756dde518a6570a8382bfaa3d94aebcceca78696b9fd7770d8",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2018-5996",
+      "modified": "2026-06-17T02:01:08.090",
+      "sha256": "7fbce2b6cf8dda6f7ec5c71fa19b706e78490c7e36ee19e7855a6835e15674d5",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2018-10172",
+      "modified": "2026-06-17T01:33:37.080",
+      "sha256": "06a9797f1d749f679b1a7ce219267fa43feb2d8681fb4e059e24809f83f72a0f",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2018-10115",
+      "modified": "2026-06-17T01:33:32.443",
+      "sha256": "ab79fad8e8540abac02aca8e722e403f41b3cd28ca5c77f935d5c8f427a2c7df",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2018-3920",
+      "modified": "2026-06-17T01:58:01.367",
+      "sha256": "e405636173eb148534153b13d95541e3855ab0c13f19b7b34dcb18d18e36f331",
+      "reason": "Yi Home Camera firmware update integrity; not a vulnerability in this standalone decoder."
+    },
+    {
+      "id": "CVE-2022-29072",
+      "modified": "2026-06-17T04:39:32.157",
+      "sha256": "ec924a07090d809ad39c4d16be35674a39a429a9408ed0ded8f82ddf0291d98d",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2023-31102",
+      "modified": "2026-06-17T05:56:17.910",
+      "sha256": "300b67facba787c925c6189175dd362d11efd986edf679bd7e0d2104a2b1aa4a",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2023-40481",
+      "modified": "2026-06-17T06:18:04.443",
+      "sha256": "3f20b27c46424942051e0844bc4a06a6ace516d9e7da0eaeb4ea9d1fab635a8b",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2023-52168",
+      "modified": "2026-06-17T06:42:13.147",
+      "sha256": "a498a9e6348607587367f3be2b8c7744908121cc90520a256a9c1c8261b3b822",
+      "reason": "Affected 7-Zip versions precede 24.01; reviewed 26.05 is newer."
+    },
+    {
+      "id": "CVE-2023-52169",
+      "modified": "2026-06-17T06:42:13.323",
+      "sha256": "31bfaf812aa29e9a89f49bb75550125f0648ef483c9ed4b7589c12790e353388",
+      "reason": "Affected 7-Zip versions precede 24.01; reviewed 26.05 is newer."
+    },
+    {
+      "id": "CVE-2024-11477",
+      "modified": "2026-06-17T06:57:48.637",
+      "sha256": "02db517d7709a6d748245a9247debbe3e20973fac3d70f45d2d53e294e9c0e91",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2024-11612",
+      "modified": "2026-06-17T06:58:04.137",
+      "sha256": "bb022583554ec915fc74537363de76f5c4b100959565cc6d63fa252889a2ecc7",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2025-0411",
+      "modified": "2026-06-17T08:26:25.627",
+      "sha256": "bbd3731aece41ac60ec5db9519fbc60a1f568cc146ee32442987b157ca494c2b",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2022-47111",
+      "modified": "2026-06-17T05:13:01.537",
+      "sha256": "0cdec8948e554ca0d7da74c767c977b941d575f0532dfc00b0e6e7fff00a46c5",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2022-47112",
+      "modified": "2026-06-17T05:13:01.700",
+      "sha256": "cf613a0ea0089ec6ae8381c67dd550f440aabfbbb0aa1a9861209490b35c6397",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2025-53816",
+      "modified": "2026-06-17T09:38:58.613",
+      "sha256": "4ff51163192ef9683f812a6ccd45eb6caf3134b6c4edd3e12643d001dcb1f28c",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2025-53817",
+      "modified": "2026-06-17T09:38:58.740",
+      "sha256": "c01ac25ea4829e4f55fa516bbc377c446b14c61fbd713d7654c3f73c428825af",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2025-55188",
+      "modified": "2026-06-17T09:41:25.473",
+      "sha256": "0ce8355e05c69830e05ffd7e6c22b2a5bfc240753c8636b5ffc131a8647b4f1d",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2025-11001",
+      "modified": "2026-10-19T13:10:00.110",
+      "sha256": "effc1277c15268f2ff5d2ac04d464c04635686333871983c8946601aaa104e7b",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2025-11002",
+      "modified": "2026-06-17T08:29:26.063",
+      "sha256": "fd35887a450c74a7da8617292e826d57dc1ccc3367fc8d544456961e754b15c6",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-48092",
+      "modified": "2026-06-17T10:54:50.893",
+      "sha256": "3b9d937232ab6afa6fc61fef335275f28e5dd851dfa0c9ff27f174252b6e0b85",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-48095",
+      "modified": "2026-06-17T10:54:50.997",
+      "sha256": "9fce8ca0ddf7ae5172ebbc5ef6b2cb664ae7b299b78d79bf57c2e831123df6a3",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-48101",
+      "modified": "2026-06-17T10:54:51.213",
+      "sha256": "cac0966b28679329aa113c6a150001fd324d2ddefd783e68f4bd4bda97b19ad1",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-48102",
+      "modified": "2026-06-17T10:54:51.320",
+      "sha256": "fff0a3f916634ebe3d63f422c96fab058924a480d32d7130103a1d6d475978e8",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-48103",
+      "modified": "2026-06-17T10:54:51.430",
+      "sha256": "98400a64c4ec06531f93ab23afb2c7d5234cfdb7a18d7c6a22763afd43a984bc",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-48104",
+      "modified": "2026-06-17T10:54:51.540",
+      "sha256": "fb9ab2fd78a4628c61bf4c4721e1228c339004d922856a041b75fd6ee6ecc265",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-48111",
+      "modified": "2026-06-17T10:54:51.947",
+      "sha256": "d6361631f81180929b2fcc07fb8eb9f56a4108720b70e46498fed139dbc3ffb9",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-48112",
+      "modified": "2026-06-17T10:54:52.060",
+      "sha256": "428ee185717ff9d8eb009adccb65098e16e51b559cff2d22c7cf1c969565bac4",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-47222",
+      "modified": "2026-10-26T11:10:00.157",
+      "sha256": "c13ddfc0215f5e34191af8c7faf9d304377e1b5e8609c0378a50686849b44dee",
+      "reason": "NanaZip enables AVB; exact stock 26.05 Format7zF MSVC build omits AvbHandler."
+    },
+    {
+      "id": "CVE-2026-47224",
+      "modified": "2026-10-26T11:10:00.157",
+      "sha256": "4bdd124047871c74d91dae5128a1710595c1b18b1ff0665d33412504ae06f2ef",
+      "reason": "NanaZip enables LVM; exact stock 26.05 Format7zF MSVC build omits LvmHandler."
+    },
+    {
+      "id": "CVE-2026-47223",
+      "modified": "2026-10-26T11:10:00.157",
+      "sha256": "64fd4260a09ff605158cfd1f32a4a54bfe28c3e5d1fc0699de471aab59ac65b2",
+      "reason": "NanaZip enables AVB; exact stock 26.05 Format7zF MSVC build omits AvbHandler."
+    },
+    {
+      "id": "CVE-2026-58052",
+      "modified": "2026-10-07T20:49:46.640",
+      "sha256": "04efc403c4a93d815901b2d47500f7934c20bc529b899c4341e49b63278e36a7",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-14966",
+      "modified": "2026-10-25T20:10:00.147",
+      "sha256": "ee610f50a9d731a893eef79c37d9c880d4285415e3e37a3eb04fc17ce9dbb03f",
+      "reason": "BBOT application archive/symlink filtering; BBOT is not used."
+    },
+    {
+      "id": "CVE-2026-55780",
+      "modified": "2026-10-25T15:10:00.147",
+      "sha256": "2ac9031c3c8ee539c9e90b1ba4b0cd4e75434a91f262050bfabfef1679351988",
+      "reason": "NanaZip-specific .NET single-file handler; absent from stock 7-Zip."
+    },
+    {
+      "id": "CVE-2026-55781",
+      "modified": "2026-10-25T15:10:00.147",
+      "sha256": "b4a12d994c3b275d977e7885437f031297016b294d15ae43bf8b9de3def7539b",
+      "reason": "NanaZip-specific UFS/FFS handler; absent from stock 7-Zip."
+    },
+    {
+      "id": "CVE-2026-55782",
+      "modified": "2026-10-25T15:10:00.147",
+      "sha256": "1331ce561a81b0671f3b8b2b72fa941d9b69b7bc069bf4e55d2b89321b912bd6",
+      "reason": "NanaZip-specific WebAssembly handler; absent from stock 7-Zip."
+    },
+    {
+      "id": "CVE-2026-55783",
+      "modified": "2026-10-25T15:10:00.147",
+      "sha256": "b106ccb39c9a42f5f15ff5dca7b35f7b90081e95e0ef4a002eef0e4330cc73df",
+      "reason": "NanaZip-specific custom IInArchive handlers; absent from stock 7-Zip."
+    },
+    {
+      "id": "CVE-2026-14266",
+      "modified": "2026-08-07T20:48:32.290",
+      "sha256": "540b5c766fa9e3667bf00229a99a83d3162a43a1eaf80b21f1b9dd0ae641b36f",
+      "reason": "Reviewed primary NVD affected versions/ranges exclude 26.05; historical affected versions are older."
+    },
+    {
+      "id": "CVE-2026-54616",
+      "modified": "2026-10-18T20:10:00.110",
+      "sha256": "51cbe2a79eeb2b3405951e37622c37fb4fb1d613f5c999fe7175b4d333e9e427",
+      "reason": "NanaZip/7-ZipZS LZ4 modification; exact stock 26.05 SquashfsHandler leaves kMethod_LZ4 disabled."
+    },
+    {
+      "id": "CVE-2026-104086",
+      "modified": "2026-10-19T20:17:43.990",
+      "sha256": "44323aa08491147d91d5a482d207fa718ca395ffff218bdd1c6be9836515421b",
+      "reason": "Primary advisory explicitly affects7-Zip before 26.03; reviewed 26.05 is newer."
+    }
+  ]
+}

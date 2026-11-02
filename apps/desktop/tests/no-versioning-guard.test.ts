@@ -57,6 +57,12 @@ const descriptiveVersionFiles = new Set([
   "scripts/audit-managed-runtimes.ts",
   "infrastructure/veil-console/deploy/metal-wheels.lock.json",
   "scripts/ci/release-artifacts.ts",
+  // Public signed software/component inventory, not an internal wire shape.
+  "scripts/ci/windows-signing.ts",
+  "scripts/audit-release-actions.ts",
+  "apps/desktop/tests/release-actions-audit.test.ts",
+  "scripts/audit-archive-tool.ts",
+  "apps/desktop/tests/archive-tool-audit.test.ts",
   "apps/desktop/tests/no-versioning-guard.test.ts",
 ]);
 

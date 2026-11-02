@@ -72,7 +72,9 @@ test("desktop packages the Veil binary used by managed local mode", () => {
   const preparePackage = fs.readFileSync(preparePackageUrl, "utf8");
 
   assert.match(config, /- from: \.package\/veil\r?\n\s+to: veil/);
-  assert.match(preparePackage, /spawnSync\("go", \["build", "-trimpath", "-o", veilBinary, "\.\/cmd\/veil"\]/);
+  assert.match(preparePackage, /spawnSync\("go", \["build", "-trimpath",/);
+  assert.match(preparePackage, /process\.platform === "win32" \? \["-ldflags=-s -w"\] : \[\]/);
+  assert.match(preparePackage, /"-o", veilBinary, "\.\/cmd\/veil"\]/);
   assert.match(preparePackage, /process\.platform === "win32" \? "veil\.exe" : "veil"/);
 });
 
@@ -185,10 +187,21 @@ test("CI verifies every native platform on pull requests and main without releas
   assert.ok(commands.includes("node scripts/ci/verify-installer-artifacts.ts"));
   const vulkan = workflow.jobs.verify.steps.find((step) => step.run === "./scripts/ci/install-vulkan.ps1");
   assert.equal(vulkan.if, "${{ !cancelled() && steps.electron.outcome == 'success' && matrix.os == 'windows-2025' }}");
-  assert.ok(commands.includes("./scripts/ci/install-windows-signing.ps1"));
+  assert.ok(!commands.some((command) => command.includes("install-windows-signing")));
+  const preflight = workflow.jobs.verify.steps.find((step) => step.run === "node scripts/ci/test-windows-signpath.ts preflight");
+  assert.equal(preflight.if, "runner.os == 'Windows'");
+  assert.equal(preflight["timeout-minutes"], 5);
+  const electron = workflow.jobs.verify.steps.find((step) => step.id === "electron");
+  assert.ok(commands.indexOf(preflight.run) < commands.indexOf(electron.run));
+  assert.match(electron.run, /npm run dependencies:provision[\s\S]+if \[\[ "\$RUNNER_OS" == 'Windows' \]\][\s\S]+node scripts\/ci\/preflight-windows-upstream\.ts/);
+  const fullFixture = workflow.jobs.verify.steps.find((step) => step.run === "node scripts/ci/test-windows-signpath.ts");
+  assert.equal(fullFixture.if, "${{ !cancelled() && steps.archives.outcome == 'success' && runner.os == 'Windows' }}");
+  const cleanups = workflow.jobs.verify.steps.filter((step) => step.run === "node scripts/ci/test-windows-signpath.ts cleanup");
+  assert.equal(cleanups.length, 2);
+  assert.ok(cleanups.every((step) => step.if === "always() && runner.os == 'Windows'"));
   assert.doesNotMatch(source, /UMBRATIC_LLAMA_CPU_ONLY/);
   assert.doesNotMatch(source, /secrets\./);
-  assert.deepEqual(workflow.jobs.required.needs, ["verify", "audit"]);
+  assert.deepEqual(workflow.jobs.required.needs, ["verify", "audit", "provenance"]);
   assert.equal(workflow.jobs.required.if, "always()");
 });
 
@@ -214,7 +227,13 @@ test("CI pins actions and stays read-only", () => {
   assert.ok(actionReferences.length >= 2);
   assert.ok(actionReferences.every((reference) => /@[0-9a-f]{40}$/.test(reference)));
   assert.deepEqual(workflow.permissions, { contents: "read" });
-  for (const job of Object.values(workflow.jobs)) assert.notEqual(job.permissions?.contents, "write");
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    assert.notEqual(job.permissions?.contents, "write");
+    if (name !== "provenance") assert.notEqual(job.permissions?.["id-token"], "write");
+  }
+  assert.equal(workflow.jobs.provenance.if, "github.event_name == 'push' && github.ref == 'refs/heads/main'");
+  assert.deepEqual(workflow.jobs.provenance.needs, ["verify", "audit"]);
+  assert.equal(workflow.jobs.provenance.permissions["attestations"], "write");
 });
 
 test("release publication waits for every signed platform and scopes write access to publication", () => {
@@ -238,6 +257,27 @@ test("release publication waits for every signed platform and scopes write acces
   assert.ok(workflow.jobs.publish.steps.some((step) => step.run === "node scripts/ci/publish-release.ts"));
 });
 
+test("Windows release signs three immutable GitHub artifacts before generating final metadata", () => {
+  const workflow = load(fs.readFileSync(new URL("../../../.github/workflows/release.yml", import.meta.url), "utf8"));
+  const steps = workflow.jobs.package.steps;
+  const requests = steps.filter((step) => step.uses?.startsWith("signpath/"));
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests.map((step) => step.with["artifact-configuration-slug"]), ["umbratic-payload-v1", "umbratic-uninstaller-v1", "umbratic-installer-v1"]);
+  for (const step of requests) {
+    assert.match(step.uses, /@[0-9a-f]{40}$/);
+    assert.equal(step.if, "runner.os == 'Windows'");
+    assert.match(step.with["github-artifact-id"], /steps\.unsigned_.*\.outputs\.artifact-id/);
+    assert.equal(step.with["wait-for-completion"], true);
+    assert.equal(step.with["wait-for-completion-timeout-in-seconds"], 1800);
+  }
+  assert.ok(!Object.keys(workflow.jobs.package.env).includes("SIGNPATH_API_TOKEN"));
+  assert.ok(!JSON.stringify(workflow).includes("AZURE_"));
+  const stop = steps.find((step) => step.run === "node scripts/ci/windows-signpath-build.ts stop");
+  assert.equal(stop.if, "always() && runner.os == 'Windows'");
+  const final = steps.findIndex((step) => step.run === "node scripts/ci/verify-release.ts");
+  assert.ok(final > steps.findIndex((step) => step.run?.includes("windows-signpath-build.ts finish")));
+});
+
 test("credential-free installer qualification still runs after suite failure without hiding it", () => {
   const source = fs.readFileSync(verifyWorkflowUrl, "utf8");
   const workflow = load(source);
@@ -246,11 +286,17 @@ test("credential-free installer qualification still runs after suite failure wit
   const electron = steps.find((step) => step.id === "electron");
   const installers = steps.find((step) => step.id === "installers");
   const archives = steps.find((step) => step.run === "node scripts/ci/verify-installer-artifacts.ts");
-  assert.equal(electron.run, "npm run dependencies:provision");
+  assert.match(electron.run, /^npm run dependencies:provision\n/);
+  assert.match(electron.run, /node scripts\/ci\/preflight-windows-upstream\.ts/);
   assert.equal(installers.if, "${{ !cancelled() && steps.electron.outcome == 'success' }}");
   assert.equal(archives.if, "${{ !cancelled() && steps.installers.outcome == 'success' }}");
   assert.equal(suite["continue-on-error"], undefined);
   assert.doesNotMatch(source, /continue-on-error/);
   assert.equal(workflow.jobs.required.if, "always()");
-  assert.match(workflow.jobs.required.steps[0].run, /all\(\. == "success"\)/);
+  const gate = workflow.jobs.required.steps[0].run;
+  assert.match(gate, /^test "\$VERIFY" = success$/m);
+  assert.match(gate, /^test "\$AUDIT" = success$/m);
+  assert.match(gate, /"\$GITHUB_EVENT_NAME" == push && "\$GITHUB_REF" == refs\/heads\/main/);
+  assert.match(gate, /test "\$PROVENANCE" = success/);
+  assert.match(gate, /test "\$PROVENANCE" = skipped/);
 });

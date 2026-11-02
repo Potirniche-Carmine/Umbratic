@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { hashFile, verifyReleaseArtifacts } from "./release-artifacts.ts";
+import { verifyReleaseAttestations } from "./release-attestations.ts";
 
 const repository = process.env.GITHUB_REPOSITORY!;
 const commit = process.env.RELEASE_COMMIT!;
@@ -14,7 +14,7 @@ function gh(args: string[]) {
 }
 function api(endpoint: string) { return JSON.parse(gh(["api", endpoint])); }
 const directory = path.resolve("target/release/upload");
-const files = verifyReleaseArtifacts(directory, version);
+const files = verifyReleaseAttestations(directory, version, repository, commit);
 const main = api(`repos/${repository}/git/ref/heads/main`).object.sha;
 if (main !== commit) throw new Error("Main changed while packaging. Release the newest verified main instead.");
 const releases = api(`repos/${repository}/releases?per_page=100`);
@@ -29,11 +29,9 @@ for (const release of releases.filter((release) => !release.draft && !release.pr
   const difference = current.map((part, index) => part - published[index]).find((part) => part !== 0) ?? 0;
   if (difference <= 0) throw new Error("A release cannot move the latest stable version backwards.");
 }
-const sums = files.map((name) => `${hashFile(path.join(directory, name), "sha256", "hex")}  ${name}`).join("\n");
-fs.writeFileSync(path.join(directory, "SHA256SUMS"), `${sums}\n`);
-if (!existing) gh(["release", "create", tag, "--repo", repository, "--target", commit, "--title", `Umbratic ${version}`, "--generate-notes", "--draft"]);
+if (!existing) gh(["release", "create", tag, "--repo", repository, "--target", commit, "--title", `Umbratic ${version}`, "--generate-notes", "--notes", `Code signing policy: https://github.com/${repository}/blob/${commit}/CODE_SIGNING_POLICY.md`, "--draft"]);
 if (existing) {
-  const allowed = new Set([...files, "SHA256SUMS"]);
+  const allowed = new Set(files);
   const assets = api(`repos/${repository}/releases/${existing.id}/assets?per_page=100`);
   if (assets.some((asset) => !allowed.has(asset.name))) throw new Error("Existing draft contains unexpected assets. Remove the stale draft before retrying.");
   // A draft may not have a tag yet. Its saved target can otherwise create the
@@ -42,7 +40,7 @@ if (existing) {
 }
 // The release stays a draft until every platform artifact and its metadata
 // have uploaded; the public updater can never observe a partial release.
-gh(["release", "upload", tag, "--repo", repository, "--clobber", ...files.map((name) => path.join(directory, name)), path.join(directory, "SHA256SUMS")]);
+gh(["release", "upload", tag, "--repo", repository, "--clobber", ...files.map((name) => path.join(directory, name))]);
 if (api(`repos/${repository}/git/ref/heads/main`).object.sha !== commit) throw new Error("Main changed during upload. The release remains a draft.");
 gh(["release", "edit", tag, "--repo", repository, "--target", commit, "--draft=false", "--latest"]);
 console.log(`Published verified ${tag} from ${commit}.`);

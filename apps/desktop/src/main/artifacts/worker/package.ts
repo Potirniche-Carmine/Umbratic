@@ -150,7 +150,9 @@ export class OoxmlPackage {
       // A fixed date keeps the output byte-reproducible: two identical specs
       // must produce two identical files, or the golden tests are testing the
       // clock.
-      zip.file(name, this.parts.get(name) as Buffer, { date: new Date(0) });
+      // OOXML needs file paths, not directory records. Implicit directories
+      // would otherwise receive JSZip's current-clock timestamp.
+      zip.file(name, this.parts.get(name) as Buffer, { date: new Date(0), createFolders: false });
     }
     return zip.generateAsync({
       type: "nodebuffer",
