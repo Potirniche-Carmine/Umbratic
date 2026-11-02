@@ -2,19 +2,7 @@ import { useEffect, useState } from "react";
 import { RotateCw } from "lucide-react";
 import type { AppUpdateStatus, DesktopApi } from "../shared/desktopApi";
 
-/**
- * Which build this is, and whether a newer one exists.
- *
- * The status comes from the main process, which owns the updater; this pane
- * shows it and forwards one decision — whether to keep checking on its own.
- * There is nothing here that asks the feed on demand: the app looks shortly
- * after launch and every few hours it stays open, which is the whole of it.
- * A button would only have let someone re-ask a question already being asked,
- * and on an installation the feed will not serve it would have been an invitation
- * to keep pressing it. Progress arrives on its own channel, so a download that
- * finishes while the pane is open turns the row into "Restart to update"
- * without anyone asking again.
- */
+/** Installed version, public release checks and restart after a verified download. */
 export function AboutSettingsPanel({ api }: { api: DesktopApi }) {
   const [status, setStatus] = useState<AppUpdateStatus | null>(null);
 
@@ -63,7 +51,15 @@ export function AboutSettingsPanel({ api }: { api: DesktopApi }) {
               <RotateCw size={13} />
               <span>Restart to update</span>
             </button>
-          ) : null}
+          ) : (
+            <button className="settingsInlineButton aboutCheck" type="button"
+              disabled={!status || state?.phase === "unsupported" || state?.phase === "checking" || state?.phase === "downloading"}
+              aria-busy={state?.phase === "checking"}
+              onClick={() => void api.checkForAppUpdate().then(setStatus)}>
+              <RotateCw size={13} className={state?.phase === "checking" ? "aboutSpin" : undefined} />
+              <span>{state?.phase === "checking" ? "Checking…" : "Check for updates"}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -89,12 +85,7 @@ export function AboutSettingsPanel({ api }: { api: DesktopApi }) {
   );
 }
 
-/**
- * The one line under the name, and now the only thing that reports: with no
- * button to answer on, an outcome that does not appear here does not appear
- * at all. It still holds as still as it can — a version and a time for the
- * ordinary case, and plain language for the rest.
- */
+/** One status line for checks, verified downloads and failures. */
 function describe(status: AppUpdateStatus): string {
   const { state } = status;
   switch (state.phase) {

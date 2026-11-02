@@ -217,3 +217,29 @@ test("simultaneous checks share a request and reject invalid release signatures"
     phase: "failed", message: "The downloaded release did not verify and was discarded",
   });
 });
+
+test("manual checks work with automatic checks off and refresh the checked time", async () => {
+  const { module, updater } = load({ packaged: true, automatic: false });
+  updater.nextCheck = () => {
+    updater.emit("update-not-available", { version: "0.0.1" });
+    return Promise.resolve(null);
+  };
+  const first = await module.checkForAppUpdate();
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const second = await module.checkForAppUpdate();
+  assert.equal(updater.checks, 2);
+  assert.equal(second.automatic, false);
+  assert.equal(second.state.phase, "current");
+  assert.ok(Date.parse(second.checkedAt) > Date.parse(first.checkedAt));
+});
+
+test("manual checks preserve a downloading or ready release", async () => {
+  const { module, updater } = load({ packaged: true });
+  await module.checkForAppUpdate();
+  updater.emit("update-available", { version: "0.0.2" });
+  assert.equal((await module.checkForAppUpdate()).state.phase, "downloading");
+  updater.emit("update-downloaded", { version: "0.0.2" });
+  assert.equal((await module.checkForAppUpdate()).state.phase, "ready");
+  assert.equal(updater.checks, 1);
+  assert.equal(updater.installs, 0);
+});

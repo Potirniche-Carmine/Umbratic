@@ -151,14 +151,9 @@ export function stopAppUpdates(): void {
   timer = null;
 }
 
-/**
- * Runs one check and answers once it has resolved. The background rhythm is
- * the only caller in the product: no IPC channel reaches this, so nothing the
- * renderer can do makes the app talk to the feed. Kept exported because it is
- * this module's one way in, and the tests drive it.
- */
+/** Check the fixed public feed without disturbing a pending installation. */
 export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
-  if (app.isPackaged) await runCheck();
+  if (app.isPackaged && state.phase !== "ready" && state.phase !== "downloading") await runCheck();
   return appUpdateStatus();
 }
 

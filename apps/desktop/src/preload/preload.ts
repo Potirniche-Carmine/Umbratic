@@ -208,6 +208,7 @@ const umbraticApi = {
   stopDictation: () => invoke("umbratic:stop-dictation", undefined),
   cancelDictation: () => invoke("umbratic:cancel-dictation", undefined),
   getAppUpdateStatus: () => invoke("umbratic:get-app-update-status", undefined),
+  checkForAppUpdate: () => invoke("umbratic:check-for-app-update", undefined),
   setAutomaticAppUpdates: (input: { enabled: boolean }) => invoke("umbratic:set-automatic-app-updates", input),
   installAppUpdate: () => invoke("umbratic:install-app-update", undefined),
   onAppUpdateStatus: (callback: (status: AppUpdateStatus) => void) => {

@@ -100,7 +100,7 @@ import { readArtifactPreview } from "./artifactReview";
 import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
 import * as appPaths from "./appPaths";
 import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
-import { appUpdateStatus, installAppUpdate, onAppUpdateStatus, setAutomaticAppUpdates, startAppUpdates, stopAppUpdates } from "./appUpdates";
+import { appUpdateStatus, checkForAppUpdate, installAppUpdate, onAppUpdateStatus, setAutomaticAppUpdates, startAppUpdates, stopAppUpdates } from "./appUpdates";
 const isDev = !app.isPackaged;
 // Electron's asar fs shim constructs fs.Stats, which Node deprecates as
 // DEP0180. In a packaged app the warning is internals noise printed to the
@@ -526,6 +526,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     stopDictation: async () => stopDictation(),
     cancelDictation: async () => cancelDictation(),
     getAppUpdateStatus: async () => appUpdateStatus(),
+    checkForAppUpdate: () => checkForAppUpdate(),
     setAutomaticAppUpdates: async (input) => setAutomaticAppUpdates(input?.enabled),
     installAppUpdate: async () => installAppUpdate(),
   };
