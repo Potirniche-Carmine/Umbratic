@@ -24,7 +24,10 @@ function fixture(t) {
   for (const architecture of ["x64", "arm64"]) {
     const name = `${prefix}-${architecture}.exe`;
     fs.writeFileSync(path.join(directory, `${prefix}-${architecture}-windows-provenance.json`), JSON.stringify({
-      version, sourceCommit: commit, architecture, files: [{ path: "Umbratic.exe", role: "project" }],
+      version, sourceCommit: commit, architecture, signing: "unsigned", ciRunId: 123,
+      files: [name, architecture === "x64" ? "latest.yml" : "latest-arm64.yml"].map((asset) => ({
+        path: asset, sha256: artifacts.hashFile(path.join(directory, asset), "sha256", "hex"),
+      })),
       installer: { name, sha256: artifacts.hashFile(path.join(directory, name), "sha256", "hex") },
     }));
   }
@@ -72,14 +75,29 @@ test("every final installer, updater file, provenance inventory and checksum is 
   }
 });
 
-test("signed release preparation requires both Windows provenance records bound to the actual installer and commit", (t) => {
-  for (const field of ["sourceCommit", "architecture", "version", "sha256"]) {
+test("release preparation requires explicit unsigned provenance bound to the actual installer and commit", (t) => {
+  for (const field of ["sourceCommit", "architecture", "version", "sha256", "signing", "ciRunId"]) {
     const directory = fixture(t), module = helper();
     const file = path.join(directory, `Umbratic-${version}-x64-windows-provenance.json`);
     const record = JSON.parse(fs.readFileSync(file, "utf8"));
     if (field === "sha256") record.installer.sha256 = "b".repeat(64); else record[field] = "different";
     fs.writeFileSync(file, JSON.stringify(record));
     assert.throws(() => module.prepareAttestation(directory, version, "release", commit), /provenance does not match/);
+    assert.equal(fs.existsSync(path.join(directory, module.checksumName)), false);
+  }
+});
+
+test("unsigned provenance must include exactly the architecture's installer and updater bytes", (t) => {
+  for (const mutation of ["omit", "duplicate", "hash", "foreign"]) {
+    const directory = fixture(t), module = helper();
+    const file = path.join(directory, `Umbratic-${version}-x64-windows-provenance.json`);
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (mutation === "omit") record.files.pop();
+    if (mutation === "duplicate") record.files[0] = record.files[1];
+    if (mutation === "hash") record.files[0].sha256 = "b".repeat(64);
+    if (mutation === "foreign") record.files[0].path = "../outside.exe";
+    fs.writeFileSync(file, JSON.stringify(record));
+    assert.throws(() => module.prepareAttestation(directory, version, "release", commit), /file set does not match/);
     assert.equal(fs.existsSync(path.join(directory, module.checksumName)), false);
   }
 });

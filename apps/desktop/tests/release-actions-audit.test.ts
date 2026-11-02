@@ -26,6 +26,9 @@ test("changing an applicability control, omitting one or changing an action pin 
   const other = controls();
   delete other.fixture.controls["scripts/ci/windows-signing.ts"];
   assert.throws(() => verifyActionControls(other.fixture, (name) => other.sources.get(name)), /Incomplete/);
+  const promotion = controls();
+  promotion.sources.set("scripts/ci/promote-windows-release.ts", Buffer.from("skip CI provenance verification"));
+  assert.throws(() => verifyActionControls(promotion.fixture, (name) => promotion.sources.get(name)), /control changed/);
   const changed = controls();
   changed.fixture.actions[0].commit = "b".repeat(40);
   assert.throws(() => verifyActionControls(changed.fixture, (name) => changed.sources.get(name)), /Unreviewed action revision/);
@@ -55,7 +58,8 @@ test("the production lock graph is queried exactly; dev-only packages are not mi
     "node_modules/dev-only": { version: "3.0.0", dev: true },
   } })) });
   assert.deepEqual(packages, [{ name: "example", version: "2.0.0" }]);
-  assert.throws(() => actionPackages(review.actions[1], { "index.js": Buffer.from("different embedded dependency") }), /identity changed/);
+  assert.throws(() => actionPackages({ ...review.actions[0], repository: "unreviewed/action" }, {}), /Unreviewed action dependency inventory/);
+  assert.throws(() => actionPackages(review.actions[0], { "package-lock.json": Buffer.from('{"packages":{}}') }), /Empty action lock inventory/);
 });
 
 test("new, modified, duplicate or removed advisory matches fail instead of silently inheriting a package exemption", () => {

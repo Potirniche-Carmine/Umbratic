@@ -13,9 +13,10 @@ reviewer of external contributions and proposed signing approver. GitHub and
 SignPath access must use multi-factor authentication. Each signing request
 requires human approval.
 
-The release workflow builds the verified current `main` commit on GitHub-hosted
-runners and checks signatures before publication. Proposed Windows signing
-covers Umbratic executables and its installer/uninstaller, subject to the
+The release workflow uses the verified current `main` commit on GitHub-hosted
+runners. macOS builds are signed and notarized; Windows installers are currently
+unsigned. All release assets are checksummed and GitHub-attested. Proposed
+Windows signing covers Umbratic executables and its installer/uninstaller, subject to the
 Foundation's approval of the exact artifacts. The Electron-derived launcher
 requires explicit scope approval. Upstream libraries and runtimes are not
 assumed eligible for the project's certificate; valid upstream signatures are

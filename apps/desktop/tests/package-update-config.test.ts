@@ -10,19 +10,19 @@ const require = createRequire(import.meta.url);
 const { Platform } = require("app-builder-lib");
 const { load } = require("js-yaml");
 
-test("directory packages include the resolved update feed and Windows publisher checks", async (t) => {
+test("directory packages retain the public feed and signed Windows publisher checks", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "umbratic-update-package-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const config = load(await fs.readFile(new URL("../electron-builder.yml", import.meta.url), "utf8"));
   assert.equal(config.afterPack, "scripts/after-pack.cjs");
-  for (const platform of [Platform.MAC, Platform.WINDOWS]) {
+  for (const [platform, publisher] of [[Platform.MAC, undefined], [Platform.WINDOWS, ["Umbratic Publisher"]], [Platform.WINDOWS, null]]) {
     const appInfo = { updaterCacheDirName: "umbratic-updater", channel: null };
     const packager = {
       platform, config, appInfo, info: { config, appInfo },
       platformSpecificBuildOptions: {}, expandMacro: (value) => value,
       getResourcesDir: () => root,
       isForceCodeSigningVerification: true,
-      signingManager: { value: Promise.resolve({ computedPublisherName: { value: Promise.resolve(["Umbratic Publisher"]) } }) },
+      signingManager: { value: Promise.resolve({ computedPublisherName: { value: Promise.resolve(publisher) } }) },
     };
     await afterPack({ packager, appOutDir: root, arch: 3, targets: [] });
     const written = load(await fs.readFile(path.join(root, "app-update.yml"), "utf8"));
@@ -31,6 +31,6 @@ test("directory packages include the resolved update feed and Windows publisher 
     assert.equal(written.repo, "Umbratic");
     assert.equal(written.private, undefined);
     assert.equal(written.updaterCacheDirName, appInfo.updaterCacheDirName);
-    assert.deepEqual(written.publisherName, platform === Platform.WINDOWS ? ["Umbratic Publisher"] : undefined);
+    assert.deepEqual(written.publisherName, publisher ?? undefined);
   }
 });

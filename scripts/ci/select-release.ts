@@ -12,7 +12,8 @@ if (main !== process.env.GITHUB_SHA) throw new Error("Release event no longer id
 const runId = process.env.CI_RUN_ID;
 const runs = runId ? [api(`repos/${repository}/actions/runs/${runId}`)]
   : api(`repos/${repository}/actions/workflows/verify.yml/runs?branch=main&event=push&status=success&per_page=20`).workflow_runs;
-selectVerifiedReleaseRun(runs, main, repository);
+const verifiedRun = selectVerifiedReleaseRun(runs, main, repository);
+if (!Number.isSafeInteger(verifiedRun.id) || verifiedRun.id <= 0) throw new Error("Invalid verified CI run ID.");
 const version = JSON.parse(execFileSync("git", ["show", `${main}:package.json`], { encoding: "utf8" })).version;
 if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Releases require a stable semantic version.");
 const tag = `v${version}`;
@@ -26,5 +27,5 @@ if (existing && !existing.draft) {
   if (tags.some((ref) => ref.ref === `refs/tags/${tag}` && ref.object.sha !== main)) {
     throw new Error(`${tag} already identifies another commit. Bump the version.`);
   }
-  fs.appendFileSync(process.env.GITHUB_OUTPUT!, `prepare=true\ntag=${tag}\n`);
+  fs.appendFileSync(process.env.GITHUB_OUTPUT!, `prepare=true\ntag=${tag}\nci-run-id=${verifiedRun.id}\n`);
 }

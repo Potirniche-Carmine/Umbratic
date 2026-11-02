@@ -6,7 +6,7 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
 const main = "a".repeat(40);
 const repository = "owner/Umbratic";
-const verified = { head_sha: main, event: "push", head_branch: "main", head_repository: { full_name: repository },
+const verified = { id: 123, head_sha: main, event: "push", head_branch: "main", head_repository: { full_name: repository },
   conclusion: "success", path: ".github/workflows/verify.yml" };
 
 test("release selection accepts only a successful CI push for current main in this repository", () => {
@@ -54,7 +54,7 @@ test("release preflight reads the small main ref and preserves exact event ident
   });
   execute();
   assert.equal(calls[0], `repos/${repository}/git/ref/heads/main`);
-  assert.deepEqual(output, [`prepare=true\ntag=${tag}\n`]);
+  assert.deepEqual(output, [`prepare=true\ntag=${tag}\nci-run-id=123\n`]);
   calls.length = output.length = 0;
   assert.throws(() => execute("b".repeat(40)), /no longer identifies current main/);
   assert.deepEqual(calls, [`repos/${repository}/git/ref/heads/main`]);

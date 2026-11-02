@@ -236,16 +236,17 @@ test("CI pins actions and stays read-only", () => {
   assert.equal(workflow.jobs.provenance.permissions["attestations"], "write");
 });
 
-test("release publication waits for every signed platform and scopes write access to publication", () => {
+test("release publication waits for signed macOS and verified unsigned Windows with write access only at publication", () => {
   const workflow = load(fs.readFileSync(new URL("../../../.github/workflows/release.yml", import.meta.url), "utf8"));
   assert.deepEqual(workflow.on.workflow_run.workflows, ["CI"]);
   assert.match(workflow.jobs.source.if, /workflow_run\.event == 'push'/);
   assert.match(workflow.jobs.source.if, /head_repository\.full_name == github\.repository/);
-  assert.deepEqual(workflow.jobs.publish.needs, ["source", "package"]);
-  assert.deepEqual(workflow.jobs.package.strategy.matrix.os, ["macos-15", "windows-2025", "windows-11-arm"]);
+  assert.deepEqual(workflow.jobs.publish.needs, ["source", "macos", "windows"]);
+  assert.equal(workflow.jobs.macos["runs-on"], "macos-15");
+  assert.equal(workflow.jobs.windows["runs-on"], "ubuntu-24.04");
   assert.equal(workflow.permissions.contents, "read");
   assert.equal(workflow.jobs.publish.permissions.contents, "write");
-  for (const name of ["package", "publish"]) {
+  for (const name of ["macos", "windows", "publish"]) {
     const checkout = workflow.jobs[name].steps.find((step) => step.uses?.startsWith("actions/checkout@"));
     assert.equal(checkout.with.ref, "${{ github.sha }}");
     for (const step of workflow.jobs[name].steps) {
@@ -253,29 +254,28 @@ test("release publication waits for every signed platform and scopes write acces
       if (step.uses?.startsWith("actions/setup-go@")) assert.equal(step.with.cache, false);
     }
   }
-  assert.ok(workflow.jobs.package.steps.some((step) => step.run === "node scripts/ci/verify-release.ts"));
+  assert.ok(workflow.jobs.macos.steps.some((step) => step.run === "node scripts/ci/verify-release.ts"));
   assert.ok(workflow.jobs.publish.steps.some((step) => step.run === "node scripts/ci/publish-release.ts"));
 });
 
-test("Windows release signs three immutable GitHub artifacts before generating final metadata", () => {
+test("Windows release explicitly promotes only the selected verified CI run without signing fallback", () => {
   const workflow = load(fs.readFileSync(new URL("../../../.github/workflows/release.yml", import.meta.url), "utf8"));
-  const steps = workflow.jobs.package.steps;
-  const requests = steps.filter((step) => step.uses?.startsWith("signpath/"));
-  assert.equal(requests.length, 3);
-  assert.deepEqual(requests.map((step) => step.with["artifact-configuration-slug"]), ["umbratic-payload-v1", "umbratic-uninstaller-v1", "umbratic-installer-v1"]);
-  for (const step of requests) {
-    assert.match(step.uses, /@[0-9a-f]{40}$/);
-    assert.equal(step.if, "runner.os == 'Windows'");
-    assert.match(step.with["github-artifact-id"], /steps\.unsigned_.*\.outputs\.artifact-id/);
-    assert.equal(step.with["wait-for-completion"], true);
-    assert.equal(step.with["wait-for-completion-timeout-in-seconds"], 1800);
-  }
-  assert.ok(!Object.keys(workflow.jobs.package.env).includes("SIGNPATH_API_TOKEN"));
-  assert.ok(!JSON.stringify(workflow).includes("AZURE_"));
-  const stop = steps.find((step) => step.run === "node scripts/ci/windows-signpath-build.ts stop");
-  assert.equal(stop.if, "always() && runner.os == 'Windows'");
-  const final = steps.findIndex((step) => step.run === "node scripts/ci/verify-release.ts");
-  assert.ok(final > steps.findIndex((step) => step.run?.includes("windows-signpath-build.ts finish")));
+  const steps = workflow.jobs.windows.steps;
+  assert.equal(workflow.jobs.source.outputs["ci-run-id"], "${{ steps.source.outputs.ci-run-id }}");
+  assert.equal(workflow.jobs.windows.env.CI_RUN_ID, "${{ needs.source.outputs.ci-run-id }}");
+  const download = steps.find((step) => step.uses?.startsWith("actions/download-artifact@"));
+  assert.equal(download.with["run-id"], "${{ needs.source.outputs.ci-run-id }}");
+  assert.equal(download.with.pattern, "ci-installers-*");
+  assert.equal(download.with["merge-multiple"], true);
+  const promote = steps.findIndex((step) => step.run === "node scripts/ci/promote-windows-release.ts");
+  const upload = steps.findIndex((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.ok(promote >= 0 && upload > promote);
+  assert.equal(steps[upload].with.name, "release-windows-unsigned");
+  assert.ok(!JSON.stringify(workflow).includes("SIGNPATH_"));
+  assert.ok(!steps.some((step) => step.run?.includes("desktop:release")));
+  const mac = workflow.jobs.macos.steps;
+  assert.ok(mac.some((step) => step.run === "npm run desktop:release"));
+  assert.ok(!mac.some((step) => step.run?.includes("--unsigned")));
 });
 
 test("main installer qualification still runs after suite failure without hiding it", () => {
@@ -347,7 +347,7 @@ test("only trusted main saves exact native build caches and releases only restor
   assert.equal(save.if, "${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native_cache.outputs.cache-hit != 'true' }}");
   const restore = cacheSteps.find((step) => step.uses.startsWith("actions/cache/restore@"));
   assert.equal(restore.if, "${{ !cancelled() && github.ref == 'refs/heads/main' && steps.native_cache_key.outcome == 'success' }}");
-  const releaseCaches = release.jobs.package.steps.filter((step) => step.uses?.startsWith("actions/cache/"));
+  const releaseCaches = release.jobs.macos.steps.filter((step) => step.uses?.startsWith("actions/cache/"));
   assert.equal(releaseCaches.length, 1);
   assert.ok(releaseCaches[0].uses.startsWith("actions/cache/restore@"));
   for (const step of [...cacheSteps, ...releaseCaches]) {

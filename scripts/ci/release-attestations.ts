@@ -38,7 +38,7 @@ export function checksums(directory: string, files: readonly string[]): string {
   return [...files].sort().map((name) => `${hashFile(path.join(directory, name), "sha256", "hex")}  ${name}\n`).join("");
 }
 
-function signedReleaseFiles(directory: string, releaseVersion: string): string[] {
+function releaseFiles(directory: string, releaseVersion: string): string[] {
   return [...releaseArtifactNames(directory, releaseVersion),
     `Umbratic-${releaseVersion}-x64-windows-provenance.json`,
     `Umbratic-${releaseVersion}-arm64-windows-provenance.json`].sort();
@@ -50,10 +50,19 @@ function verifyWindowsProvenance(directory: string, releaseVersion: string, comm
     const record = JSON.parse(readEvidence(file));
     const installer = `Umbratic-${releaseVersion}-${architecture}.exe`;
     if (record.sourceCommit !== commit || record.architecture !== architecture || record.version !== releaseVersion
+        || record.signing !== "unsigned" || !Number.isSafeInteger(record.ciRunId) || record.ciRunId <= 0
         || record.installer?.name !== installer
         || record.installer?.sha256 !== hashFile(path.join(directory, installer), "sha256", "hex")
         || !Array.isArray(record.files) || record.files.length === 0) {
       throw new Error(`Windows provenance does not match the release: ${architecture}.`);
+    }
+    const channel = architecture === "x64" ? "latest.yml" : "latest-arm64.yml";
+    const expected = [installer, channel];
+    if (fs.existsSync(path.join(directory, `${installer}.blockmap`))) expected.push(`${installer}.blockmap`);
+    if (record.files.length !== expected.length || new Set(record.files.map((file) => file.path)).size !== expected.length
+        || record.files.some((file) => !expected.includes(file.path)
+          || file.sha256 !== hashFile(path.join(directory, file.path), "sha256", "hex"))) {
+      throw new Error(`Unsigned Windows provenance file set does not match the release: ${architecture}.`);
     }
   }
 }
@@ -61,7 +70,7 @@ function verifyWindowsProvenance(directory: string, releaseVersion: string, comm
 /** Run before attestation generation, while the directory contains only payloads. */
 export function prepareAttestation(directory: string, releaseVersion: string, kind: "release" | "ci", commit: string): string[] {
   if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("Invalid attestation source commit.");
-  const files = kind === "release" ? signedReleaseFiles(directory, releaseVersion) : verifyReleaseArtifacts(directory, releaseVersion);
+  const files = kind === "release" ? releaseFiles(directory, releaseVersion) : verifyReleaseArtifacts(directory, releaseVersion);
   verifyExactAssetSet(directory, files);
   if (kind === "release") verifyWindowsProvenance(directory, releaseVersion, commit);
   fs.writeFileSync(path.join(directory, checksumName), checksums(directory, files), { flag: "wx" });
@@ -130,7 +139,7 @@ export function verifyTamperedAttestationRejection(file: string, bundle: string,
 }
 
 export function verifyReleaseAttestations(directory: string, releaseVersion: string, repository: string, commit: string): string[] {
-  const files = signedReleaseFiles(directory, releaseVersion);
+  const files = releaseFiles(directory, releaseVersion);
   verifyExactAssetSet(directory, [...files, checksumName, provenanceName]);
   verifyWindowsProvenance(directory, releaseVersion, commit);
   if (fs.readFileSync(path.join(directory, checksumName), "utf8") !== checksums(directory, files)) {

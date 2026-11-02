@@ -1,13 +1,13 @@
 // Runs electron-builder with this machine's release identity applied.
 //
 // electron-builder finds the macOS signing identity in the keychain and
-// notarizes when the APPLE_* variables are present. Windows releases run only
-// through the GitHub SignPath workflow, where uploaded artifacts receive
-// manual approval before this same builder process continues.
+// notarizes when the APPLE_* variables are present. Signed Windows releases
+// use the GitHub SignPath workflow. The initial unsigned Windows release
+// promotes independently verified CI installers.
 //
 // Extra arguments pass straight through: `npm run package -- --win nsis --x64`.
 // `--unsigned` is ours, not electron-builder's: it skips signing and Apple's
-// notarization queue for a package that is only being looked at.
+// notarization queue. Unsigned macOS packages are for local testing only.
 
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -24,11 +24,13 @@ if (unsigned) {
   // The release identity stays untouched in the keychain; electron-builder is
   // told not to go looking for it, and notarization is switched off below
   // rather than left to whatever APPLE_* variables the shell carries. The
-  // fuse flip still re-signs ad hoc, so the package runs on this machine —
-  // it just must never be published.
+  // macOS fuse flip still re-signs ad hoc for local testing. Unsigned Windows
+  // packages keep their normal public update feed without a pinned publisher.
   process.env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
   for (const key of ["CSC_NAME", "CSC_LINK", "CSC_KEY_PASSWORD", "CSC_KEYCHAIN", "WIN_CSC_LINK", "WIN_CSC_KEY_PASSWORD"]) delete process.env[key];
-  console.log("Unsigned package: skipping signing and notarization. For local iteration only.");
+  console.log(process.platform === "win32"
+    ? "Unsigned Windows package: skipping signing."
+    : "Unsigned package: skipping signing and notarization. For local iteration only.");
 } else {
   loadReleaseEnv();
   requireSigningEnvironment();

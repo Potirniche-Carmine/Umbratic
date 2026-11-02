@@ -7,16 +7,16 @@ import { validateOsvBatch } from "./audit-managed-runtimes.ts";
 
 type Package = { name: string; version: string };
 type Finding = { package: string; version: string; id: string; modified: string; reason: string };
-type Action = { repository: string; commit: string; blobs: Record<string, string>; embeddedPackages?: Package[]; findings: Finding[] };
+type Action = { repository: string; commit: string; blobs: Record<string, string>; findings: Finding[] };
 type Review = { controls: Record<string, string>; actions: Action[] };
 const repositories = new Map([
   ["actions/attest", ["action.yml", "dist/index.js", "package-lock.json"]],
-  ["signpath/github-action-submit-signing-request", ["action.yml", "index.js"]],
   ["actions/cache", ["restore/action.yml", "save/action.yml", "dist/restore-only/index.js", "dist/save-only/index.js", "package-lock.json"]],
 ]);
 const controls = [
   ".github/workflows/release.yml", ".github/workflows/verify.yml",
   "scripts/ci/release-attestations.ts", "scripts/ci/verify-ci-attestation.ts",
+  "scripts/ci/promote-windows-release.ts",
   "scripts/ci/windows-signing.ts", "scripts/ci/windows-signpath-build.ts",
   "scripts/ci/build-cache.ts",
 ];
@@ -49,7 +49,7 @@ export function verifyActionBlob(action: Action, name: string, bytes: Buffer): v
 }
 
 export function actionPackages(action: Action, sources: Record<string, Buffer>): Package[] {
-  if (["actions/attest", "actions/cache"].includes(action.repository)) {
+  if (repositories.has(action.repository)) {
     const lock = JSON.parse(sources["package-lock.json"].toString());
     const packages = new Map<string, Package>();
     for (const [location, entry] of Object.entries(lock.packages) as [string, { name?: string; version: string; dev?: boolean }][]) {
@@ -61,14 +61,7 @@ export function actionPackages(action: Action, sources: Record<string, Buffer>):
     if (packages.size === 0) throw new Error("Empty action lock inventory.");
     return [...packages.values()];
   }
-  // SignPath publishes only a bundled entrypoint, without a release lockfile.
-  // Audit the two version-identifiable dependencies; do not invent a full SBOM.
-  const packages = action.embeddedPackages;
-  const source = sources["index.js"].toString();
-  if (packages?.length !== 2
-      || packages[0].name !== "axios" || !source.includes(`const VERSION = "${packages[0].version}";`)
-      || packages[1].name !== "moment" || !source.includes(`hooks.version = '${packages[1].version}';`)) throw new Error("SignPath embedded dependency identity changed.");
-  return packages;
+  throw new Error("Unreviewed action dependency inventory.");
 }
 
 export function reviewActionFindings(action: Action, packages: Package[], findings: { id: string; modified: string }[][]): Finding[] {

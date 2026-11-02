@@ -243,3 +243,23 @@ test("manual checks preserve a downloading or ready release", async () => {
   assert.equal(updater.checks, 1);
   assert.equal(updater.installs, 0);
 });
+
+// Exercise the pinned updater implementation, not our EventEmitter stand-in.
+test("unsigned Windows packages need no publisher override and signed packages retain verification", async () => {
+  const { NsisUpdater } = createRequire(import.meta.url)("electron-updater/out/NsisUpdater");
+  for (const publisherName of [undefined, "Umbratic Publisher", ["Umbratic Publisher"]]) {
+    const calls = [];
+    const updater = {
+      configOnDisk: { value: Promise.resolve({ publisherName }) },
+      _verifyUpdateCodeSignature: async (...args) => { calls.push(args); return "publisher mismatch"; },
+    };
+    const result = await NsisUpdater.prototype.verifySignature.call(updater, "downloaded-update.exe");
+    if (publisherName === undefined) {
+      assert.equal(result, null);
+      assert.equal(calls.length, 0);
+    } else {
+      assert.equal(result, "publisher mismatch");
+      assert.deepEqual(calls, [[["Umbratic Publisher"], "downloaded-update.exe"]]);
+    }
+  }
+});
