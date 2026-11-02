@@ -2,6 +2,10 @@ use super::*;
 #[cfg(unix)]
 use std::fs;
 
+// Allow cold PowerShell startup on shared Windows runners. Tests exercising
+// timeout behavior keep their explicit short deadlines.
+const COMMAND_COMPLETION_TIMEOUT_MS: u64 = if cfg!(windows) { 30_000 } else { 5_000 };
+
 async fn execute_command_for_test(command: &str, timeout_ms: u64) -> ToolResult {
     execute_command_in(tempfile::tempdir().unwrap(), command, timeout_ms)
         .await
@@ -42,8 +46,9 @@ async fn execute_command_in(
 
 #[tokio::test]
 async fn commands_report_success_nonzero_exit_and_timeout_distinctly() {
-    let success = execute_command_for_test("echo runner-command-ok", 5_000).await;
-    assert_eq!(success.status, "success");
+    let success =
+        execute_command_for_test("echo runner-command-ok", COMMAND_COMPLETION_TIMEOUT_MS).await;
+    assert_eq!(success.status, "success", "{:?}", success.error_message);
     assert!(success.content.contains("runner-command-ok"));
     assert!(success.content.contains("capturedBytes="));
     assert!(success.content.contains("originalBytes="));
@@ -57,7 +62,7 @@ async fn commands_report_success_nonzero_exit_and_timeout_distinctly() {
         Some(false)
     );
 
-    let failure = execute_command_for_test("exit 7", 5_000).await;
+    let failure = execute_command_for_test("exit 7", COMMAND_COMPLETION_TIMEOUT_MS).await;
     assert_eq!(failure.status, "runtime_error");
     assert_eq!(failure.code.as_deref(), Some("command_exit_nonzero"));
     assert_eq!(failure.exit_code, Some(7));
@@ -72,7 +77,7 @@ async fn commands_report_success_nonzero_exit_and_timeout_distinctly() {
     assert_eq!(timeout.code.as_deref(), Some("process_timeout"));
 
     // Silent commands must not be killed merely for lack of output.
-    let silent = execute_command_for_test(command, 10_000).await;
+    let silent = execute_command_for_test(command, COMMAND_COMPLETION_TIMEOUT_MS.max(10_000)).await;
     assert_eq!(silent.status, "success");
     assert_ne!(silent.code.as_deref(), Some("process_silent_timeout"));
 }
@@ -151,14 +156,14 @@ async fn commands_do_not_inherit_runner_stdin() {
         } else {
             "if read -r line; then exit 19; fi; printf stdin-closed"
         };
-        let result = execute_command_for_test(command, 5_000).await;
+        let result = execute_command_for_test(command, COMMAND_COMPLETION_TIMEOUT_MS).await;
         assert_eq!(result.status, "success", "{:?}", result.error_message);
         assert!(result.content.contains("stdin-closed"));
         return;
     }
 
     // Keep the runner's input pipe open and empty. An inheriting tool would
-    // block on its read until the unchanged command deadline expires.
+    // block on its read until its command deadline expires.
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -173,10 +178,13 @@ async fn commands_do_not_inherit_runner_stdin() {
         .spawn()
         .unwrap();
     let _open_input = child.stdin.take().unwrap();
-    let output = tokio::time::timeout(Duration::from_secs(15), child.wait_with_output())
-        .await
-        .expect("command test process exceeded its own command deadline")
-        .unwrap();
+    let output = tokio::time::timeout(
+        Duration::from_millis(COMMAND_COMPLETION_TIMEOUT_MS + 10_000),
+        child.wait_with_output(),
+    )
+    .await
+    .expect("command test process exceeded its own command deadline")
+    .unwrap();
     assert!(
         output.status.success(),
         "child test failed: {}{}",
@@ -190,7 +198,7 @@ async fn commands_do_not_inherit_runner_stdin() {
 async fn command_module_search_stays_within_the_trusted_system_shell() {
     let result = execute_command_for_test(
         "Write-Output 'module-probe'; [Console]::Out.WriteLine('effective-modules=' + [Environment]::GetEnvironmentVariable('PSModulePath'))",
-        5_000,
+        COMMAND_COMPLETION_TIMEOUT_MS,
     )
     .await;
     assert_eq!(result.status, "success", "{:?}", result.error_message);
