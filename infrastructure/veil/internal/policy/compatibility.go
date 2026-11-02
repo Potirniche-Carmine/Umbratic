@@ -6,8 +6,8 @@ import (
 )
 
 // Veil is released independently of the harness that calls it, so a newer
-// harness will send vocabulary this build has never seen. The contract in the
-// root AGENTS.md is that unknown vocabulary is accepted — stripped or defaulted,
+// harness will send vocabulary this build has never seen. Unknown vocabulary
+// is accepted — stripped or defaulted,
 // never rejected. These counters are how an operator sees that happening:
 // a rising count means a newer harness is in the field, not that anything broke.
 var (

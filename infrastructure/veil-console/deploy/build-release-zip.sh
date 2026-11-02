@@ -71,7 +71,7 @@ if [[ -z "$profile" ]]; then
 fi
 if [[ -z "$dependency_dir" ]]; then dependency_dir="$release_dir/$profile-kit"; fi
 if [[ ! -f "$dependency_dir/manifest.json" ]]; then
-  echo "Dependency kit missing: $dependency_dir/manifest.json. See docs/guides/release-server.md." >&2
+  echo "Dependency kit missing: $dependency_dir/manifest.json. See infrastructure/veil-console/README.md." >&2
   exit 2
 fi
 
@@ -201,7 +201,7 @@ rm "$bundle_dir/dependencies/manifest.json"
   -ldflags "-X umbratic-veil-console/internal/entitlement.TrustedPublicKey=$entitlement_public_key" \
   -o "$bundle_dir/bin/deploy" ./cmd/deploy)
 install -m 0755 "$script_dir/bundle/deploy.sh" "$bundle_dir/deploy.sh"
-install -m 0644 "$repo_root/docs/guides/deploy-customer.md" "$bundle_dir/README.md"
+install -m 0644 "$repo_root/infrastructure/veil-console/README.md" "$bundle_dir/README.md"
 (cd "$repo_root/infrastructure/veil-console" && go run ./cmd/bundle-manifest \
   --directory "$bundle_dir" --version "$version" --os "$target_os" --arch "$architecture" \
   --profile "$profile" \

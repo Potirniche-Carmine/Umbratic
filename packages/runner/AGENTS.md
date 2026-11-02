@@ -1,61 +1,14 @@
-# AGENTS.md
+# Runner Map
 
-## Rust Runner
+- `src/`: Rust runner, workspace tools, sessions, and Veil transport.
+- `src/lsp/`: language-server integration.
+- `tests/`: TypeScript integration tests and fixtures.
 
-`packages/runner` is the production Rust workspace runner. `package.json` only coordinates Cargo and the TypeScript real-process integration tests; do not add a JavaScript or TypeScript production fallback.
+## Verification
 
-The runner owns:
-
-- `server.rs`: authenticated loopback HTTP/SSE boundary and request validation.
-- `config.rs`: validated launch configuration and approved Veil routes.
-- `veil_client.rs`, `veil_request.rs`, `veil_retry.rs`, `veil_tls.rs`: Veil-only model transport — streaming and decoding, the request body, reconnect policy, and pinned TLS. `veil_request.rs` is pure, so the wire contract is asserted without a live Veil.
-- `loop_runtime.rs`: assistant/tool loop and lifecycle ordering. `compaction.rs` bounds its history, `skill_preflight.rs` resolves skills before the first model call.
-- `policy.rs`, `permission.rs`, `safety.rs`, `tools.rs`, `tool_scheduling.rs`: workspace safety, approval, execution, and path-scoped batch locking.
-- `context.rs`, `session.rs`, `run_queue.rs`: bounded context, history, cancellation, session state, and queued turns.
-- `events.rs` and `diagnostics.rs`: stable external contracts and redacted diagnostics.
-- `workspace_graph.rs`: bounded workspace relationship data, read from the artifact `packages/code-index` produces.
-- `lsp/`: probe-gated, read-only language-server lifecycle, protocol framing, and workspace-relative code-intelligence results.
-
-Keep modules cohesive and keep security decisions at the boundary that has enough information to enforce them.
-
-## Security And Contract Invariants
-
-These are required behavior, not optional hardening:
-
-- Bind only to an explicit loopback IP address. Do not accept hostnames or non-loopback listeners.
-- Require authentication on runner endpoints, keep responses non-cacheable, and enforce request/body limits.
-- Send every model request through an approved Veil route. Never call Ollama, vLLM, or another runtime directly.
-- Reject system-prompt and protected model overrides at every accepted input shape, including nested or compatibility forms.
-- Treat all workspace paths and tool arguments as untrusted. Enforce canonical-root, traversal, symlink, secret, generated-file, and command-policy checks before execution.
-- Policy denial happens before a permission request. Permission approval never overrides policy.
-- Each requested tool call receives one `tool.requested` event and one terminal outcome. Preserve stable ordering, ids, error codes, cancellation, and process cleanup on every failure path.
-- Tool batches use path-scoped scheduling. Reads share a canonical path lock. Writes and edits take an exclusive lock on their canonical path. Commands, programs, and multi-file patches are global barriers because their filesystem effects are not bounded to one path. Search is a global barrier only when that same batch also writes, edits, or runs a command.
-- Reject duplicate call and message ids where ambiguity could corrupt history or lifecycle state.
-- Keep context and history bounded, including complete tool lifecycles during compaction.
-- Redact secrets, credentials, prompt content, raw command output, and absolute paths from diagnostics. Do not panic on untrusted network, model, or workspace input.
-
-Avoid `unsafe`; if an operating-system boundary requires it, isolate it, document the invariant, and cover the surrounding behavior with tests.
-
-## Dependencies
-
-Prefer the Rust standard library or an existing crate. Before adding a crate, confirm that the behavior cannot be implemented clearly with the current graph, inspect default features and transitive packages, disable unused features, and keep `Cargo.lock` current. Do not add Git dependencies or build-time downloads.
-
-## Testing
-
-Tests must prove the contract, not just execute code:
-
-- Use table-driven boundary cases for invalid, empty, zero, maximum, oversized, duplicate, traversal, symlink, and malformed input.
-- Assert full event sequences and terminal outcomes; do not accept tests that return early before the behavior under test is observed.
-- Exercise split UTF-8 and split JSON/SSE chunks, provider disconnects, cancellation, denied policy, denied permission, tool failure, and process-tree cleanup where relevant.
-- Use realistic workspace data. A fixture should be possible under actual policy and filesystem rules.
-- Keep unit tests close to Rust modules. Keep `tests/*.test.ts` black-box: they launch the real compiled binary against the fake Veil in `tests/native-runner-provider.ts`. These are not run by `cargo test`, so an event- or wire-contract change has to run them too or they go stale silently.
-- Do not ignore, conditionally skip, or silently pass a security or contract test because an external service is unavailable. Use local deterministic fakes at the transport boundary.
-
-Run:
+From the repository root:
 
 ```sh
-cargo test --locked --package umbratic-runner --all-targets
-cargo clippy --locked --package umbratic-runner --all-targets -- -D warnings
 npm --workspace @umbratic/runner run test:all
-npm run test:all
+cargo clippy --locked --package umbratic-runner --all-targets -- -D warnings
 ```

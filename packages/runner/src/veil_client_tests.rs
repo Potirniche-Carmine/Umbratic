@@ -304,8 +304,7 @@ fn mtls_pem_identity_requires_a_certificate_and_key_pair() {
     );
 }
 
-// The other direction of the wire-compatibility contract in the root AGENTS.md:
-// a harness must survive a NEWER Veil. Veil responses are read field by field
+// The runner accepts responses from a newer Veil. Fields are read individually
 // off untyped JSON, and SSE lines that are not `data:` are skipped, so a server
 // that adds fields or event kinds cannot break a build that predates them.
 #[test]
