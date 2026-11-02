@@ -907,6 +907,7 @@ export type DesktopApi = {
   cancelDictation(): Promise<void>;
   getAppUpdateStatus(): Promise<AppUpdateStatus>;
   /** Consults the feed now and answers once it has, before any download. */
+  checkForAppUpdate(): Promise<AppUpdateStatus>;
   setAutomaticAppUpdates(input: { enabled: boolean }): Promise<AppUpdateStatus>;
   /** Quits into the downloaded release. Only meaningful in the `ready` state. */
   installAppUpdate(): Promise<void>;

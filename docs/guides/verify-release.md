@@ -19,8 +19,8 @@ use the corresponding installer/archive name for another platform or version.
 In Bash, including Git Bash on Windows:
 
 ```sh
-RELEASE_TAG=v0.0.3
-ASSET=Umbratic-0.0.3-x64.exe
+RELEASE_TAG=v0.0.1
+ASSET=Umbratic-0.0.1-x64.exe
 REPOSITORY=Potirniche-Carmine/Umbratic
 RELEASE_COMMIT="$(gh api "repos/$REPOSITORY/git/ref/tags/$RELEASE_TAG" \
   --jq 'select(.object.type == "commit") | .object.sha')"
@@ -79,7 +79,7 @@ On macOS, check the installed app and downloaded disk image:
 ```sh
 codesign --verify --deep --strict /Applications/Umbratic.app
 spctl --assess --type execute --verbose /Applications/Umbratic.app
-xcrun stapler validate Umbratic-0.0.3.dmg
+xcrun stapler validate Umbratic-0.0.1.dmg
 ```
 
 The Developer ID team must match the release's declared Apple team. Inspect its

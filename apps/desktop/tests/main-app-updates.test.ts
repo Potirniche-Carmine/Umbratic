@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
@@ -126,11 +127,43 @@ test("an up-to-date check and a failed check both record when the feed was consu
   };
   const failed = await module.checkForAppUpdate();
   // The person reads what went wrong, not the URL and the status code.
-  assert.deepEqual(plain(failed.state), { phase: "failed", message: "No release is published for this platform yet" });
+  assert.deepEqual(plain(failed.state), { phase: "failed", message: "No release available yet" });
   assert.ok(diagnostics.some((entry) => entry.event === "updater.check.failed"));
   // Nothing installs when nothing is ready.
   module.installAppUpdate();
   assert.equal(updater.installs, 0);
+});
+
+test("the real GitHub provider's empty release feed reports that no release is published", async () => {
+  const { GitHubProvider } = createRequire(import.meta.url)("electron-updater/out/providers/GitHubProvider");
+  const { module, updater } = load({ packaged: true });
+  const provider = new GitHubProvider({ owner: "Potirniche-Carmine", repo: "Umbratic" },
+    { allowPrerelease: false }, { executor: {}, platform: process.platform });
+  provider.httpRequest = async () => '<feed xmlns="http://www.w3.org/2005/Atom"><title>Umbratic releases</title></feed>';
+  updater.nextCheck = () => provider.getLatestVersion().catch((error) => {
+    updater.emit("error", error);
+    throw error;
+  });
+  assert.deepEqual(plain((await module.checkForAppUpdate()).state), {
+    phase: "failed", message: "No release available yet",
+  });
+  assert.ok(module.appUpdateStatus().checkedAt);
+  assert.equal(updater.installs, 0);
+});
+
+test("network failures and malformed release feeds remain errors", async () => {
+  for (const [error, message] of [
+    [new Error("net::ERR_INTERNET_DISCONNECTED"), "Could not reach GitHub releases"],
+    [Object.assign(new Error('No element "title"'), { code: "ERR_XML_MISSED_ELEMENT" }), "The update check failed"],
+  ]) {
+    const { module, updater } = load({ packaged: true });
+    updater.nextCheck = () => {
+      updater.emit("error", error);
+      return Promise.reject(error);
+    };
+    assert.deepEqual(plain((await module.checkForAppUpdate()).state), { phase: "failed", message });
+    assert.equal(updater.installs, 0);
+  }
 });
 
 test("turning automatic checks off is stored and stops the background rhythm", () => {
@@ -183,4 +216,30 @@ test("simultaneous checks share a request and reject invalid release signatures"
   assert.deepEqual(plain(module.appUpdateStatus().state), {
     phase: "failed", message: "The downloaded release did not verify and was discarded",
   });
+});
+
+test("manual checks work with automatic checks off and refresh the checked time", async () => {
+  const { module, updater } = load({ packaged: true, automatic: false });
+  updater.nextCheck = () => {
+    updater.emit("update-not-available", { version: "0.0.1" });
+    return Promise.resolve(null);
+  };
+  const first = await module.checkForAppUpdate();
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const second = await module.checkForAppUpdate();
+  assert.equal(updater.checks, 2);
+  assert.equal(second.automatic, false);
+  assert.equal(second.state.phase, "current");
+  assert.ok(Date.parse(second.checkedAt) > Date.parse(first.checkedAt));
+});
+
+test("manual checks preserve a downloading or ready release", async () => {
+  const { module, updater } = load({ packaged: true });
+  await module.checkForAppUpdate();
+  updater.emit("update-available", { version: "0.0.2" });
+  assert.equal((await module.checkForAppUpdate()).state.phase, "downloading");
+  updater.emit("update-downloaded", { version: "0.0.2" });
+  assert.equal((await module.checkForAppUpdate()).state.phase, "ready");
+  assert.equal(updater.checks, 1);
+  assert.equal(updater.installs, 0);
 });

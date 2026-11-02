@@ -267,7 +267,7 @@ PKCS#12/PFX client identities. Managed endpoints must use PEM `certPath` and
 `keyPath`, keeping the default runner on one rustls TLS stack.
 
 Release workflows define signed builds and notarization. The public repository
-requires pull requests and the `CI required` and `CodeQL` checks for `main`, and
+requires pull requests and the `CI required` check for `main`, and
 disables force pushes and branch deletion. Administrators configure signing
 credentials and reviewer/CODEOWNERS rules through GitHub. Keep credentials out
 of source control; follow the [release guide](../guides/release-desktop.md).
@@ -277,6 +277,31 @@ of source control; follow the [release guide](../guides/release-desktop.md).
 Every supported image CLI is built from the same official stable-diffusion.cpp source and exact ggml submodule revision, with archive sizes and SHA-256 hashes pinned in `third_party/stable-diffusion.cpp.json`. This replaces the former Windows/Linux binaries, whose embedded ggml lacked later GGUF overflow checks. The macOS build targets macOS 12, links its libraries statically, and embeds Metal; its only dynamic dependencies are system frameworks and libraries. Windows x64 and Linux x64 retain their CPU backend. Packaging verifies the actual architecture, platform libraries and reported revision.
 
 The build uses bundled tokenizer/image helpers, disables CMake dependency downloads, and builds only the CLI. The app uses PNG output; optional WebP/WebM codecs and the upstream server frontend are excluded. Cached sources and build outputs live under `apps/desktop/.llama-cache/image-runtime/`. Delete that directory to rebuild. Model weights retain their own licenses.
+
+## Native CI build caches
+
+CI preserves only `apps/desktop/.llama-cache` through the reviewed, commit-pinned
+official cache restore/save actions. The exact key covers the real checkout path,
+hosted image, operating system, architecture, compiler and SDK identities,
+CMake/build tools, controlled build overrides, runtime source pins, patches,
+build scripts, Vulkan input and retained notices. There are no fallback keys.
+A changed input or missing cache takes the normal cold-build path.
+
+Only successful `main` push jobs save after installer, archive and Windows
+signing-fixture qualification. Main CI restores the exact native cache; signed
+release jobs restore only. Pull requests run the complete tests and audits
+without restoring native caches or building installers.
+[GitHub scopes pull-request caches to their merge refs](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache);
+those caches cannot be restored by `main`. Forks can read default-branch caches,
+so no credential, keychain, signed package, SignPath handoff or user workspace is
+cached. A failed restore is deleted before rebuilding.
+
+Caches are GitHub-hosted build inputs, not independently signed evidence. They
+do not authorize a release, prove absence of vulnerabilities or replace any
+runtime probe, package/archive verification, signing approval, live-main check
+or final-byte attestation. Release source selection still requires successful
+CI for the exact current `main` commit. See the
+[action advisory review](release-actions-security.md#native-build-cache-action).
 
 ## Build-only NSIS verification
 

@@ -11,7 +11,8 @@ const hash = (value) => crypto.createHash("sha256").update(value).digest("hex");
 function controls() {
   const fixture = structuredClone(review);
   const sources = new Map(Object.keys(fixture.controls).map((name) => [name, Buffer.from(
-    name.endsWith(".yml") ? fixture.actions.map((action) => `uses: ${action.repository}@${action.commit}`).join("\n") : name,
+    name.endsWith(".yml") ? fixture.actions.flatMap((action) => (action.repository === "actions/cache"
+      ? ["actions/cache/restore", "actions/cache/save"] : [action.repository]).map((selector) => `uses: ${selector}@${action.commit}`)).join("\n") : name,
   )]));
   for (const [name, source] of sources) fixture.controls[name] = hash(source);
   return { fixture, sources };
@@ -28,6 +29,14 @@ test("changing an applicability control, omitting one or changing an action pin 
   const changed = controls();
   changed.fixture.actions[0].commit = "b".repeat(40);
   assert.throws(() => verifyActionControls(changed.fixture, (name) => changed.sources.get(name)), /Unreviewed action revision/);
+  const cache = controls();
+  for (const [name, source] of cache.sources) {
+    if (!name.endsWith(".yml")) continue;
+    const changed = Buffer.from(source.toString().replaceAll("actions/cache/save@", "actions/cache@"));
+    cache.sources.set(name, changed);
+    cache.fixture.controls[name] = hash(changed);
+  }
+  assert.throws(() => verifyActionControls(cache.fixture, (name) => cache.sources.get(name)), /Unreviewed action revision: actions\/cache\/save/);
 });
 
 test("an altered action bundle or unrecorded blob fails source identity verification", () => {

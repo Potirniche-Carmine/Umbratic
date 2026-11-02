@@ -119,6 +119,19 @@ jobs:
         run: ./scripts/ci/install-vulkan.ps1
       - run: npm ci --ignore-scripts --omit=peer
       - run: npm run dependencies:provision
+      - name: Identify the exact native runtime build inputs
+        id: native_cache_key
+        run: node scripts/ci/build-cache.ts
+      - name: Restore trusted native runtime builds without saving release state
+        id: native_cache
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/desktop/.llama-cache
+          key: ${{ steps.native_cache_key.outputs.native-key }}
+      - name: Discard an incomplete native cache restore
+        if: ${{ !cancelled() && steps.native_cache.outcome == 'failure' }}
+        run: node --input-type=module -e 'import fs from "node:fs"; fs.rmSync("apps/desktop/.llama-cache", { recursive:true, force:true });'
       - name: Build, sign, notarize and smoke-test
         if: runner.os == 'macOS'
         run: npm run desktop:release
