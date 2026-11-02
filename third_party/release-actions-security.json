@@ -1,7 +1,7 @@
 {
   "scope": "Exact official action sources and known production dependency inventories, with conditional advisory applicability; not a claim that every upstream code path is patched.",
   "controls": {
-    ".github/workflows/release.yml": "b441ee2eddd6d31c7df9354e1cccf8a0db977a8cfd568c0ce753fe80c19cfe5f",
+    ".github/workflows/release.yml": "063dd9bc4a87ba93c1e08757c2bf81a54a9928dfb3b338ea560d1d59d6ff3501",
     ".github/workflows/verify.yml": "5b688e91277b184198c0e2d7316377207339ce1a8d56c31e7ffc732a95014c1e",
     "scripts/ci/release-attestations.ts": "9c7766f3d60bedf163b8efcf93f1665b563df8511206ec4a6c5c2a8123f30e20",
     "scripts/ci/verify-ci-attestation.ts": "46032be3b8d418fd2e0cb2eb444127626f7f5543ad3fdc724313de8efb801c51",

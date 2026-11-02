@@ -19,6 +19,7 @@ function fakeUpdater() {
     channel: null,
     requestHeaders: null,
     logger: null,
+    setFeedURL(options) { updater.feed = options; },
     checkForUpdates() {
       updater.checks += 1;
       updater.emit("checking-for-update");
@@ -86,6 +87,9 @@ test("a check configures the updater conservatively and reports each stage to th
   assert.equal(updater.allowPrerelease, false);
   assert.equal(updater.autoDownload, true);
   assert.equal(updater.autoInstallOnAppQuit, true);
+  assert.equal(updater.feed.provider, "custom");
+  assert.equal(updater.feed.updateProvider.name, "ReleaseUpdateProvider");
+  assert.equal(updater.disableDifferentialDownload, true);
   assert.equal(updater.requestHeaders["User-Agent"], `Umbratic/0.0.3 (${process.platform}; ${process.arch})`);
   assert.equal(updater.checks, 1);
   assert.equal(status.state.phase, "downloading");

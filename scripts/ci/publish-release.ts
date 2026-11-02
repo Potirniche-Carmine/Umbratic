@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { verifyReleaseAttestations } from "./release-attestations.ts";
+import { hashFile, publicReleaseArtifactNames } from "./release-artifacts.ts";
 
 const repository = process.env.GITHUB_REPOSITORY!;
 const commit = process.env.RELEASE_COMMIT!;
@@ -14,7 +15,8 @@ function gh(args: string[]) {
 }
 function api(endpoint: string) { return JSON.parse(gh(["api", endpoint])); }
 const directory = path.resolve("target/release/upload");
-const files = verifyReleaseAttestations(directory, version, repository, commit);
+verifyReleaseAttestations(directory, version, repository, commit);
+const files = publicReleaseArtifactNames(version);
 const main = api(`repos/${repository}/git/ref/heads/main`).object.sha;
 if (main !== commit) throw new Error("Main changed while packaging. Release the newest verified main instead.");
 const releases = api(`repos/${repository}/releases?per_page=100`);
@@ -39,9 +41,20 @@ if (existing) {
   // eventual tag from an older branch/commit despite our verified checkout.
   gh(["release", "edit", tag, "--repo", repository, "--target", commit, "--notes", notes, "--draft"]);
 }
-// The release stays a draft until every platform artifact and its metadata
-// have uploaded; the public updater can never observe a partial release.
+// Evidence and generated updater metadata stay in the workflow artifacts.
+// The release stays a draft until every app download has uploaded and GitHub's
+// digests match the verified bytes used by the app's updater.
 gh(["release", "upload", tag, "--repo", repository, "--clobber", ...files.map((name) => path.join(directory, name))]);
+const draft = api(`repos/${repository}/releases?per_page=100`).find((release) => release.tag_name === tag);
+if (!draft?.draft) throw new Error("Release is no longer a draft.");
+const uploaded = api(`repos/${repository}/releases/${draft.id}/assets?per_page=100`);
+if (!Array.isArray(uploaded) || uploaded.length !== files.length
+    || new Set(uploaded.map((asset) => asset.name)).size !== files.length
+    || uploaded.some((asset) => !files.includes(asset.name) || asset.state !== "uploaded"
+      || asset.size !== fs.statSync(path.join(directory, asset.name)).size
+      || asset.digest !== `sha256:${hashFile(path.join(directory, asset.name), "sha256", "hex")}`)) {
+  throw new Error("Uploaded release assets do not match the verified app downloads. The release remains a draft.");
+}
 if (api(`repos/${repository}/git/ref/heads/main`).object.sha !== commit) throw new Error("Main changed during upload. The release remains a draft.");
 gh(["release", "edit", tag, "--repo", repository, "--target", commit, "--draft=false", "--latest"]);
 console.log(`Published verified ${tag} from ${commit}.`);

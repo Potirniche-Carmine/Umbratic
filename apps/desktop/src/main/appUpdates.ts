@@ -6,6 +6,7 @@ import { app } from "electron";
 import { autoUpdater } from "electron-updater";
 import type { AppUpdateStatus } from "../shared/desktopApi";
 import { recordLocalDiagnostic } from "./diagnostics";
+import { ReleaseUpdateProvider } from "./releaseUpdateProvider";
 import { readAutomaticAppUpdatesSetting, writeAutomaticAppUpdatesSetting } from "./storage";
 
 type UpdateState = AppUpdateStatus["state"];
@@ -46,15 +47,10 @@ function configureUpdater() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.allowPrerelease = false;
-  // A release feed only ever moves forward, and an app that could be talked
-  // into an older build by a feed would have a security problem, not a
-  // feature. The channel setter below flips this on, so it is set after.
-  if (process.platform === "win32" && process.arch !== "x64") {
-    // Windows x64 and arm64 are separate builds with their own channel files,
-    // so an arm64 machine with no arm64 release yet sees nothing rather than
-    // the x64 installer. macOS is arm64 only and keeps the default name.
-    autoUpdater.channel = `latest-${process.arch}`;
-  }
+  autoUpdater.setFeedURL({ provider: "custom", updateProvider: ReleaseUpdateProvider });
+  // Public releases contain app downloads only. Fetch the complete installer
+  // and verify GitHub's SHA-256 digest without requesting YAML or blockmaps.
+  autoUpdater.disableDifferentialDownload = true;
   autoUpdater.allowDowngrade = false;
   autoUpdater.logger = {
     info: () => undefined,
@@ -102,7 +98,7 @@ function failureState(error: unknown): UpdateState {
       || (code === "ERR_XML_MISSED_ELEMENT" && /^(?:Error: )?No published versions on GitHub$/.test(text))
       || /404/.test(text)) return { phase: "failed", message: "No release available yet" };
   if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|net::ERR|network/i.test(text)) return { phase: "failed", message: "Could not reach GitHub releases" };
-  if (/sign|certificate|publisher/i.test(text)) return { phase: "failed", message: "The downloaded release did not verify and was discarded" };
+  if (/sign|certificate|publisher|checksum/i.test(text)) return { phase: "failed", message: "The downloaded release did not verify and was discarded" };
   return { phase: "failed", message: "The update check failed" };
 }
 

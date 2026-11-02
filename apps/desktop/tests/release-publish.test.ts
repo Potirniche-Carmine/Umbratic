@@ -7,7 +7,7 @@ import * as artifacts from "../../../scripts/ci/release-artifacts.ts";
 import { prepareAttestation } from "../../../scripts/ci/release-attestations.ts";
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
-function publication(t, mainMoves, attestationFails = false) {
+function publication(t, mainMoves, attestationFails = false, alterUploaded = (assets) => assets) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-publish-"));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   for (const [channel, name] of [["latest-mac.yml", "Umbratic-0.0.3.zip"], ["latest.yml", "Umbratic-0.0.3-x64.exe"], ["latest-arm64.yml", "Umbratic-0.0.3-arm64.exe"]]) {
@@ -57,7 +57,12 @@ function publication(t, mainMoves, attestationFails = false) {
           sha: mainMoves === "before" || (mainMoves && uploaded) ? "b".repeat(40) : commit,
         } });
         if (args[1].includes("matching-refs")) return "[]";
-        if (args[1].includes("/assets")) return "[]";
+        if (args[1].includes("/assets")) return !uploaded ? "[]" : JSON.stringify(alterUploaded(
+          artifacts.publicReleaseArtifactNames("0.0.3").map((name) => ({ name, state: "uploaded",
+            size: fs.statSync(path.join(directory, name)).size,
+            digest: `sha256:${artifacts.hashFile(path.join(directory, name), "sha256", "hex")}`,
+          })),
+        ));
         if (args[1].endsWith("/releases?per_page=100")) return JSON.stringify([{ id: 1, tag_name: "v0.0.3", draft: true, target_commitish: "stale-branch" }]);
         throw new Error("Unexpected release API call");
       } },
@@ -72,6 +77,8 @@ test("retrying an untagged stale draft pins its target to the verified commit be
   const reset = calls.findIndex((args) => args[0] === "release" && args[1] === "edit" && args.includes("--draft"));
   const upload = calls.findIndex((args) => args[1] === "upload");
   assert.ok(reset >= 0 && reset < upload);
+  assert.deepEqual(calls[upload].slice(calls[upload].indexOf("--clobber") + 1).map((file) => path.basename(file)),
+    ["Umbratic-0.0.3-arm64.exe", "Umbratic-0.0.3-x64.exe", "Umbratic-0.0.3.dmg", "Umbratic-0.0.3.zip"]);
   assert.equal(calls[reset][calls[reset].indexOf("--target") + 1], commit);
   const notes = calls[reset][calls[reset].indexOf("--notes") + 1];
   assert.match(notes, /Windows x64 and ARM64 installers are unsigned/);
@@ -99,4 +106,19 @@ test("attestation rejection blocks every release mutation", (t) => {
   const { execute, calls } = publication(t, false, true);
   assert.throws(execute, /attestation identity rejected/);
   assert.ok(!calls.some((args) => args[0] === "release"));
+});
+
+test("missing, unexpected, duplicated or corrupted GitHub assets block publication", (t) => {
+  for (const alter of [
+    (assets) => assets.slice(1),
+    (assets) => [...assets, { name: "latest.yml" }],
+    (assets) => [assets[0], assets[0], ...assets.slice(2)],
+    (assets) => assets.map((asset) => ({ ...asset, digest: `sha256:${"0".repeat(64)}` })),
+    (assets) => assets.map((asset) => ({ ...asset, size: asset.size + 1 })),
+    (assets) => assets.map((asset) => ({ ...asset, state: "starter" })),
+  ]) {
+    const { execute, calls } = publication(t, false, false, alter);
+    assert.throws(execute, /Uploaded release assets do not match/);
+    assert.ok(!calls.some((args) => args.includes("--draft=false")));
+  }
 });
