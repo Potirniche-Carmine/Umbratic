@@ -127,7 +127,7 @@ test("an up-to-date check and a failed check both record when the feed was consu
   };
   const failed = await module.checkForAppUpdate();
   // The person reads what went wrong, not the URL and the status code.
-  assert.deepEqual(plain(failed.state), { phase: "failed", message: "No release is published for this platform yet" });
+  assert.deepEqual(plain(failed.state), { phase: "failed", message: "No release available yet" });
   assert.ok(diagnostics.some((entry) => entry.event === "updater.check.failed"));
   // Nothing installs when nothing is ready.
   module.installAppUpdate();
@@ -145,7 +145,7 @@ test("the real GitHub provider's empty release feed reports that no release is p
     throw error;
   });
   assert.deepEqual(plain((await module.checkForAppUpdate()).state), {
-    phase: "failed", message: "No release is published for this platform yet",
+    phase: "failed", message: "No release available yet",
   });
   assert.ok(module.appUpdateStatus().checkedAt);
   assert.equal(updater.installs, 0);
