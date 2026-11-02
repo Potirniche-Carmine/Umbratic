@@ -6,7 +6,7 @@ Umbratic has no usage analytics or automatic telemetry uploads. Local history an
 
 [Downloads](https://github.com/Potirniche-Carmine/Umbratic/releases) · [Website](https://umbratic.ai) · [Issues](https://github.com/Potirniche-Carmine/Umbratic/issues)
 
-The initial signed release is pending. Windows signing is planned through SignPath Foundation, subject to approval; see the [Code signing policy](CODE_SIGNING_POLICY.md).
+Windows installers are currently unsigned. Signing is planned through SignPath Foundation, subject to approval; see the [Code signing policy](CODE_SIGNING_POLICY.md).
 
 ## Getting started
 

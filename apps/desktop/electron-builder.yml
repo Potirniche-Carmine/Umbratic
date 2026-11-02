@@ -31,8 +31,8 @@ extraResources:
     to: veil
   - from: .package/llama-server
     to: llama-server
-# GitHub hosts public metadata and installers; CI publishes only after verifying
-# every signed platform package. Packaging itself never uploads.
+# GitHub hosts public metadata and installers. Release verification checks
+# signed macOS packages and trusted unsigned Windows CI artifacts before publishing.
 publish:
   provider: github
   owner: Potirniche-Carmine

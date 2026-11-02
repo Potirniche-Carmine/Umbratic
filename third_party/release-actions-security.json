@@ -1,13 +1,14 @@
 {
   "scope": "Exact official action sources and known production dependency inventories, with conditional advisory applicability; not a claim that every upstream code path is patched.",
   "controls": {
-    ".github/workflows/release.yml": "aa9ae0b1e77f6b1619b024de48494c4e789f104b310b312c87824a67b7b6894a",
+    ".github/workflows/release.yml": "b441ee2eddd6d31c7df9354e1cccf8a0db977a8cfd568c0ce753fe80c19cfe5f",
     ".github/workflows/verify.yml": "e222e047ca7da19412225dc4f63ff1739418243ec989e32668914ae01764a3fb",
-    "scripts/ci/release-attestations.ts": "22ac59c0bdc51ab35f0d09fa3069c73acc29344d66636aed6548819d9e2f0643",
+    "scripts/ci/release-attestations.ts": "9c7766f3d60bedf163b8efcf93f1665b563df8511206ec4a6c5c2a8123f30e20",
     "scripts/ci/verify-ci-attestation.ts": "46032be3b8d418fd2e0cb2eb444127626f7f5543ad3fdc724313de8efb801c51",
     "scripts/ci/windows-signing.ts": "e05a783758ae407fb93b533675855f66c459461d7a5a16667d55aaf774d1d2ea",
     "scripts/ci/windows-signpath-build.ts": "b20e2ca5cb6daf1d283f900dbe56e37dd47f0893370204cd7cbdb37dcd872ba3",
-    "scripts/ci/build-cache.ts": "b25e28c1ae4446d3616bc24b5ff7d997f59355c2ff0f4a325f42f350b48547f0"
+    "scripts/ci/build-cache.ts": "b25e28c1ae4446d3616bc24b5ff7d997f59355c2ff0f4a325f42f350b48547f0",
+    "scripts/ci/promote-windows-release.ts": "1149ab904220f7ef3ddd35b0531bb3193e3002f092c7d2ea3dfdb708dbaeb18b"
   },
   "actions": [
     {
@@ -251,119 +252,6 @@
           "id": "GHSA-rxp7-6hxx-x8q5",
           "modified": "2026-10-22T16:30:30.129356Z",
           "reason": "No IP classifier is used to authorize destinations; only fixed official service endpoints are selected. No untrusted IPv6 address or zone identifier is supplied to an address parser."
-        }
-      ]
-    },
-    {
-      "repository": "signpath/github-action-submit-signing-request",
-      "commit": "f6d04783b4569d051e0c80105fe66e82819d0092",
-      "release": "v3.0",
-      "inventoryScope": "Only the version-identifiable bundled Axios and Moment dependencies; upstream publishes no action release lockfile, so this is not a complete transitive SBOM.",
-      "blobs": {
-        "action.yml": "9afe14756752bb0b43421bf94e7cebdc3fead29765be4f07fbc60d82421ebc23",
-        "index.js": "40af2e2581648d7357de3c13ca081ce87ac97f0aa66fdd2c5e3f1468d3232751"
-      },
-      "embeddedPackages": [
-        {
-          "name": "axios",
-          "version": "1.19.0"
-        },
-        {
-          "name": "moment",
-          "version": "2.29.4"
-        }
-      ],
-      "findings": [
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-3pq3-5fj3-cg6v",
-          "modified": "2026-09-30T15:15:04.067807Z",
-          "reason": "The action uses the default Node HTTP/1 adapter; httpVersion:2 is never enabled."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-44g4-m2mj-wpvx",
-          "modified": "2026-09-30T15:45:41.069795Z",
-          "reason": "Only the fixed official public-DNS HTTPS connector is used, not internal IP targets whose CIDR NO_PROXY exclusion would be security-critical."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-4hqw-qxg8-jxx2",
-          "modified": "2026-09-30T15:46:17.701967Z",
-          "reason": "The Node HTTP adapter is used; the affected fetch adapter is not selected."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-542g-h47m-68v8",
-          "modified": "2026-09-30T15:15:04.061469Z",
-          "reason": "The action uses the default Node HTTP/1 adapter; httpVersion:2 is never enabled."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-9fr6-4gfg-395g",
-          "modified": "2026-09-30T15:30:03.718390Z",
-          "reason": "All requests use explicit get/post method aliases, which are unaffected by the default-instance inherited-method path."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-c29m-xwm3-cm6r",
-          "modified": "2026-09-30T15:15:04.064301Z",
-          "reason": "All requests use fixed official HTTPS connector routes; no data: URL is accepted."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-j8rh-479h-cp32",
-          "modified": "2026-09-30T15:46:18.108444Z",
-          "reason": "The logging interceptor returns the original null-prototype config including its own headers; it never replaces config with a minimal plain object."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-m8m8-qj5v-23w3",
-          "modified": "2026-09-30T15:46:18.253717Z",
-          "reason": "The socket-hijack gadget requires prior same-process Object.prototype pollution; the pinned action has no untrusted config/object merge or prototype-pollution source. Fixed HTTPS routes remain mandatory."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-mghh-pgcx-3jjj",
-          "modified": "2026-09-30T15:15:04.048176Z",
-          "reason": "The connector URL and route construction are fixed to the official trusted HTTPS service; untrusted origins or redirect Locations are not accepted as inputs. Availability remains dependent on that service."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-r4gj-5m52-g5wh",
-          "modified": "2026-09-30T15:45:41.466464Z",
-          "reason": "The Node HTTP adapter is used; the affected fetch adapter is not selected."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-vh66-26gq-q6x8",
-          "modified": "2026-09-30T15:30:04.438497Z",
-          "reason": "The Node HTTP adapter is used; the affected fetch adapter is not selected."
-        },
-        {
-          "package": "axios",
-          "version": "1.19.0",
-          "id": "GHSA-x97p-jq2g-jp4f",
-          "modified": "2026-09-30T15:15:04.052506Z",
-          "reason": "The action posts JSON and downloads streams; multipart/URL-encoded form serialization is not used."
-        },
-        {
-          "package": "moment",
-          "version": "2.29.4",
-          "id": "GHSA-4p3w-j4w9-5jqw",
-          "modified": "2026-09-30T00:00:03.858466Z",
-          "reason": "Only numeric timeout/duration formatting is used; no attacker-influenced locale or object is passed to moment.locale()."
         }
       ]
     },

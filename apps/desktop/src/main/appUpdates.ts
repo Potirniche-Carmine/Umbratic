@@ -1,5 +1,5 @@
-/** Public GitHub releases supply update metadata and signed installers.
- * Downloads remain subject to Electron's platform signature verification.
+/** Public GitHub releases supply update metadata and installers.
+ * Signed installations retain their platform signature verification.
  */
 
 import { app } from "electron";

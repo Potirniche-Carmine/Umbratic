@@ -21,7 +21,10 @@ function publication(t, mainMoves, attestationFails = false) {
   for (const architecture of ["x64", "arm64"]) {
     const name = `Umbratic-0.0.3-${architecture}.exe`;
     fs.writeFileSync(path.join(directory, `Umbratic-0.0.3-${architecture}-windows-provenance.json`), JSON.stringify({
-      version: "0.0.3", sourceCommit: commit, architecture, files: [{ path: "Umbratic.exe", role: "project" }],
+      version: "0.0.3", sourceCommit: commit, architecture, signing: "unsigned", ciRunId: 123,
+      files: [name, architecture === "x64" ? "latest.yml" : "latest-arm64.yml"].map((asset) => ({
+        path: asset, sha256: artifacts.hashFile(path.join(directory, asset), "sha256", "hex"),
+      })),
       installer: { name, sha256: artifacts.hashFile(path.join(directory, name), "sha256", "hex") },
     }));
   }
@@ -70,6 +73,9 @@ test("retrying an untagged stale draft pins its target to the verified commit be
   const upload = calls.findIndex((args) => args[1] === "upload");
   assert.ok(reset >= 0 && reset < upload);
   assert.equal(calls[reset][calls[reset].indexOf("--target") + 1], commit);
+  const notes = calls[reset][calls[reset].indexOf("--notes") + 1];
+  assert.match(notes, /Windows x64 and ARM64 installers are unsigned/);
+  assert.match(notes, /macOS builds are Developer ID signed and notarized/);
   const publish = calls.find((args) => args.includes("--draft=false"));
   assert.equal(publish[publish.indexOf("--target") + 1], commit);
   assert.equal(calls.filter((args) => args[1].endsWith("/git/ref/heads/main")).length, 2);

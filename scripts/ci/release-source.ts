@@ -1,6 +1,6 @@
 /** A privileged release must never promote a fork, PR or unverified commit. */
 export function selectVerifiedReleaseRun(runs: Array<{
-  head_sha: string; event: string; head_branch: string; head_repository: { full_name: string };
+  id: number; head_sha: string; event: string; head_branch: string; head_repository: { full_name: string };
   conclusion: string; path: string;
 }>, main: string, repository: string) {
   if (!/^[0-9a-f]{40}$/.test(main)) throw new Error("Invalid main commit.");
