@@ -16,6 +16,7 @@ const repositories = new Map([
 const controls = [
   ".github/workflows/release.yml", ".github/workflows/verify.yml",
   "scripts/ci/release-attestations.ts", "scripts/ci/verify-ci-attestation.ts",
+  "scripts/ci/verify-release.ts",
   "scripts/ci/promote-windows-release.ts",
   "scripts/ci/windows-signing.ts", "scripts/ci/windows-signpath-build.ts",
   "scripts/ci/build-cache.ts",
