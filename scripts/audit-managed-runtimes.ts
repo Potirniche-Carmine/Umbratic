@@ -15,7 +15,9 @@ const reviewedModified = new Map([
   ["GHSA-h35f-9h28-mq5c", "2026-09-10T03:50:52.323347Z"],
   ["PYSEC-2026-3447", "2026-07-14T10:56:37.948360Z"],
   ["GHSA-xmj3-9gf7-h52w", "2026-10-23T22:00:03.739009Z"],
-  ["GO-2026-5932", "2026-07-10T05:44:31.101996Z"],
+  // Reviewed OpenPGP module split; the affected imports remain OpenPGP-only.
+  // https://github.com/golang/vulndb/blob/master/data/reports/GO-2026-5932.yaml
+  ["GO-2026-5932", "2026-11-02T22:15:06.677088Z"],
 ]);
 type Finding = { id: string; modified: string };
 

@@ -12,8 +12,8 @@
       "module": "golang.org/x/crypto",
       "package": "golang.org/x/crypto/openpgp",
       "reachable": false,
-      "fixedIn": null,
-      "reason": "Permanent deprecation notice with no fix, reported only at module scope. Console compiles argon2 and blake2b, and the reviewed Caddy graph compiles other required crypto helpers; neither imports OpenPGP. Source and unstripped-binary govulncheck report no reachable/imported findings. This entry documents the residual module notice; scanner failures are never suppressed."
+      "fixedIn": "v0.58.1-0.20261009181718-2f1f834330b2",
+      "reason": "Reviewed the 2026-11-02 advisory revision: OpenPGP was split out of x/crypto at the listed version; the separate deprecated OpenPGP module remains unsafe. Our pinned x/crypto v0.58.0 still matches at module scope. Console compiles argon2 and blake2b, and Caddy compiles other crypto helpers; fresh go list -deps checks confirm neither graph imports OpenPGP. Source and unstripped-binary govulncheck report no reachable/imported findings. This entry documents the residual module notice; scanner failures are never suppressed."
     }
   ],
   "acceptedNpmReleaseAgeExceptions": [
