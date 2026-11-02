@@ -17,6 +17,7 @@ test("runtime advisories require the exact reviewed version and evaluated source
   const cryptoModule = { ecosystem: "Go" as const, name: "golang.org/x/crypto", version: "v0.58.0" };
   assert.match(reviewedDisposition(cryptoModule, "GO-2026-5932", verified)!, /not imported/);
   assert.equal(reviewedDisposition(cryptoModule, "GO-2026-5932", { ...verified, openPgpImported: true }), undefined);
+  assert.equal(reviewedDisposition({ ...cryptoModule, name: "golang.org/x/crypto/openpgp" }, "GO-2026-5932", verified), undefined);
 });
 
 test("runtime applicability is invalidated by missing or changed executable installation controls", () => {
