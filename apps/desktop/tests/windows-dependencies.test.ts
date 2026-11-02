@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { isWindowsOsDependency, parseWindowsDependents } from "../scripts/windows-dependencies.ts";
-import { upstreamIdentity } from "../../../scripts/ci/windows-signing.ts";
+import { upstreamIdentity } from "../../../scripts/ci/windows-upstream.ts";
 
 test("Windows import inspection includes normal and delay-loaded dependencies without accepting paths", () => {
   assert.deepEqual(parseWindowsDependents(`Dump of file C:\\build\\library.dll
@@ -32,13 +32,13 @@ test("Windows OS contracts never excuse toolchain or arbitrary host-installed ru
 test("packaging verifies import closure and preserves only recorded original Microsoft redistributable signatures", () => {
   const prepare = fs.readFileSync(new URL("../scripts/prepare-package.ts", import.meta.url), "utf8");
   const verify = fs.readFileSync(new URL("../scripts/verify-package.ts", import.meta.url), "utf8");
-  const signer = fs.readFileSync(new URL("../../../scripts/ci/windows-signing.ts", import.meta.url), "utf8");
+  const dependencies = fs.readFileSync(new URL("../scripts/windows-dependencies.ts", import.meta.url), "utf8");
   const config = fs.readFileSync(new URL("../electron-builder.yml", import.meta.url), "utf8");
   assert.match(prepare, /prepareWindowsDependencies\(desktopRoot\)/);
   assert.match(verify, /verifyWindowsDependencies\(path.resolve\(resources, "\.\."\)\)/);
   assert.match(config, /win:\r?\n\s+extraFiles:\r?\n\s+- from: \.package\/windows-runtime/);
-  for (const guard of ["provenance.json", "entry.sha256 === sha256(file)", "entry.thumbprint === identity.thumbprint", 'identity.status !== "Valid"', "Unrecorded Microsoft runtime binary"]) {
-    assert.ok(signer.includes(guard));
+  for (const guard of ["provenance.json", "entry.sha256 === sha256", "identity.thumbprint !== entries[0].thumbprint", "identity.version !== entries[0].version", "Microsoft redistributable provenance changed"]) {
+    assert.ok(dependencies.includes(guard));
   }
 });
 

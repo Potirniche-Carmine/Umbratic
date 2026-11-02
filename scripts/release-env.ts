@@ -52,41 +52,13 @@ export function requireReleaseEnv(key: string): string {
   return value;
 }
 
-/**
- * Public identity of the approved SignPath project. The API token belongs only
- * to the official GitHub action, never to the packaging process.
- */
-export function windowsSigningConfig(): {
-  organizationId: string;
-  projectSlug: string;
-  signingPolicySlug: string;
-  publisherName: string;
-} | null {
-  const organizationId = process.env.SIGNPATH_ORGANIZATION_ID?.trim();
-  const projectSlug = process.env.SIGNPATH_PROJECT_SLUG?.trim();
-  const signingPolicySlug = process.env.SIGNPATH_SIGNING_POLICY_SLUG?.trim();
-  const publisherName = process.env.SIGNPATH_PUBLISHER?.trim();
-  const set = [organizationId, projectSlug, signingPolicySlug, publisherName].filter(Boolean).length;
-  if (set === 0) return null;
-  if (set < 4) {
-    throw new Error(
-      "Windows signing needs SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, "
-      + "SIGNPATH_SIGNING_POLICY_SLUG and SIGNPATH_PUBLISHER.",
-    );
-  }
-  if (!/^[0-9a-fA-F-]{36}$/.test(organizationId!) || !/^[A-Za-z0-9_-]+$/.test(projectSlug!)
-      || !/^[A-Za-z0-9_-]+$/.test(signingPolicySlug!) || /[\r\n\0]/.test(publisherName!)) throw new Error("Invalid SignPath project identity.");
-  return { organizationId: organizationId!, projectSlug: projectSlug!, signingPolicySlug: signingPolicySlug!, publisherName: publisherName! };
-}
-
 /** Signed builds must never silently fall back to an unsigned or unnotarized app. */
 export function requireSigningEnvironment(platform = process.platform): void {
   if (process.env.UMBRATIC_LLAMA_CPU_ONLY === "1") {
     throw new Error("CPU-only development packages cannot be released.");
   }
   if (platform === "win32") {
-    if (!windowsSigningConfig()) throw new Error("Windows release signing is required. Configure the approved SIGNPATH_* project identity.");
-    return;
+    throw new Error("Windows installers are unsigned and promoted from verified CI artifacts. Use --unsigned for packaging.");
   }
   if (platform !== "darwin") throw new Error("Desktop releases support macOS and Windows only.");
   const apiKey = ["APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"].every((key) => process.env[key]?.trim());

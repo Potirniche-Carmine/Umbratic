@@ -1,16 +1,16 @@
 # Umbratic
 
-An open-source desktop AI harness for code, files, and documents, released under the [MIT License](LICENSE). Run models locally or connect to your own Veil server.
+An open-source desktop AI harness for code, files, and documents. Run models locally or connect to your own Veil server. Free to use, modify, and distribute, including commercially, under the [MIT License](LICENSE).
 
 Umbratic has no usage analytics or automatic telemetry uploads. Local history and diagnostics stay on your device unless you export them. Company server requests and logs are controlled by that server's administrator.
 
 [Downloads](https://github.com/Potirniche-Carmine/Umbratic/releases) · [Website](https://umbratic.ai) · [Issues](https://github.com/Potirniche-Carmine/Umbratic/issues)
 
-Windows installers are currently unsigned. Signing is planned through SignPath Foundation, subject to approval; see the [Code signing policy](CODE_SIGNING_POLICY.md).
-
 ## Getting started
 
 Download an available build for macOS 13+ on Apple Silicon or Windows x64/ARM64 from [GitHub Releases](https://github.com/Potirniche-Carmine/Umbratic/releases). Choose and download a model in the app, or build from source below.
+
+macOS releases are signed and notarized. Windows installers are unsigned. Releases include checksums and GitHub artifact attestations; see the [signing and privacy policy](CODE_SIGNING_POLICY.md).
 
 ### Build and run
 
@@ -41,6 +41,10 @@ go build ./cmd/veil
 ```
 
 See [Veil](infrastructure/veil/README.md) for configuration, or [Veil Console](infrastructure/veil-console/README.md) to build and administer a self-hosted server. In the desktop app, choose **Company server** in Settings and enter the server address and enrollment code.
+
+## Enterprise help
+
+Optional paid setup, deployment, and support services are available for organizations. Contact [potirnichecarmine@gmail.com](mailto:potirnichecarmine@gmail.com) to discuss scope and pricing for your engagement. Umbratic remains MIT-licensed and free for commercial use; paid services are optional.
 
 ## Contribute
 

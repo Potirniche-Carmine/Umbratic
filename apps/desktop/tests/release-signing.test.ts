@@ -2,15 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
 import { loadReleaseEnv, requireSigningEnvironment } from "../../../scripts/release-env.ts";
-import { verifyMacSigningTeam, verifyUpdaterPublisher } from "../../../scripts/ci/release-artifacts.ts";
+import { verifyMacSigningTeam } from "../../../scripts/ci/release-artifacts.ts";
 
-test("signed release identities cannot omit updater verification or switch Apple developer teams", () => {
-  for (const publisherName of [undefined, null, [], ["Other"], ["Umbratic", "Other"], ""]) {
-    assert.throws(() => verifyUpdaterPublisher({ publisherName }, "Umbratic"), /publisher/);
-  }
-  assert.doesNotThrow(() => verifyUpdaterPublisher({ publisherName: "Umbratic" }, "Umbratic"));
-  assert.doesNotThrow(() => verifyUpdaterPublisher({ publisherName: ["Umbratic"] }, "Umbratic"));
-  assert.throws(() => verifyUpdaterPublisher({ publisherName: "Umbratic" }, ""), /publisher/);
+test("signed macOS releases cannot switch Apple developer teams", () => {
   for (const description of ["", "TeamIdentifier=not set", "TeamIdentifier=OTHER12345"]) {
     assert.throws(() => verifyMacSigningTeam(description, "P3UF4Y6ASK"), /Developer ID team/);
   }
@@ -19,7 +13,7 @@ test("signed release identities cannot omit updater verification or switch Apple
 
 test("signed packages fail closed on missing credentials and development CPU-only mode", (t) => {
   const names = ["APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID",
-    "SIGNPATH_ORGANIZATION_ID", "SIGNPATH_PROJECT_SLUG", "SIGNPATH_SIGNING_POLICY_SLUG", "SIGNPATH_PUBLISHER", "UMBRATIC_LLAMA_CPU_ONLY"];
+    "UMBRATIC_LLAMA_CPU_ONLY"];
   const original = Object.fromEntries(names.map((name) => [name, process.env[name]]));
   t.after(() => {
     for (const [name, value] of Object.entries(original)) {
@@ -28,7 +22,7 @@ test("signed packages fail closed on missing credentials and development CPU-onl
   });
   for (const name of names) delete process.env[name];
   assert.throws(() => requireSigningEnvironment("darwin"), /notarization credentials/);
-  assert.throws(() => requireSigningEnvironment("win32"), /release signing is required/);
+  assert.throws(() => requireSigningEnvironment("win32"), /unsigned and promoted from verified CI artifacts/);
   process.env.APPLE_ID = "release@example.test";
   process.env.APPLE_TEAM_ID = "TEAM";
   assert.throws(() => requireSigningEnvironment("darwin"), /notarization credentials/);

@@ -51,13 +51,6 @@ jobs:
       - name: Install locked dependencies without lifecycle scripts
         id: dependencies
         run: npm ci --ignore-scripts --omit=peer
-      - name: Preflight Windows fixture tools and certificate support
-        if: runner.os == 'Windows'
-        timeout-minutes: 5
-        run: node scripts/ci/test-windows-signpath.ts preflight
-      - name: Remove preflight fixture state
-        if: always() && runner.os == 'Windows'
-        run: node scripts/ci/test-windows-signpath.ts cleanup
       - run: node scripts/check-release-version.ts
       - id: electron
         run: |
@@ -94,13 +87,6 @@ jobs:
         id: archives
         if: ${{ !cancelled() && steps.installers.outcome == 'success' }}
         run: node scripts/ci/verify-installer-artifacts.ts
-      - name: Qualify all real Windows signing handoffs with an ephemeral fixture identity
-        if: ${{ !cancelled() && steps.archives.outcome == 'success' && runner.os == 'Windows' }}
-        timeout-minutes: 60
-        run: node scripts/ci/test-windows-signpath.ts
-      - name: Remove fixture certificates and restore unsigned qualification outputs
-        if: always() && runner.os == 'Windows'
-        run: node scripts/ci/test-windows-signpath.ts cleanup
       - name: Save qualified native runtime builds from trusted main
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native_cache.outputs.cache-hit != 'true' }}
         continue-on-error: true

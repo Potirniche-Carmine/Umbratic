@@ -91,21 +91,16 @@ win:
   extraFiles:
     - from: .package/windows-runtime
       to: .
-  forceCodeSigning: true
+  forceCodeSigning: false
   verifyUpdateCodeSignature: true
-  signExts: [".dll", ".node"]
-  signtoolOptions:
-    signingHashAlgorithms: [sha256]
   icon: assets/icons/icon.ico
   # x64 and arm64 are separate builds carrying differently-compiled sidecars,
   # so the architecture is part of the file name. Without it both land on the
   # release as Umbratic-${version}.exe and one silently replaces the other.
   # The updater picks the file whose name carries its own architecture.
   artifactName: Umbratic-${version}-${arch}.${ext}
-  # Signing uses the approved SignPath project and trusted GitHub artifacts.
-  # The package script supplies the bounded workflow handoff hook.
-  # It is not written here because every unsigned developer package
-  # would then try to sign and fail.
+  # Unsigned Windows installers are promoted unchanged from verified CI.
+  # The updater checks release metadata and the downloaded installer checksum.
   target:
     - nsis
 # Flipped after pack, before signing. runAsNode stays off: the PDF renderer is

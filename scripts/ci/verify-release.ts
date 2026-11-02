@@ -1,12 +1,9 @@
-// Runs on each native release host before its artifacts can leave the job.
+// Verify signed macOS artifacts before they can leave the release job.
 import fs from "node:fs";
 import path from "node:path";
-import { hashFile, verifyMacSigningTeam, verifyUpdaterPublisher } from "./release-artifacts.ts";
+import { hashFile, verifyMacSigningTeam } from "./release-artifacts.ts";
 import { createRequire } from "node:module";
 import { execFileSync, spawnSync } from "node:child_process";
-import { inspect, requireProjectIdentity, sha256, signingRoot, verifyInventory } from "./windows-signing.ts";
-import { withWindowsArchiveTool } from "./windows-archive-tool.ts";
-import { verifyNsisUninstaller } from "./nsis-archive.ts";
 
 const root = path.resolve("target/release/desktop");
 function run(command: string, args: string[]) {
@@ -28,7 +25,20 @@ if (process.platform === "darwin") {
   const submission = JSON.parse(execFileSync("xcrun", ["notarytool", "submit", dmg, "--keychain-profile",
     process.env.UMBRATIC_NOTARY_PROFILE, "--keychain", process.env.CSC_KEYCHAIN, "--wait", "--timeout", "20m", "--output-format", "json"], { encoding: "utf8", timeout: 21 * 60 * 1000 }));
   if (submission.status !== "Accepted") throw new Error("The macOS disk image did not pass notarization.");
-  run("xcrun", ["stapler", "staple", dmg]);
+  // Apple ticket delivery can fail after notarization has already succeeded.
+  // Retry only transient transport/service failures; every gate below still runs.
+  for (let attempt = 1; ; attempt++) {
+    const result = spawnSync("xcrun", ["stapler", "staple", dmg], {
+      encoding: "utf8", timeout: 120_000, maxBuffer: 1024 * 1024,
+    });
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    if (output.trim()) console.log(output.trim());
+    if (!result.error && result.status === 0) break;
+    const transient = /NSURLErrorDomain Code=-(?:1001|1005|1009)\b|network connection was lost|request timed out|service unavailable|HTTP[^\n]*\b(?:502|503|504)\b/i.test(output);
+    if (attempt >= 3 || result.error || !transient) throw new Error(`Disk image stapling failed (exit ${result.status}).`, { cause: result.error });
+    console.log(`Retrying Apple ticket delivery after transient failure (${attempt}/3).`);
+    await new Promise((resolve) => setTimeout(resolve, attempt * 15_000));
+  }
   run("xcrun", ["stapler", "validate", dmg]);
   run("codesign", ["--verify", "--strict", dmg]);
   run("spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", dmg]);
@@ -46,35 +56,16 @@ if (process.platform === "darwin") {
   }
   if (metadata.path === path.basename(dmg)) metadata.sha512 = hashFile(dmg, "sha512", "base64");
   fs.writeFileSync(channelPath, dump(metadata));
-} else if (process.platform === "win32") {
-  const unpacked = process.arch === "x64" ? "win-unpacked" : "win-arm64-unpacked";
-  const { load } = createRequire(import.meta.url)("js-yaml");
-  const app = path.join(root, unpacked);
-  const publisher = process.env.SIGNPATH_PUBLISHER!;
-  verifyUpdaterPublisher(load(fs.readFileSync(path.join(app, "resources/app-update.yml"), "utf8")), publisher);
-  const inventory = JSON.parse(fs.readFileSync(path.join(app, "resources/windows-signing-provenance.json"), "utf8"));
-  verifyInventory(app, inventory, publisher);
-  const installerName = `Umbratic-${version}-${process.arch}.exe`;
-  const installer = path.join(root, installerName);
-  requireProjectIdentity(inspect([installer])[0], publisher, version);
-  const result = JSON.parse(fs.readFileSync(path.join(signingRoot(), "uninstaller/result.json"), "utf8"));
-  if (result.length !== 1 || result[0].name !== `Umbratic-${version}-${process.arch}.__uninstaller.exe`) throw new Error("Missing signed uninstaller provenance.");
-  requireProjectIdentity(result[0].identity, publisher, version);
-  await withWindowsArchiveTool((tool) => verifyNsisUninstaller(tool, installer, result[0].sha256));
-  fs.writeFileSync(path.join(stage, `Umbratic-${version}-${process.arch}-windows-provenance.json`), JSON.stringify({
-    ...inventory, installer: { name: installerName, sha256: sha256(installer) }, uninstaller: result[0],
-  }, null, 2) + "\n");
 } else throw new Error("Unsupported release host.");
-const channel = process.platform === "darwin" ? "latest-mac.yml" : "latest.yml";
-const expected = process.platform === "darwin" ? [`.dmg`, `.zip`] : [`-${process.arch}.exe`];
+const channel = "latest-mac.yml";
+const expected = [".dmg", ".zip"];
 for (const suffix of expected) {
   if (!fs.existsSync(path.join(root, `Umbratic-${version}${suffix}`))) throw new Error(`Missing release artifact ${suffix}.`);
 }
 if (!fs.existsSync(path.join(root, channel))) throw new Error(`Missing ${channel}.`);
 for (const name of fs.readdirSync(root)) {
   if (name === channel || /^Umbratic-.*\.(?:exe|dmg|zip|blockmap)$/.test(name)) {
-    const destination = name === "latest.yml" && process.arch === "arm64" ? "latest-arm64.yml" : name;
-    fs.copyFileSync(path.join(root, name), path.join(stage, destination));
+    fs.copyFileSync(path.join(root, name), path.join(stage, name));
   }
 }
 console.log(`Verified signed ${process.platform}/${process.arch} release artifacts.`);

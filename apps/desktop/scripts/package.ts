@@ -1,9 +1,8 @@
 // Runs electron-builder with this machine's release identity applied.
 //
 // electron-builder finds the macOS signing identity in the keychain and
-// notarizes when the APPLE_* variables are present. Signed Windows releases
-// use the GitHub SignPath workflow. The initial unsigned Windows release
-// promotes independently verified CI installers.
+// notarizes when the APPLE_* variables are present. Windows packages are
+// unsigned; releases promote independently verified CI installers.
 //
 // Extra arguments pass straight through: `npm run package -- --win nsis --x64`.
 // `--unsigned` is ours, not electron-builder's: it skips signing and Apple's
@@ -13,12 +12,12 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import process from "node:process";
 
-import { loadReleaseEnv, requireSigningEnvironment, windowsSigningConfig } from "../../../scripts/release-env.ts";
+import { loadReleaseEnv, requireSigningEnvironment } from "../../../scripts/release-env.ts";
 
 const require = createRequire(import.meta.url);
 
 const forwarded = process.argv.slice(2).filter((argument) => argument !== "--unsigned");
-const unsigned = forwarded.length < process.argv.length - 2;
+const unsigned = process.platform === "win32" || forwarded.length < process.argv.length - 2;
 
 if (unsigned) {
   // The release identity stays untouched in the keychain; electron-builder is
@@ -42,16 +41,6 @@ if (unsigned) {
   args.push("-c.mac.notarize=false", "-c.mac.forceCodeSigning=false", "-c.dmg.sign=false", "-c.win.forceCodeSigning=false");
 } else if (process.platform === "darwin") {
   args.push("-c.mac.notarize=true");
-} else if (process.platform === "win32") {
-  if (!process.env.UMBRATIC_SIGNPATH_STAGING) throw new Error("Windows releases must run through the SignPath release workflow.");
-  const signing = windowsSigningConfig();
-  if (signing) {
-    args.push(
-      "-c.win.signtoolOptions.sign=scripts/sign-windows.cjs",
-      `-c.win.signtoolOptions.publisherName=${signing.publisherName}`,
-    );
-    console.log(`Requesting SignPath approval as "${signing.publisherName}".`);
-  }
 }
 
 const child = spawn(process.execPath, [require.resolve("electron-builder/cli.js"), ...args], { stdio: "inherit" });

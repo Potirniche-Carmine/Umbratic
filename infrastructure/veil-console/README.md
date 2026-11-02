@@ -31,7 +31,7 @@ python3 infrastructure/veil-console/deploy/verify-metal-kit.py \
 Both output and qualification work directories must be fresh. The build also requires `govulncheck`. Linux uses an operator-reviewed dependency kit supplied with `--dependency-dir`.
 
 ```sh
-npm run veil-console:release -- --customer acme --seats 10 --version 0.0.1
+npm run veil-console:release -- --customer acme --seats 10 --version 0.0.2
 ```
 
 The ZIP is written to `artifacts/releases/`. The build generates an owner-only entitlement signing key on first use; back it up privately. Release work defaults to `artifacts/release-work/` on macOS and `~/umbratic-release/` on Linux. For updates, reuse that key and pass `--org-uid` from the existing `entitlement.json`. `--signing-key-file` selects an existing key; `--os`, `--arch`, and `--profile` select a supported target.
