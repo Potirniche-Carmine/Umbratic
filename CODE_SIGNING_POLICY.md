@@ -4,9 +4,15 @@ Download official releases from [GitHub Releases](https://github.com/Potirniche-
 
 macOS releases are signed with an Apple Developer ID and notarized. Windows
 installers are unsigned and may trigger Windows security warnings. Release
-artifacts include SHA-256 checksums and GitHub artifact attestations, which
-provide build provenance; attestations do not provide a Windows publisher
-signature.
+downloads are verified against GitHub's SHA-256 asset digests. Checksums and
+GitHub artifact attestations are verified before publication and retained in
+the release workflow's CI artifacts; they do not provide a Windows publisher
+signature. Public release assets contain only the app packages.
+
+The clean `v0.0.2` release is the baseline. Its existing installers use the old
+YAML update feed, so existing users must manually install a build containing
+the new release API updater before automatic updates can resume. GitHub adds
+source-code archive links and digest labels to its release page automatically.
 
 ## Privacy
 

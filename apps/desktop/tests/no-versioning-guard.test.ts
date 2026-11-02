@@ -49,6 +49,7 @@ const descriptiveVersionFiles = new Set([
   "apps/desktop/tests/main-ocr-runtime.test.ts",
   // electron-updater's UpdateInfo, a shape we do not own, describing a release.
   "apps/desktop/tests/main-app-updates.test.ts",
+  "apps/desktop/tests/release-update-provider.test.ts",
   "apps/desktop/tests/release-artifacts.test.ts",
   "apps/desktop/tests/release-publish.test.ts",
   "apps/desktop/tests/release-version.test.ts",

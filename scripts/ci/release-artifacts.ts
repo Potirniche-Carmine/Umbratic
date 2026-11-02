@@ -5,6 +5,13 @@ import { createRequire } from "node:module";
 
 const { load } = createRequire(import.meta.url)("js-yaml");
 
+/** The public release contains only downloads people can install or unpack. */
+export function publicReleaseArtifactNames(version: string): string[] {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Invalid stable release version.");
+  const prefix = `Umbratic-${version}`;
+  return [`${prefix}-arm64.exe`, `${prefix}-x64.exe`, `${prefix}.dmg`, `${prefix}.zip`];
+}
+
 export function verifyMacSigningTeam(description: string, expected: string): void {
   if (!/^[A-Z0-9]{10}$/.test(expected ?? "") || description.match(/^TeamIdentifier=(.+)$/m)?.[1] !== expected) {
     throw new Error("Packaged macOS app does not use the configured Developer ID team.");
