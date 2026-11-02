@@ -83,7 +83,6 @@ export function verifyAttestations(files: readonly string[], bundle: string, ide
       "--predicate-type", "https://slsa.dev/provenance/v1",
       "--cert-oidc-issuer", "https://token.actions.githubusercontent.com",
       "--cert-identity", `https://github.com/${workflow}@${identity.sourceRef}`,
-      "--signer-workflow", workflow,
       "--signer-digest", identity.commit,
       "--source-digest", identity.commit,
       "--source-ref", identity.sourceRef,

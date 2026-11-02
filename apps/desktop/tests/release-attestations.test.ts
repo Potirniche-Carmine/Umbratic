@@ -59,11 +59,13 @@ test("every final installer, updater file, provenance inventory and checksum is 
     assert.equal(command, "gh");
     for (const [flag, expected] of [
       ["--repo", identity.repository], ["--source-digest", commit], ["--signer-digest", commit],
-      ["--source-ref", identity.sourceRef], ["--signer-workflow", "owner/Umbratic/.github/workflows/release.yml"],
+      ["--source-ref", identity.sourceRef],
       ["--cert-identity", "https://github.com/owner/Umbratic/.github/workflows/release.yml@refs/heads/main"],
       ["--cert-oidc-issuer", "https://token.actions.githubusercontent.com"],
       ["--predicate-type", "https://slsa.dev/provenance/v1"], ["--bundle", path.join(directory, module.provenanceName)],
     ]) assert.equal(args[args.indexOf(flag) + 1], expected);
+    // gh accepts one identity selector; the exact SAN binds workflow and ref.
+    for (const flag of ["--signer-workflow", "--signer-repo", "--cert-identity-regex"]) assert.ok(!args.includes(flag));
     assert.ok(args.includes("--deny-self-hosted-runners"));
     assert.equal(options.timeout, 60_000);
     assert.equal(options.maxBuffer, 1024 * 1024);
