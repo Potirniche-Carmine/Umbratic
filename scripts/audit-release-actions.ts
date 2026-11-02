@@ -18,7 +18,7 @@ const controls = [
   "scripts/ci/release-attestations.ts", "scripts/ci/verify-ci-attestation.ts",
   "scripts/ci/verify-release.ts",
   "scripts/ci/promote-windows-release.ts",
-  "scripts/ci/windows-signing.ts", "scripts/ci/windows-signpath-build.ts",
+  "scripts/ci/windows-upstream.ts",
   "scripts/ci/build-cache.ts",
 ];
 const digest = (bytes: Uint8Array) => crypto.createHash("sha256").update(bytes).digest("hex");

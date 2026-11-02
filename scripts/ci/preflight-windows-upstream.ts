@@ -1,7 +1,7 @@
 // The provisioning step verifies the official Electron archive checksum first.
 // Run the same upstream policy before any costly native runtime compilation.
 import path from "node:path";
-import { inspect, nativeFiles, repository, upstreamIdentity } from "./windows-signing.ts";
+import { inspect, nativeFiles, repository, upstreamIdentity } from "./windows-upstream.ts";
 
 if (process.platform !== "win32") throw new Error("Windows upstream preflight requires Windows.");
 const directory = path.join(repository, "node_modules/electron/dist");

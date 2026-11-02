@@ -188,17 +188,8 @@ test("CI verifies every native platform on pull requests and main without releas
   const vulkan = workflow.jobs.verify.steps.find((step) => step.run === "./scripts/ci/install-vulkan.ps1");
   assert.equal(vulkan.if, "${{ !cancelled() && github.ref == 'refs/heads/main' && steps.electron.outcome == 'success' && matrix.os == 'windows-2025' }}");
   assert.ok(!commands.some((command) => command.includes("install-windows-signing")));
-  const preflight = workflow.jobs.verify.steps.find((step) => step.run === "node scripts/ci/test-windows-signpath.ts preflight");
-  assert.equal(preflight.if, "runner.os == 'Windows'");
-  assert.equal(preflight["timeout-minutes"], 5);
   const electron = workflow.jobs.verify.steps.find((step) => step.id === "electron");
-  assert.ok(commands.indexOf(preflight.run) < commands.indexOf(electron.run));
   assert.match(electron.run, /npm run dependencies:provision[\s\S]+if \[\[ "\$RUNNER_OS" == 'Windows' \]\][\s\S]+node scripts\/ci\/preflight-windows-upstream\.ts/);
-  const fullFixture = workflow.jobs.verify.steps.find((step) => step.run === "node scripts/ci/test-windows-signpath.ts");
-  assert.equal(fullFixture.if, "${{ !cancelled() && steps.archives.outcome == 'success' && runner.os == 'Windows' }}");
-  const cleanups = workflow.jobs.verify.steps.filter((step) => step.run === "node scripts/ci/test-windows-signpath.ts cleanup");
-  assert.equal(cleanups.length, 2);
-  assert.ok(cleanups.every((step) => step.if === "always() && runner.os == 'Windows'"));
   assert.doesNotMatch(source, /UMBRATIC_LLAMA_CPU_ONLY/);
   assert.doesNotMatch(source, /secrets\./);
   assert.deepEqual(workflow.jobs.required.needs, ["verify", "audit", "provenance"]);

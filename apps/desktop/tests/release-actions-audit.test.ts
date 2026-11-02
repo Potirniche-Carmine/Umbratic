@@ -24,7 +24,7 @@ test("changing an applicability control, omitting one or changing an action pin 
   sources.set("scripts/ci/release-attestations.ts", Buffer.from("changed certificate policy"));
   assert.throws(() => verifyActionControls(fixture, (name) => sources.get(name)), /control changed/);
   const other = controls();
-  delete other.fixture.controls["scripts/ci/windows-signing.ts"];
+  delete other.fixture.controls["scripts/ci/windows-upstream.ts"];
   assert.throws(() => verifyActionControls(other.fixture, (name) => other.sources.get(name)), /Incomplete/);
   const promotion = controls();
   promotion.sources.set("scripts/ci/promote-windows-release.ts", Buffer.from("skip CI provenance verification"));
