@@ -1,12 +1,13 @@
 {
   "scope": "Exact official action sources and known production dependency inventories, with conditional advisory applicability; not a claim that every upstream code path is patched.",
   "controls": {
-    ".github/workflows/release.yml": "0f13bbd74a9aa51dd6580de7721854e8a982d47451fbed947b1f23ac7ca28ea4",
-    ".github/workflows/verify.yml": "73ffdccb43d7556b7a68b44635cce6f5d9117c5d263fa47d779bcc09a7e0b056",
+    ".github/workflows/release.yml": "aa9ae0b1e77f6b1619b024de48494c4e789f104b310b312c87824a67b7b6894a",
+    ".github/workflows/verify.yml": "e222e047ca7da19412225dc4f63ff1739418243ec989e32668914ae01764a3fb",
     "scripts/ci/release-attestations.ts": "22ac59c0bdc51ab35f0d09fa3069c73acc29344d66636aed6548819d9e2f0643",
     "scripts/ci/verify-ci-attestation.ts": "46032be3b8d418fd2e0cb2eb444127626f7f5543ad3fdc724313de8efb801c51",
     "scripts/ci/windows-signing.ts": "e05a783758ae407fb93b533675855f66c459461d7a5a16667d55aaf774d1d2ea",
-    "scripts/ci/windows-signpath-build.ts": "b20e2ca5cb6daf1d283f900dbe56e37dd47f0893370204cd7cbdb37dcd872ba3"
+    "scripts/ci/windows-signpath-build.ts": "b20e2ca5cb6daf1d283f900dbe56e37dd47f0893370204cd7cbdb37dcd872ba3",
+    "scripts/ci/build-cache.ts": "b25e28c1ae4446d3616bc24b5ff7d997f59355c2ff0f4a325f42f350b48547f0"
   },
   "actions": [
     {
@@ -363,6 +364,154 @@
           "id": "GHSA-4p3w-j4w9-5jqw",
           "modified": "2026-09-30T00:00:03.858466Z",
           "reason": "Only numeric timeout/duration formatting is used; no attacker-influenced locale or object is passed to moment.locale()."
+        }
+      ]
+    },
+    {
+      "repository": "actions/cache",
+      "commit": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+      "release": "v6.1.0",
+      "inventoryScope": "Conservative non-dev npm lock graph for the exact restore-only and save-only bundles, with each raw advisory individually reviewed; not a claim that upstream packages are patched.",
+      "blobs": {
+        "restore/action.yml": "bb552a94cec165255080b7e13fe3d2051c6c79e321e99435b5859dc7de5e9057",
+        "save/action.yml": "5da400e1a7551cee617339fd1a5281483d71e6c56d86dd117fbd354f047308ec",
+        "package-lock.json": "58169857e6b2c4ab9f4f0eb411c9a617a51ed9bf8e422d2e423260261b6354a7",
+        "dist/restore-only/index.js": "8522c6be9a4650a3b1571f7222293f262cc4c4708fbe061d8ed04654d476cf16",
+        "dist/save-only/index.js": "0d3cf341a79cdc0a8ce5a71103f46174e12cf4f98db46f15b8e604932eefd487"
+      },
+      "findings": [
+        {
+          "package": "brace-expansion",
+          "version": "1.1.12",
+          "id": "GHSA-3jxr-9vmj-r5cp",
+          "modified": "2026-09-10T03:51:10.092354Z",
+          "reason": "The cache path is the fixed literal apps/desktop/.llama-cache, without braces or attacker-controlled glob expressions; these expansion and recursion paths receive no untrusted pattern."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "1.1.12",
+          "id": "GHSA-6j4f-fj2g-mc7p",
+          "modified": "2026-09-30T00:00:03.836613Z",
+          "reason": "The cache path is the fixed literal apps/desktop/.llama-cache, without braces or attacker-controlled glob expressions; these expansion and recursion paths receive no untrusted pattern."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "1.1.12",
+          "id": "GHSA-f886-m6hf-6m8v",
+          "modified": "2026-09-10T03:51:00.342356Z",
+          "reason": "The cache path is the fixed literal apps/desktop/.llama-cache, without braces or attacker-controlled glob expressions; these expansion and recursion paths receive no untrusted pattern."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "1.1.12",
+          "id": "GHSA-mh99-v99m-4gvg",
+          "modified": "2026-09-10T03:50:12.282849Z",
+          "reason": "The cache path is the fixed literal apps/desktop/.llama-cache, without braces or attacker-controlled glob expressions; these expansion and recursion paths receive no untrusted pattern."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "1.1.12",
+          "id": "GHSA-q2hr-2g5m-vwhr",
+          "modified": "2026-09-30T00:00:03.849541Z",
+          "reason": "The cache path is the fixed literal apps/desktop/.llama-cache, without braces or attacker-controlled glob expressions; these expansion and recursion paths receive no untrusted pattern."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "1.1.12",
+          "id": "GHSA-qhr7-859c-m2p7",
+          "modified": "2026-09-30T00:00:04.402763Z",
+          "reason": "The cache path is the fixed literal apps/desktop/.llama-cache, without braces or attacker-controlled glob expressions; these expansion and recursion paths receive no untrusted pattern."
+        },
+        {
+          "package": "brace-expansion",
+          "version": "1.1.12",
+          "id": "GHSA-rgw5-rvv9-x895",
+          "modified": "2026-09-10T03:51:14.535270Z",
+          "reason": "The cache path is the fixed literal apps/desktop/.llama-cache, without braces or attacker-controlled glob expressions; these expansion and recursion paths receive no untrusted pattern."
+        },
+        {
+          "package": "minimatch",
+          "version": "3.1.5",
+          "id": "GHSA-g3hv-75wg-m249",
+          "modified": "2026-10-30T23:15:07.420159Z",
+          "reason": "The cache path is the fixed literal apps/desktop/.llama-cache; no attacker-controlled glob expression or optimization-level input is accepted."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-2m5v-pch6-74hx",
+          "modified": "2026-10-27T19:15:22.407771Z",
+          "reason": "The configured cache action supplies no custom function-valued TLS pinning option; Node default CA/hostname checks remain in force. The affected custom-TLS-option path does not remove a configured control."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-3wwx-pv8p-q78v",
+          "modified": "2026-09-28T22:00:08.266327Z",
+          "reason": "The cache restore/save paths do not construct WebSocket clients or process WebSocket frames."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-4qv8-2p9j-2685",
+          "modified": "2026-10-23T22:30:04.104974Z",
+          "reason": "The cache restore/save paths do not construct EventSource clients or accept event-stream input."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-8xcm-r25x-g524",
+          "modified": "2026-09-10T03:51:13.567076Z",
+          "reason": "No Undici retry interceptor or downstream HTTP response forwarder is configured by the cache restore/save paths."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-9fm3-97px-rjf6",
+          "modified": "2026-10-27T19:15:22.400702Z",
+          "reason": "The cache restore/save paths do not construct WebSocket clients or process automatic PONG traffic."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-m8rv-5g2x-5cg5",
+          "modified": "2026-09-10T03:51:14.281925Z",
+          "reason": "Cache requests use generated metadata or filesystem streams; no attacker-supplied duck-typed Blob with an untrusted type property is provided."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-qrxm-fqhp-jwvm",
+          "modified": "2026-10-27T19:15:22.403573Z",
+          "reason": "Destinations come from hosted-runner GitHub cache configuration and its authenticated storage responses, not a workspace-supplied URL. A compromised trusted provider can still deny availability; the upstream TLS1.2 path is not claimed patched."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-r53p-7pc4-xj5r",
+          "modified": "2026-09-29T18:30:41.154532Z",
+          "reason": "No Undici retry interceptor or downstream HTTP response forwarder is configured by the cache restore/save paths."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-rfgv-xxqx-mfg5",
+          "modified": "2026-09-29T18:30:41.167602Z",
+          "reason": "The cache restore/save paths do not construct WebSocket clients or negotiate WebSocket subprotocols."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-v3r7-h72x-cjcm",
+          "modified": "2026-09-10T03:51:14.535204Z",
+          "reason": "Cache authentication uses runner-provided authorization headers; the Undici setCookie helper is not used."
+        },
+        {
+          "package": "undici",
+          "version": "6.27.0",
+          "id": "GHSA-xjj6-f33q-929c",
+          "modified": "2026-10-23T22:30:05.007687Z",
+          "reason": "Response encodings come from the hosted-runner GitHub cache service and its authenticated storage endpoints, not a workspace-selected server. A compromised trusted provider can deny availability; the upstream decoder path is not claimed patched."
         }
       ]
     }

@@ -186,7 +186,7 @@ test("CI verifies every native platform on pull requests and main without releas
   assert.ok(commands.includes("node scripts/check-release-version.ts"));
   assert.ok(commands.includes("node scripts/ci/verify-installer-artifacts.ts"));
   const vulkan = workflow.jobs.verify.steps.find((step) => step.run === "./scripts/ci/install-vulkan.ps1");
-  assert.equal(vulkan.if, "${{ !cancelled() && steps.electron.outcome == 'success' && matrix.os == 'windows-2025' }}");
+  assert.equal(vulkan.if, "${{ !cancelled() && github.ref == 'refs/heads/main' && steps.electron.outcome == 'success' && matrix.os == 'windows-2025' }}");
   assert.ok(!commands.some((command) => command.includes("install-windows-signing")));
   const preflight = workflow.jobs.verify.steps.find((step) => step.run === "node scripts/ci/test-windows-signpath.ts preflight");
   assert.equal(preflight.if, "runner.os == 'Windows'");
@@ -278,7 +278,7 @@ test("Windows release signs three immutable GitHub artifacts before generating f
   assert.ok(final > steps.findIndex((step) => step.run?.includes("windows-signpath-build.ts finish")));
 });
 
-test("credential-free installer qualification still runs after suite failure without hiding it", () => {
+test("main installer qualification still runs after suite failure without hiding it", () => {
   const source = fs.readFileSync(verifyWorkflowUrl, "utf8");
   const workflow = load(source);
   const steps = workflow.jobs.verify.steps;
@@ -288,10 +288,23 @@ test("credential-free installer qualification still runs after suite failure wit
   const archives = steps.find((step) => step.run === "node scripts/ci/verify-installer-artifacts.ts");
   assert.match(electron.run, /^npm run dependencies:provision\n/);
   assert.match(electron.run, /node scripts\/ci\/preflight-windows-upstream\.ts/);
-  assert.equal(installers.if, "${{ !cancelled() && steps.electron.outcome == 'success' }}");
+  assert.equal(workflow.jobs.verify.if, undefined);
+  assert.equal(workflow.jobs.audit.if, undefined);
+  assert.equal(suite.if, undefined);
+  assert.equal(installers.if, "${{ !cancelled() && github.ref == 'refs/heads/main' && steps.electron.outcome == 'success' }}");
   assert.equal(archives.if, "${{ !cancelled() && steps.installers.outcome == 'success' }}");
   assert.equal(suite["continue-on-error"], undefined);
-  assert.doesNotMatch(source, /continue-on-error/);
+  const optionalCaches = [];
+  for (const job of Object.values(workflow.jobs)) {
+    assert.equal(job["continue-on-error"], undefined);
+    for (const step of job.steps ?? []) {
+      if (/^actions\/cache\/(?:restore|save)@[0-9a-f]{40}$/.test(step.uses ?? "")) {
+        assert.equal(step["continue-on-error"], true);
+        optionalCaches.push(step);
+      } else assert.equal(step["continue-on-error"], undefined);
+    }
+  }
+  assert.equal(optionalCaches.length, 2);
   assert.equal(workflow.jobs.required.if, "always()");
   const gate = workflow.jobs.required.steps[0].run;
   assert.match(gate, /^test "\$VERIFY" = success$/m);
@@ -299,4 +312,45 @@ test("credential-free installer qualification still runs after suite failure wit
   assert.match(gate, /"\$GITHUB_EVENT_NAME" == push && "\$GITHUB_REF" == refs\/heads\/main/);
   assert.match(gate, /test "\$PROVENANCE" = success/);
   assert.match(gate, /test "\$PROVENANCE" = skipped/);
+});
+
+test("the real required-check shell gate rejects failed suites, audits and main provenance", () => {
+  const workflow = load(fs.readFileSync(verifyWorkflowUrl, "utf8"));
+  const gate = workflow.jobs.required.steps[0].run;
+  for (const [event, ref, verify, audit, provenance, succeeds] of [
+    ["pull_request", "refs/pull/1/merge", "success", "success", "skipped", true],
+    ["pull_request", "refs/pull/1/merge", "failure", "success", "skipped", false],
+    ["pull_request", "refs/pull/1/merge", "success", "failure", "skipped", false],
+    ["pull_request", "refs/pull/1/merge", "success", "success", "success", false],
+    ["push", "refs/heads/main", "success", "success", "success", true],
+    ["push", "refs/heads/main", "failure", "success", "success", false],
+    ["push", "refs/heads/main", "success", "failure", "success", false],
+    ["push", "refs/heads/main", "success", "success", "skipped", false],
+    ["push", "refs/heads/main", "success", "success", "failure", false],
+  ]) {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", gate], {
+      encoding: "utf8", timeout: 10_000,
+      env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_REF: ref, VERIFY: verify, AUDIT: audit, PROVENANCE: provenance },
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status === 0, succeeds, JSON.stringify({ event, verify, audit, provenance }));
+  }
+});
+
+test("only trusted main saves exact native build caches and releases only restore them", () => {
+  const ci = load(fs.readFileSync(verifyWorkflowUrl, "utf8"));
+  const release = load(fs.readFileSync(new URL("../../../.github/workflows/release.yml", import.meta.url), "utf8"));
+  const key = ci.jobs.verify.steps.find((step) => step.id === "native_cache_key");
+  assert.equal(key.if, "${{ !cancelled() && github.ref == 'refs/heads/main' && steps.electron.outcome == 'success' }}");
+  const cacheSteps = ci.jobs.verify.steps.filter((step) => step.uses?.startsWith("actions/cache/"));
+  const save = cacheSteps.find((step) => step.uses.startsWith("actions/cache/save@"));
+  assert.equal(save.if, "${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native_cache.outputs.cache-hit != 'true' }}");
+  const restore = cacheSteps.find((step) => step.uses.startsWith("actions/cache/restore@"));
+  assert.equal(restore.if, "${{ !cancelled() && github.ref == 'refs/heads/main' && steps.native_cache_key.outcome == 'success' }}");
+  const releaseCaches = release.jobs.package.steps.filter((step) => step.uses?.startsWith("actions/cache/"));
+  assert.equal(releaseCaches.length, 1);
+  assert.ok(releaseCaches[0].uses.startsWith("actions/cache/restore@"));
+  for (const step of [...cacheSteps, ...releaseCaches]) {
+    assert.deepEqual(step.with, { path: "apps/desktop/.llama-cache", key: "${{ steps.native_cache_key.outputs.native-key }}" });
+  }
 });

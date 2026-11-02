@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
@@ -131,6 +132,38 @@ test("an up-to-date check and a failed check both record when the feed was consu
   // Nothing installs when nothing is ready.
   module.installAppUpdate();
   assert.equal(updater.installs, 0);
+});
+
+test("the real GitHub provider's empty release feed reports that no release is published", async () => {
+  const { GitHubProvider } = createRequire(import.meta.url)("electron-updater/out/providers/GitHubProvider");
+  const { module, updater } = load({ packaged: true });
+  const provider = new GitHubProvider({ owner: "Potirniche-Carmine", repo: "Umbratic" },
+    { allowPrerelease: false }, { executor: {}, platform: process.platform });
+  provider.httpRequest = async () => '<feed xmlns="http://www.w3.org/2005/Atom"><title>Umbratic releases</title></feed>';
+  updater.nextCheck = () => provider.getLatestVersion().catch((error) => {
+    updater.emit("error", error);
+    throw error;
+  });
+  assert.deepEqual(plain((await module.checkForAppUpdate()).state), {
+    phase: "failed", message: "No release is published for this platform yet",
+  });
+  assert.ok(module.appUpdateStatus().checkedAt);
+  assert.equal(updater.installs, 0);
+});
+
+test("network failures and malformed release feeds remain errors", async () => {
+  for (const [error, message] of [
+    [new Error("net::ERR_INTERNET_DISCONNECTED"), "Could not reach GitHub releases"],
+    [Object.assign(new Error('No element "title"'), { code: "ERR_XML_MISSED_ELEMENT" }), "The update check failed"],
+  ]) {
+    const { module, updater } = load({ packaged: true });
+    updater.nextCheck = () => {
+      updater.emit("error", error);
+      return Promise.reject(error);
+    };
+    assert.deepEqual(plain((await module.checkForAppUpdate()).state), { phase: "failed", message });
+    assert.equal(updater.installs, 0);
+  }
 });
 
 test("turning automatic checks off is stored and stops the background rhythm", () => {

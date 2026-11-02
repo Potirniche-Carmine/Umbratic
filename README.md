@@ -53,6 +53,17 @@ Build outputs go to `target/release/desktop`. Each operating system is built on 
 
 See [desktop releases](docs/guides/release-desktop.md) for signing, packaging, and GitHub publication, the [Code signing policy](CODE_SIGNING_POLICY.md) for signing scope and status, and [supply-chain rules](docs/reference/supply-chain.md) for dependency updates, audits, and SBOMs.
 
+### Build Veil separately
+
+The desktop includes Veil for local use. To build the standalone gateway with Go:
+
+```sh
+cd infrastructure/veil
+go build ./cmd/veil
+```
+
+Configure its authentication and private model runtime using the [Veil guide](infrastructure/veil/README.md#configure). For the optional Veil Console administrator UI and managed server bundle, follow the [server build guide](docs/guides/release-server.md). The GitHub release workflow publishes desktop installers only.
+
 ## Architecture
 
 ```text

@@ -12,11 +12,13 @@ type Review = { controls: Record<string, string>; actions: Action[] };
 const repositories = new Map([
   ["actions/attest", ["action.yml", "dist/index.js", "package-lock.json"]],
   ["signpath/github-action-submit-signing-request", ["action.yml", "index.js"]],
+  ["actions/cache", ["restore/action.yml", "save/action.yml", "dist/restore-only/index.js", "dist/save-only/index.js", "package-lock.json"]],
 ]);
 const controls = [
   ".github/workflows/release.yml", ".github/workflows/verify.yml",
   "scripts/ci/release-attestations.ts", "scripts/ci/verify-ci-attestation.ts",
   "scripts/ci/windows-signing.ts", "scripts/ci/windows-signpath-build.ts",
+  "scripts/ci/build-cache.ts",
 ];
 const digest = (bytes: Uint8Array) => crypto.createHash("sha256").update(bytes).digest("hex");
 
@@ -34,8 +36,11 @@ export function verifyActionControls(review: Review, read: (name: string) => Buf
     if (!expected || !/^[0-9a-f]{40}$/.test(action.commit)
         || Object.keys(action.blobs).sort().join("\n") !== [...expected].sort().join("\n")
         || Object.values(action.blobs).some((hash) => !/^[0-9a-f]{64}$/.test(hash))) throw new Error("Invalid reviewed action source identity.");
-    const refs = [...workflows.matchAll(new RegExp(`uses:\\s*${action.repository.replaceAll(".", "\\.")}@([^\\s#]+)`, "g"))];
-    if (refs.length === 0 || refs.some((match) => match[1] !== action.commit)) throw new Error(`Unreviewed action revision: ${action.repository}`);
+    const selectors = action.repository === "actions/cache" ? ["actions/cache/restore", "actions/cache/save"] : [action.repository];
+    for (const selector of selectors) {
+      const refs = [...workflows.matchAll(new RegExp(`uses:\\s*${selector.replaceAll(".", "\\.")}@([^\\s#]+)`, "g"))];
+      if (refs.length === 0 || refs.some((match) => match[1] !== action.commit)) throw new Error(`Unreviewed action revision: ${selector}`);
+    }
   }
 }
 
@@ -44,7 +49,7 @@ export function verifyActionBlob(action: Action, name: string, bytes: Buffer): v
 }
 
 export function actionPackages(action: Action, sources: Record<string, Buffer>): Package[] {
-  if (action.repository === "actions/attest") {
+  if (["actions/attest", "actions/cache"].includes(action.repository)) {
     const lock = JSON.parse(sources["package-lock.json"].toString());
     const packages = new Map<string, Package>();
     for (const [location, entry] of Object.entries(lock.packages) as [string, { name?: string; version: string; dev?: boolean }][]) {

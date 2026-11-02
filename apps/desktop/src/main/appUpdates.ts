@@ -98,7 +98,9 @@ function failureState(error: unknown): UpdateState {
   const text = error instanceof Error ? error.message : String(error);
   if (code === "ENOENT" && /app-update\.yml/.test(text)) return { phase: "failed", message: "Update settings are missing. Reinstall Umbratic" };
   if (/403|429/.test(text)) return { phase: "failed", message: "GitHub is limiting update requests. Try again later" };
-  if (code === "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND" || /404/.test(text)) return { phase: "failed", message: "No release is published for this platform yet" };
+  if (code === "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND" || code === "ERR_UPDATER_NO_PUBLISHED_VERSIONS"
+      || (code === "ERR_XML_MISSED_ELEMENT" && /^(?:Error: )?No published versions on GitHub$/.test(text))
+      || /404/.test(text)) return { phase: "failed", message: "No release is published for this platform yet" };
   if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|net::ERR|network/i.test(text)) return { phase: "failed", message: "Could not reach GitHub releases" };
   if (/sign|certificate|publisher/i.test(text)) return { phase: "failed", message: "The downloaded release did not verify and was discarded" };
   return { phase: "failed", message: "The update check failed" };

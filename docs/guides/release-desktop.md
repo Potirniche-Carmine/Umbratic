@@ -93,9 +93,11 @@ stops release signing; it never falls back to publishing unsigned packages.
 
 1. Update all workspace versions with `npm run release:version -- VERSION`,
    merge the reviewed change and wait for the complete `CI required` check.
-   CI builds unsigned production installers on every target, checks native
-   resources, archives and updater digests, and produces separate CI provenance.
-   Pull requests receive no distribution signing credentials.
+   Pull requests run the full cross-platform tests and audits. After merge,
+   main-push CI builds unsigned production installers on every target, checks
+   native resources, archives and updater digests, qualifies the Windows signing
+   handoffs, and produces separate CI provenance. Pull requests receive no
+   distribution signing credentials.
 2. A successful CI push for current `main` triggers **Release**. Source selection
    rejects stale, fork, PR, failed or unrelated builds. macOS signing includes
    notarization, stapling, signature and Gatekeeper checks.
@@ -123,6 +125,9 @@ CI, then run **Actions → Release → Run workflow** on `main` if the automatic
 stopped on missing credentials. Already-published versions are immutable and
 skipped; bump the version to publish different bytes. A stale main commit or
 unexpected draft asset stops publication.
+
+Manually running CI on `main` also qualifies installers. Release authorization
+still requires a successful CI push for the exact current `main` commit.
 
 ## Inspect the result
 

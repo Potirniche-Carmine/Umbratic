@@ -1,8 +1,8 @@
 # Release action advisory review
 
-This review covers the exact official SignPath and GitHub attestation action
-revisions used by the release workflow. These bundled dependencies sit outside
-the application npm lockfile. They are not all patched upstream; the configured
+This review covers the exact official SignPath, GitHub attestation and native
+build-cache action revisions used by CI and release workflows. These bundled
+dependencies sit outside the application npm lockfile. They are not all patched upstream; the configured
 paths described below avoid the affected operations. This is an applicability
 review, not a claim that every upstream action path is safe.
 
@@ -72,6 +72,31 @@ non-signature PE bytes, trusted project identity, timestamp and product metadata
 The action's success alone cannot authorize a replacement binary. See the
 [code signing policy](../../CODE_SIGNING_POLICY.md) for Foundation eligibility,
 approval requirements and the Windows trust limits of unsigned upstream files.
+
+## Native build-cache action
+
+[`actions/cache` v6.1.0](https://github.com/actions/cache/releases/tag/v6.1.0)
+is pinned to `55cc8345863c7cc4c66a329aec7e433d2d1c52a9`. The audit checks
+the exact restore-only and save-only metadata, both published bundles and their
+conservative production npm lock graph: 44 package versions and 19 individually
+reviewed conditional advisory matches. The official advisory feed was empty at
+review. This does not claim that its bundled dependencies are all patched.
+
+Brace expansion and minimatch receive only the literal
+`apps/desktop/.llama-cache` path, with no user-supplied pattern. The configured
+paths do not use WebSocket, EventSource, cookie helpers, a retry interceptor,
+custom TLS pinning callbacks or a duck-typed Blob with an untrusted type.
+Network destinations come from hosted-runner GitHub cache configuration and
+authenticated storage responses. A compromised trusted provider can still deny
+availability; the upstream TLS and response-decoding paths are not claimed fixed.
+
+The sealed workflow and cache-identity helper allow saves only from successful
+`main` push builds after native qualification. Main CI and release jobs restore
+with an exact toolchain/source key and no fallback keys; release jobs never save.
+Pull requests run the full tests and audits without native cache or installer builds. A failed
+restore is removed before a cold build. The cache contains native sources and
+build intermediates; package outputs, signing material and approval handoffs are
+excluded. All package, archive, signing and provenance checks still run.
 
 This review does not replace operating-system trust checks, provider security,
 or future advisory review. A compromised trusted signing or attestation service

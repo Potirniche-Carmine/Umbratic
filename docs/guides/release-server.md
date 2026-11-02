@@ -5,7 +5,7 @@ A company or self-hosting administrator builds their own deployment from source.
 From the repository root:
 
 ```sh
-npm run veil-console:release -- --customer acme --seats 10 --version 0.0.3
+npm run veil-console:release -- --customer acme --seats 10 --version 0.0.1
 ```
 
 The ZIP appears in `artifacts/releases/`, with the administrator-selected label `acme` in its filename. `--seats` and `--devices-per-user` are your deployment's access limits.

@@ -68,12 +68,27 @@ jobs:
       - name: Run complete verification suite
         run: npm run test:all
       - name: Install reviewed Vulkan SDK
-        if: ${{ !cancelled() && steps.electron.outcome == 'success' && matrix.os == 'windows-2025' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.electron.outcome == 'success' && matrix.os == 'windows-2025' }}
         shell: pwsh
         run: ./scripts/ci/install-vulkan.ps1
+      - name: Identify the exact native runtime build inputs
+        id: native_cache_key
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.electron.outcome == 'success' }}
+        run: node scripts/ci/build-cache.ts
+      - name: Restore trusted native runtime builds
+        id: native_cache
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.native_cache_key.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/desktop/.llama-cache
+          key: ${{ steps.native_cache_key.outputs.native-key }}
+      - name: Discard an incomplete native cache restore
+        if: ${{ !cancelled() && steps.native_cache.outcome == 'failure' }}
+        run: node --input-type=module -e 'import fs from "node:fs"; fs.rmSync("apps/desktop/.llama-cache", { recursive:true, force:true });'
       - name: Build installers and smoke-test production native resources
         id: installers
-        if: ${{ !cancelled() && steps.electron.outcome == 'success' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.electron.outcome == 'success' }}
         run: npm run desktop:release -- --unsigned
       - name: Verify installer archives and actual updater checksums
         id: archives
@@ -86,6 +101,13 @@ jobs:
       - name: Remove fixture certificates and restore unsigned qualification outputs
         if: always() && runner.os == 'Windows'
         run: node scripts/ci/test-windows-signpath.ts cleanup
+      - name: Save qualified native runtime builds from trusted main
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native_cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/desktop/.llama-cache
+          key: ${{ steps.native_cache_key.outputs.native-key }}
       - name: Stage verified unsigned installers for trusted-main provenance
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: node scripts/ci/stage-ci-installers.ts
