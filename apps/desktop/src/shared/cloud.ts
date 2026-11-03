@@ -46,11 +46,13 @@ export type CloudSession = {
   contextWindow?: number;
   inputTokens?: number;
   compactions: number;
-  /** Last shared entry already included in this provider's native session. */
+  /** Last chat entry already included in its native session. */
   lastEntryId?: string;
 };
 export type CloudWorkspace = {
   key: string;
+  /** Stable conversation identity within a provider and folder set. */
+  chatId?: string;
   provider: CloudProvider;
   path: string;
   paths?: string[];
@@ -66,8 +68,16 @@ export type CloudWorkspace = {
   inputTokens?: number;
   sessions?: Partial<Record<CloudProvider, CloudSession>>;
 };
-export type CloudWorkspaceInput = { provider: CloudProvider; repositoryId?: string; repositoryIds?: string[] };
+export type CloudWorkspaceInput = { provider: CloudProvider; repositoryId?: string; repositoryIds?: string[]; chatId?: string; key?: string };
+export type CloudChatRecord = Pick<CloudWorkspace, "key" | "provider" | "state"> & {
+  title: string;
+  paths: string[];
+  updatedAt: string;
+};
 export type CloudApi = {
+  listCloudChats(input: { provider: CloudProvider }): Promise<CloudChatRecord[]>;
+  createCloudChat(input: CloudWorkspaceInput): Promise<CloudWorkspace>;
+  deleteCloudChat(input: { key: string; provider: CloudProvider }): Promise<void>;
   readCloudFile(input: { key: string; path: string }): Promise<{ path: string; text: string }>;
   pickCloudFolders(): Promise<import("./desktopApiTypes").RepositoryInfo[]>;
   saveCloudImages(input: { files: CloudImageInput[] }): Promise<CloudImage[]>;

@@ -72,53 +72,40 @@ test("file previews only read bounded text inside the selected roots, including 
   } finally { f.close(); fs.rmSync(outside, { recursive: true, force: true }); }
 });
 
-test("provider switches resume native sessions with only unseen history and reset clears both", async () => {
+test("provider and chat boundaries preserve native sessions without replaying other conversations", async () => {
   const f = fixture();
   try {
     const input = { provider: "codex", repositoryId: "project" };
     const first = f.service.startCloudTurn({ ...input, prompt: "First instruction" });
     assert.throws(() => f.service.resetCloudContext({ key: first.key }), /Stop/);
-    assert.throws(() => f.service.saveCloudSettings(f.service.getCloudSettings()), /finish/);
     f.calls[0].sink.session("native-1", "account"); f.calls[0].sink.text("answer", "A completed result", false);
-    for (let index = 0; index < 5; index++) f.calls[0].sink.compact();
     f.calls[0].resolve(); await tick();
-    assert.ok(f.service.getCloudWorkspace(input).lastActiveAt);
-    f.service.startCloudTurn({ ...input, prompt: "Second instruction" });
-    assert.equal(f.calls[1].workspace.sessionId, "native-1");
-    assert.equal(f.calls[1].prompt, "Second instruction");
-    assert.equal(f.calls[1].workspace.entries.some(entry => entry.text === "A completed result"), true);
-    f.calls[1].sink.session("native-2", "account"); f.calls[1].resolve(); await tick();
     const other = f.service.getCloudWorkspace({ provider: "claude", repositoryId: "project" });
-    assert.equal(other.key, first.key); assert.equal(other.sessionId, undefined);
-    assert.ok(other.entries.some(entry => entry.text === "A completed result"));
-    f.service.startCloudTurn({ provider: "claude", repositoryId: "project", prompt: "Continue here" });
-    assert.match(f.calls[2].prompt, /A completed result/);
-    assert.match(f.calls[2].prompt, /Current user request:\nContinue here/);
-    assert.equal(f.calls[2].workspace.sessionId, undefined);
-    assert.throws(() => f.service.getCloudWorkspace(input), /switching providers/);
-    f.calls[2].sink.session("claude-native", "claude-account"); f.calls[2].resolve(); await tick();
-    const resumed = f.service.getCloudWorkspace(input);
-    assert.equal(resumed.sessionId, "native-2");
-    assert.equal(resumed.account, "account");
-    // Looking at either provider repeatedly must not mark unseen messages as read.
-    f.service.getCloudWorkspace({ provider: "claude", repositoryId: "project" });
-    f.service.getCloudWorkspace(input);
+    assert.notEqual(other.key, first.key); assert.deepEqual(other.entries, []);
+    f.service.startCloudTurn({ provider: "claude", repositoryId: "project", prompt: "Claude work" });
+    assert.equal(f.calls[1].prompt, "Claude work"); assert.equal(f.calls[1].workspace.sessionId, undefined);
+    assert.equal(f.service.getCloudWorkspace(input).sessionId, "native-1");
+    f.calls[1].sink.session("claude-native", "claude-account"); f.calls[1].resolve(); await tick();
     f.service.startCloudTurn({ ...input, prompt: "Back to ChatGPT" });
-    assert.equal(f.calls[3].workspace.sessionId, "native-2");
-    assert.match(f.calls[3].prompt, /Continue here/);
-    assert.doesNotMatch(f.calls[3].prompt, /First instruction|A completed result|Second instruction/);
+    assert.equal(f.calls[2].workspace.sessionId, "native-1"); assert.equal(f.calls[2].prompt, "Back to ChatGPT");
+    f.calls[2].resolve(); await tick();
+    const newChat = f.service.createCloudChat(input);
+    assert.notEqual(newChat.key, first.key); assert.deepEqual(newChat.entries, []);
+    f.service.startCloudTurn({ provider: "codex", key: newChat.key, prompt: "Separate task" });
+    assert.equal(f.calls[3].workspace.sessionId, undefined); assert.equal(f.calls[3].prompt, "Separate task");
+    assert.throws(() => f.service.deleteCloudChat({ key: newChat.key, provider: "codex" }), /Stop/);
     f.calls[3].resolve(); await tick();
-    f.service.startCloudTurn({ ...input, prompt: "Same provider again" });
-    assert.equal(f.calls[4].prompt, "Same provider again");
-    f.calls[4].resolve(); await tick();
-    const cleared = f.service.resetCloudContext({ key: first.key });
-    assert.equal(cleared.sessionId, undefined); assert.equal(cleared.compactions, 0);
-    assert.deepEqual(cleared.entries, []); assert.equal(cleared.sessions, undefined);
-    const back = f.service.getCloudWorkspace(input);
-    assert.deepEqual(back.entries, []); assert.equal(back.sessionId, undefined);
-    f.service.startCloudTurn({ ...input, prompt: "Fresh work" });
-    assert.equal(f.calls[5].prompt, "Fresh work"); f.calls[5].resolve(); await tick();
-    assert.throws(() => f.service.getCloudWorkspace({ provider: "codex", repositoryId: "unknown" }), /Open the workspace/);
+    assert.equal(f.service.listCloudChats({ provider: "codex" }).length, 2);
+    assert.equal(f.service.listCloudChats({ provider: "claude" }).length, 1);
+    assert.throws(() => f.service.getCloudWorkspace({ provider: "claude", key: first.key }), /different provider/);
+    assert.throws(() => f.service.deleteCloudChat({ provider: "claude", key: first.key }), /no longer available/);
+    f.service.resetCloudContext({ key: first.key });
+    assert.deepEqual(f.service.getCloudWorkspace(input).entries, []);
+    assert.equal(f.service.getCloudWorkspace({ provider: "claude", key: other.key }).sessionId, "claude-native");
+    assert.equal(f.service.getCloudWorkspace({ provider: "codex", key: newChat.key }).entries[0].text, "Separate task");
+    f.service.deleteCloudChat({ provider: "codex", key: newChat.key });
+    assert.throws(() => f.service.getCloudWorkspace({ provider: "codex", key: newChat.key }), /no longer available/);
+    assert.throws(() => f.service.getCloudWorkspace({ ...input, chatId: "../invalid" }), /Invalid chat/);
   } finally { f.close(); }
 });
 
@@ -221,11 +208,11 @@ test("tool completion updates one row and keeps its original description", async
   } finally { f.close(); }
 });
 
-test("reset deletes migrated history and unused attachments without touching another workspace", () => {
+test("reset deletes only its own history and unreferenced attachments", () => {
   const f = fixture();
   try {
     const first = f.service.getCloudWorkspace({ provider: "codex", repositoryId: "project" });
-    const second = f.service.getCloudWorkspace({ provider: "claude", repositoryId: "second" });
+    const second = f.service.getCloudWorkspace({ provider: "claude", repositoryId: "project" });
     const imageRoot = path.join(first.path, "cloud", "images"); fs.mkdirSync(imageRoot, { recursive: true });
     const unique = randomUUID(); const shared = randomUUID(); const draft = randomUUID();
     for (const id of [unique, shared, draft]) {
@@ -233,15 +220,10 @@ test("reset deletes migrated history and unused attachments without touching ano
       fs.writeFileSync(path.join(imageRoot, `${id}.json`), JSON.stringify({ id, extension: ".txt" }));
     }
     const entry = (id, images) => ({ id, kind: "instruction", text: "Saved conversation", at: "2026-11-03T00:00:00Z", images: images.map(id => ({ id })) });
-    const legacy = ["codex", "claude"].map(provider => `cloud:workspace:${createHash("sha256").update(`${provider}\0${first.path}`).digest("hex")}`);
     const insert = f.db.prepare("INSERT OR REPLACE INTO settings (key, payload) VALUES (?, ?)");
-    for (const key of [...legacy, `cloud:workspace:${first.key}`]) insert.run(key, JSON.stringify({ ...first, entries: [entry("old", [unique, shared])] }));
+    insert.run(`cloud:workspace:${first.key}`, JSON.stringify({ ...first, entries: [entry("old", [unique, shared])] }));
     insert.run(`cloud:workspace:${second.key}`, JSON.stringify({ ...second, entries: [entry("other", [shared])] }));
-    const reset = f.service.resetCloudContext({ key: first.key });
-    assert.deepEqual(reset.entries, []);
-    for (const key of legacy) assert.equal(f.db.prepare("SELECT key FROM settings WHERE key = ?").get(key), undefined);
-    const stored = JSON.parse(f.db.prepare("SELECT payload FROM settings WHERE key = ?").get(`cloud:workspace:${first.key}`).payload);
-    assert.deepEqual(stored.entries, []); assert.equal(stored.sessions, undefined);
+    assert.deepEqual(f.service.resetCloudContext({ key: first.key }).entries, []);
     assert.equal(fs.existsSync(path.join(imageRoot, `${unique}.txt`)), false);
     assert.equal(fs.existsSync(path.join(imageRoot, `${unique}.json`)), false);
     assert.equal(fs.existsSync(path.join(imageRoot, `${shared}.txt`)), true);
@@ -252,26 +234,25 @@ test("reset deletes migrated history and unused attachments without touching ano
   } finally { f.close(); }
 });
 
-test("automatic inactivity reset deletes its old records before saving the new turn", async () => {
+test("shared history migrates once to its last provider and retains that native session", () => {
   const f = fixture();
   try {
     const root = f.service.getCloudWorkspace({ provider: "codex", repositoryId: "project" }).path;
     const path2 = path.join(root, "second");
     const key = createHash("sha256").update(`shared\0${path2}`).digest("hex");
-    const legacyKey = createHash("sha256").update(`codex\0${path2}`).digest("hex");
-    const image = randomUUID(); const imageRoot = path.join(root, "cloud", "images"); fs.mkdirSync(imageRoot, { recursive: true });
-    fs.writeFileSync(path.join(imageRoot, `${image}.png`), "old image");
-    const old = { key, path: path2, provider: "codex", state: "idle", compactions: 0, sessionId: "old-native", lastActiveAt: "2020-01-01T00:00:00Z", entries: [
-      { id: "old", kind: "instruction", text: "Old private content", at: "2020-01-01T00:00:00Z", images: [{ id: image }] },
-    ] };
-    const insert = f.db.prepare("INSERT INTO settings (key, payload) VALUES (?, ?)");
-    for (const id of [key, legacyKey]) insert.run(`cloud:workspace:${id}`, JSON.stringify(old));
-    f.service.startCloudTurn({ provider: "codex", repositoryId: "second", prompt: "Fresh request" });
-    assert.equal(f.calls[0].workspace.sessionId, undefined);
-    assert.equal(f.db.prepare("SELECT key FROM settings WHERE key = ?").get(`cloud:workspace:${legacyKey}`), undefined);
-    assert.doesNotMatch(f.db.prepare("SELECT payload FROM settings WHERE key = ?").get(`cloud:workspace:${key}`).payload, /Old private content|old-native/);
-    assert.equal(fs.existsSync(path.join(imageRoot, `${image}.png`)), false);
-    f.calls[0].resolve(); await tick();
+    const old = { key, path: path2, provider: "claude", state: "idle", compactions: 0, sessionId: "old-native", lastActiveAt: new Date().toISOString(), entries: [
+      { id: "old", kind: "instruction", text: "Saved history", at: new Date().toISOString() },
+    ], sessions: { codex: { sessionId: "other-native", compactions: 0 }, claude: { sessionId: "old-native", compactions: 0 } } };
+    f.db.prepare("INSERT INTO settings (key, payload) VALUES (?, ?)").run(`cloud:workspace:${key}`, JSON.stringify(old));
+    assert.deepEqual(f.service.listCloudChats({ provider: "codex" }), []);
+    const chats = f.service.listCloudChats({ provider: "claude" });
+    assert.equal(chats.length, 1); assert.equal(chats[0].title, "Saved history");
+    const restored = f.service.getCloudWorkspace({ provider: "claude", key: chats[0].key });
+    assert.equal(restored.sessionId, "old-native"); assert.equal(restored.sessions.codex, undefined);
+    assert.equal(f.db.prepare("SELECT key FROM settings WHERE key = ?").get(`cloud:workspace:${key}`), undefined);
+    assert.equal(f.service.listCloudChats({ provider: "claude" }).length, 1);
+    f.service.deleteCloudChat({ provider: "claude", key: restored.key });
+    assert.deepEqual(f.service.listCloudChats({ provider: "claude" }), []);
   } finally { f.close(); }
 });
 
@@ -310,11 +291,12 @@ test("disconnect clears only that provider's sessions and quotas, retaining chat
     release(); assert.equal((await logout).state, "sign_in");
     const workspace = f.service.getCloudWorkspace(input);
     assert.equal(workspace.sessionId, undefined); assert.equal(workspace.sessions.codex, undefined);
-    assert.equal(workspace.sessions.claude.sessionId, "claude-session");
+    assert.equal(workspace.sessions.claude, undefined);
+    assert.equal(f.service.getCloudWorkspace({ ...input, provider: "claude" }).sessionId, "claude-session");
     assert.ok(workspace.entries.some(entry => entry.text === "Keep this chat"));
     assert.equal(f.db.prepare("SELECT count(*) AS n FROM settings WHERE key GLOB 'cloud:usage:codex:*'").get().n, 0);
     const stored = JSON.parse(f.db.prepare("SELECT payload FROM settings WHERE key = ?").get(`cloud:workspace:${workspace.key}`).payload);
-    assert.equal(stored.sessions.codex, undefined); assert.equal(stored.sessions.claude.sessionId, "claude-session");
+    assert.equal(stored.sessions.codex, undefined); assert.equal(stored.sessions.claude, undefined);
   } finally { f.close(); }
 });
 

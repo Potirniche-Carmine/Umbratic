@@ -1,6 +1,6 @@
 import { previewCloudConversation } from "./previewCloudConversation";
 import { previewCodexModels } from "./previewCodexModels";
-import { defaultCloudSettings, type CloudApi, type CloudConnection, type CloudProvider } from "../../shared/cloud";
+import { defaultCloudSettings, type CloudApi, type CloudConnection, type CloudProvider, type CloudWorkspace } from "../../shared/cloud";
 
 /** Browser-only design fixtures. Never installs, starts, or authenticates a runtime. */
 export function createPreviewCloudApi(): CloudApi {
@@ -29,7 +29,12 @@ export function createPreviewCloudApi(): CloudApi {
       })),
     };
   }
+  const chats = new Map<string, CloudWorkspace>();
+  const emptyChat = (provider: CloudProvider, key = `preview-${provider}`): CloudWorkspace => ({ key, provider, path: "/preview", state: "idle", compactions: 0, entries: [], approvals: [] });
   return {
+    listCloudChats: async ({ provider }) => [...chats.values()].filter(chat => chat.provider === provider).map(chat => ({ key: chat.key, provider, title: chat.entries[0]?.text || "New chat", paths: [chat.path], state: chat.state, updatedAt: chat.lastActiveAt || "" })),
+    createCloudChat: async ({ provider }) => { const chat = emptyChat(provider, crypto.randomUUID()); chats.set(chat.key, chat); return chat; },
+    deleteCloudChat: async ({ key }) => { chats.delete(key); },
     readCloudFile: async ({ path }) => { if (sourceFixture && ["/preview/core/monitor.c", "/preview/main.c"].includes(path)) return { path, text: sourceText }; throw new Error("Open the desktop app to preview workspace files."); },
     getCloudSettings: async () => settings,
     saveCloudSettings: async value => { settings = value; return settings; },
@@ -40,7 +45,7 @@ export function createPreviewCloudApi(): CloudApi {
     signInCloudProvider: async ({ provider }) => { if (params.get("login") !== "pending") state[provider] = "ready"; return { message: "Preview connection" }; },
     pickCloudFolders: async () => [],
     saveCloudImages: async ({ files }) => files.map(file => ({ id: crypto.randomUUID(), name: file.name, mimeType: file.mimeType || "image/png", previewDataUrl: file.dataUrl })),
-    getCloudWorkspace: async ({ provider }) => ({ key: `preview-${provider}`, provider, path: "/preview", state: "idle", compactions: 0, entries: sourceFixture ? [
+    getCloudWorkspace: async ({ provider, key }) => key && chats.has(key) ? chats.get(key)! : ({ key: `preview-${provider}`, provider, path: "/preview", state: "idle", compactions: 0, entries: sourceFixture ? [
       { id: "source-prompt", kind: "instruction", at: new Date().toISOString(), text: "Show me how the monitor synchronizes data." },
       { id: "source-answer", kind: "answer", at: new Date().toISOString(), text: "The monitor reads configuration, then publishes status and audit records.\n\n```mermaid\nflowchart LR\n C[Config databases] -->|Settings and control commands| M[Local monitor database]\n M -->|Status and sync progress| C\n M -->|Alerts and scan results| A[Audit databases]\n M -->|Standards data| S[Standard databases]\n```\n\nThe connection check is in [monitor.c](/preview/core/monitor.c:16). See [main.c](/preview/main.c) for the complete file.\n\n```c\n" + sourceText + "```" },
     ] : [], approvals: [] }),

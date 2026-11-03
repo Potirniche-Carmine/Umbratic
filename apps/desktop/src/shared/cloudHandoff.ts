@@ -1,6 +1,6 @@
-import type { CloudEntry, CloudProvider, CloudWorkspace } from "./cloud";
+import type { CloudEntry, CloudWorkspace } from "./cloud";
 
-/** Transfer only unseen conversation text; native tool histories stay with their provider. */
+/** Recover this chat when its native session expires; never combine different chats. */
 export function cloudHandoff(entries: CloudEntry[], prompt: string): string {
   let remaining = 48_000;
   const recent: { role: string; text: string; attachments?: string[] }[] = [];
@@ -35,15 +35,3 @@ export function cloudTurnPrompt(workspace: CloudWorkspace, prompt: string): stri
   return cloudHandoff(index < 0 ? workspace.entries : workspace.entries.slice(index + 1), prompt);
 }
 
-export function switchCloudProvider(workspace: CloudWorkspace, provider: CloudProvider): void {
-  if (workspace.provider === provider) return;
-  // Selection must not advance the cursor: unseen turns are sent on submission.
-  workspace.provider = provider;
-  const session = workspace.sessions?.[provider];
-  workspace.sessionId = session?.sessionId;
-  workspace.account = session?.account;
-  workspace.usage = session?.usage;
-  workspace.contextWindow = session?.contextWindow;
-  workspace.inputTokens = session?.inputTokens;
-  workspace.compactions = session?.compactions ?? 0;
-}

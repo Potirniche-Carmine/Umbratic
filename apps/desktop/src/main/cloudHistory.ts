@@ -1,14 +1,10 @@
-import { createHash } from "node:crypto";
 import type { CloudProvider, CloudWorkspace } from "../shared/cloud";
 import { deleteCloudImages } from "./cloudImages";
 import { withAppDatabase } from "./storageDatabase";
 
-/** Remove this folder set's shared and pre-migration transcripts together. */
+/** Remove only this chat. Other providers and chats may still reference its attachments. */
 export function deleteCloudHistory(workspace: CloudWorkspace, liveWorkspaces: Iterable<CloudWorkspace>, pendingImageIds: string[] = []): void {
-  const paths = [...(workspace.paths || [workspace.path])].sort();
-  const keys = new Set([workspace.key, ...["codex", "claude"].map(provider =>
-    createHash("sha256").update(`${provider}\0${paths.join("\0")}`).digest("hex"),
-  )].map(key => `cloud:workspace:${key}`));
+  const keys = new Set([`cloud:workspace:${workspace.key}`]);
   const removed = new Set<string>();
   const retained = new Set<string>(pendingImageIds);
   function collect(value: Pick<CloudWorkspace, "entries">, into: Set<string>): void {

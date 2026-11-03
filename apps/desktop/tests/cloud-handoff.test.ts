@@ -17,22 +17,15 @@ test("handoffs bound history, omit raw tools, and keep the current instruction i
   assert.equal(cloudHandoff([], "First instruction"), "First instruction");
 });
 
-test("saved provider cursors survive serialization and switches without duplicating history", () => {
-  const { rememberCloudSession, switchCloudProvider, cloudTurnPrompt } = loadTypeScriptModule(new URL("../src/shared/cloudHandoff.ts", import.meta.url), { realm: "host" });
-  let workspace = { provider: "codex", sessionId: "gpt-session", account: "openai-account", compactions: 2, contextWindow: 200_000, inputTokens: 15_000, entries: [{ id: "old", kind: "answer", text: "Already known to GPT" }] };
-  rememberCloudSession(workspace);
-  switchCloudProvider(workspace, "claude");
-  workspace.sessionId = "claude-session"; workspace.account = "claude-account";
-  workspace.entries.push({ id: "new", kind: "answer", text: "New Claude findings" });
+test("saved native cursors survive serialization without duplicating the chat history", () => {
+  const { rememberCloudSession, cloudTurnPrompt } = loadTypeScriptModule(new URL("../src/shared/cloudHandoff.ts", import.meta.url), { realm: "host" });
+  let workspace = { provider: "codex", sessionId: "gpt-session", account: "openai-account", compactions: 2, entries: [{ id: "old", kind: "answer", text: "Already known" }] };
   rememberCloudSession(workspace);
   workspace = JSON.parse(JSON.stringify(workspace));
-  switchCloudProvider(workspace, "codex");
-  assert.equal(workspace.sessionId, "gpt-session"); assert.equal(workspace.account, "openai-account");
-  assert.equal(workspace.inputTokens, 15_000); assert.equal(workspace.compactions, 2);
-  switchCloudProvider(workspace, "claude"); switchCloudProvider(workspace, "codex");
+  assert.equal(cloudTurnPrompt(workspace, "Continue"), "Continue");
+  workspace.entries.push({ id: "new", kind: "answer", text: "Unsent update" });
   const prompt = cloudTurnPrompt(workspace, "Continue");
-  assert.match(prompt, /New Claude findings/); assert.doesNotMatch(prompt, /Already known to GPT/);
-  // An evicted cursor falls back to bounded visible history instead of dropping updates.
+  assert.match(prompt, /Unsent update/); assert.doesNotMatch(prompt, /Already known/);
   workspace.entries = workspace.entries.slice(1);
-  assert.match(cloudTurnPrompt(workspace, "Continue"), /New Claude findings/);
+  assert.match(cloudTurnPrompt(workspace, "Continue"), /Unsent update/);
 });

@@ -1,4 +1,5 @@
-import { cloudTurnPrompt, rememberCloudSession, switchCloudProvider } from "../shared/cloudHandoff";
+import { cloudChatRecord, cloudWorkspaceKey, storedCloudWorkspaces } from "./cloudChatStore";
+import { cloudTurnPrompt, rememberCloudSession } from "../shared/cloudHandoff";
 import { resolveCloudImages } from "./cloudImages";
 import { deleteCloudHistory, forgetCloudProviderSession, forgetStoredCloudProvider } from "./cloudHistory";
 import { latestCloudUsage } from "../shared/cloudUsage";
@@ -107,6 +108,24 @@ export async function disconnectCloudProvider(input: { provider: string }): Prom
 
 export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
   if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
+  const storedWorkspaces = storedCloudWorkspaces();
+  if (input.key !== undefined) {
+    if (typeof input.key !== "string" || !/^[a-f0-9]{64}$/.test(input.key)) throw new Error("Open this chat again.");
+    const saved = workspaces.get(input.key) || storedWorkspaces.find(value => value.key === input.key);
+    if (!saved || saved.provider !== input.provider) throw new Error("This chat belongs to a different provider or is no longer available.");
+    const projects = readProjects();
+    const scratch = fs.realpathSync(scratchDirectory());
+    const roots = saved.paths || [saved.path];
+    const ids = roots.filter(root => root !== scratch).map(root => {
+      const project = projects.find(project => {
+        try { return fs.realpathSync(project.rootPath) === root; } catch { return false; }
+      });
+      if (!project) throw new Error("Open the workspace folder again.");
+      return project.id;
+    });
+    return getCloudWorkspace({ provider: input.provider, repositoryIds: ids, chatId: saved.chatId });
+  }
+  if (input.chatId !== undefined && (typeof input.chatId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(input.chatId))) throw new Error("Invalid chat identity.");
   const ids = input.repositoryIds ?? (input.repositoryId ? [input.repositoryId] : []);
   if (!Array.isArray(ids) || ids.length > 16 || ids.some(id => typeof id !== "string")) throw new Error("Choose up to 16 workspace folders.");
   const projects = readProjects();
@@ -119,31 +138,45 @@ export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
   }))].sort();
   if (!paths.length) paths.push(fs.realpathSync(scratchDirectory()));
   const directory = paths[0];
-  const key = crypto.createHash("sha256").update(`shared\0${paths.join("\0")}`).digest("hex");
+  const key = cloudWorkspaceKey(input.provider, paths, input.chatId);
   let workspace = workspaces.get(key);
   if (!workspace) {
-    const stored = readStored(`cloud:workspace:${key}`) as CloudWorkspace | undefined;
-    workspace = stored?.key === key && stored.path === directory && Array.isArray(stored.entries)
+    const stored = storedWorkspaces.find(value => value.key === key && value.provider === input.provider && value.path === directory);
+    workspace = stored
       ? { ...stored, paths, state: "idle", approvals: [] }
-      : { key, provider: input.provider, path: directory, paths, compactions: 0, state: "idle", entries: [], approvals: [] };
-    if (!stored) {
-      const previous = (["codex", "claude"] as const).map(provider => {
-        const legacyKey = crypto.createHash("sha256").update(`${provider}\0${paths.join("\0")}`).digest("hex");
-        return readStored(`cloud:workspace:${legacyKey}`) as CloudWorkspace | undefined;
-      }).filter(value => value?.path === directory && Array.isArray(value.entries));
-      workspace.entries = [...new Map(previous.flatMap(value => value!.entries).map(entry => [entry.id, entry])).values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-500);
-      workspace.lastActiveAt = previous.map(value => value!.lastActiveAt || "").sort().at(-1) || undefined;
-    }
+      : { key, chatId: input.chatId, provider: input.provider, path: directory, paths, compactions: 0, state: "idle", entries: [], approvals: [] };
     if (stored && stored.state !== "idle") append(workspace, "context", "The previous run was interrupted when Umbratic closed. You can continue from its saved context.");
     if (workspace.sessionId && !workspace.sessions?.[workspace.provider]) rememberCloudSession(workspace);
     workspaces.set(key, workspace);
   }
-  if (workspace.provider !== input.provider) {
-    if (workspace.state !== "idle") throw new Error("Finish or stop the current work before switching providers.");
-    switchCloudProvider(workspace, input.provider);
-    flush(workspace);
-  }
   return structuredClone(workspace);
+}
+
+export function listCloudChats(input: { provider: import("../shared/cloud").CloudProvider }) {
+  if (!isCloudProvider(input?.provider)) throw new Error("Choose a provider.");
+  const all = new Map<string, CloudWorkspace>(storedCloudWorkspaces().map(workspace => [workspace.key, { ...workspace, state: "idle" as const }]));
+  for (const [key, workspace] of workspaces) all.set(key, workspace);
+  return [...all.values()].filter(workspace => workspace.provider === input.provider)
+    .filter(workspace => workspace.chatId || workspace.entries.length)
+    .map(cloudChatRecord).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export function createCloudChat(input: CloudWorkspaceInput): CloudWorkspace {
+  const snapshot = getCloudWorkspace({ provider: input.provider, repositoryIds: input.repositoryIds, repositoryId: input.repositoryId, chatId: crypto.randomUUID() });
+  const workspace = requiredWorkspace(snapshot.key);
+  workspace.lastActiveAt = new Date().toISOString();
+  flush(workspace);
+  return structuredClone(workspace);
+}
+
+export function deleteCloudChat(input: { key: string; provider: import("../shared/cloud").CloudProvider }): void {
+  if (!isCloudProvider(input?.provider)) throw new Error("Choose a provider.");
+  const workspace = workspaces.get(input.key) || storedCloudWorkspaces().find(value => value.key === input.key);
+  if (!workspace || workspace.provider !== input.provider) throw new Error("This chat is no longer available.");
+  if (runs.has(workspace.key)) throw new Error("Stop this chat before deleting it.");
+  deleteCloudHistory(workspace, workspaces.values());
+  clearTimeout(timers.get(workspace.key)); timers.delete(workspace.key);
+  workspaces.delete(workspace.key);
 }
 
 function append(workspace: CloudWorkspace, kind: CloudWorkspace["entries"][number]["kind"], text: string): void {
