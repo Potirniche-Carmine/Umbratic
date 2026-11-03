@@ -1,5 +1,5 @@
 import React from "react";
-import { Hand, Sparkles, ShieldOff, Gauge, Zap } from "lucide-react";
+import { Hand, ShieldCheck, ShieldOff, Gauge, Zap } from "lucide-react";
 import type { CloudConnection, CloudSettings, CloudApprovalMode } from "../../shared/cloud";
 import { CloudSelect } from "./CloudSelect";
 
@@ -7,8 +7,10 @@ export function CloudRunControls({ settings, connection, disabled, onSave }: { s
   const provider = settings.provider;
   const config = settings.providers[provider];
   const model = connection?.models.find(model => model.id === config.orchestrator.model);
-  const choices = [["manual", "Manual"], ["auto", "Auto"], [provider === "codex" ? "full-access" : "bypass", "Bypass"]];
-  const icons = { manual: <Hand size={14}/>, auto: <Sparkles size={14}/>, "full-access": <ShieldOff size={14}/>, bypass: <ShieldOff size={14}/> };
+  const choices = provider === "codex"
+    ? [["manual", "Ask for approval"], ["auto", "Approve for me"]]
+    : [["manual", "Manual"], ["auto", "Auto"], ["bypass", "Bypass"]];
+  const icons = { manual: <Hand size={16} strokeWidth={1.6}/>, auto: <ShieldCheck size={16} strokeWidth={1.6}/>, bypass: <ShieldOff size={16} strokeWidth={1.6}/> };
   const tiers = model?.serviceTiers?.filter(tier => tier.id !== "default") || [];
   return <div className="cloudRunControls"><CloudSelect icons={icons} label="Approvals" value={config.approvalMode || "manual"} disabled={disabled} onValueChange={value => onSave({ ...settings, providers: { ...settings.providers, [provider]: { ...config, approvalMode: value as CloudApprovalMode } } })}>
     {choices.map(([value, label]) => <option key={value} value={value} disabled={provider === "claude" && value === "auto" && model?.supportsAuto === false}>{label}</option>)}

@@ -1,0 +1,42 @@
+/* Shared floating material. Structure stays opaque; only menus carry glass. */
+:root {
+  --menu-glass: color-mix(in srgb, var(--surface-2) 86%, transparent);
+  --menu-highlight: color-mix(in srgb, var(--text) 8%, transparent);
+  --menu-edge: color-mix(in srgb, var(--text) 15%, transparent);
+}
+:root[data-theme="light"] { --menu-glass: color-mix(in srgb, #fff 86%, transparent); --menu-highlight: rgba(20, 30, 40, .055); }
+.cloudSelectMenu, .cloudFoldersMenu, .modelMenu, .permissionMenu, .branchMenu,
+.attachmentMenu, .dictationDeviceMenu, .reviewScopeMenu, .ideMenu, .chatProjectMenu,
+.remoteMenu, .modelPickerMenu, .quantPickerMenu {
+  background: var(--menu-glass);
+  border: 1px solid var(--menu-edge);
+  border-radius: 14px;
+  padding: 6px;
+  backdrop-filter: blur(28px) saturate(145%);
+  box-shadow: inset 0 1px 0 var(--material-edge), 0 4px 12px color-mix(in srgb, var(--shadow-color) 35%, transparent), 0 16px 40px var(--shadow-color);
+}
+.cloudSelectOption { min-height: 36px; gap: 10px; padding: 8px 10px; border-radius: 9px; }
+.cloudSelectOptionLabel { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloudSelectOption > svg { flex: 0 0 auto; color: var(--muted); }
+.cloudSelectOption .cloudSelectCheck { margin-left: 12px; color: var(--text); }
+.cloudSelectOption.isActive { background: var(--menu-highlight); }
+.cloudSelectOption:active:not([aria-disabled=true]) { background: color-mix(in srgb, var(--text) 12%, transparent); }
+.cloudSelectTrigger > svg:not(:last-child) { stroke-width: 1.6; }
+.modelMenu button, .permissionMenu button, .branchMenu button, .attachmentMenu button,
+.dictationDeviceMenu button, .reviewScopeMenu button, .ideMenu button, .chatProjectMenu button, .remoteMenu button {
+  border-radius: 8px; font-weight: 450; min-height: 34px;
+}
+.modelMenu button:hover, .permissionMenu button:hover, .permissionMenu button.active,
+.branchMenu button:hover, .attachmentMenu button:hover, .dictationDeviceMenu button:hover,
+.reviewScopeMenu button:hover, .ideMenu button:hover, .chatProjectMenu button:hover, .remoteMenu button:hover,
+.cloudFolderList > button:hover, .cloudFolderList > button:focus-visible { background: var(--menu-highlight); }
+.cloudFoldersMenu { padding: 7px; }
+.cloudFoldersHeading { padding-bottom: 5px; }
+.cloudFoldersMenu .cloudAddFolder { border-radius: 50%; background: transparent; border-color: transparent; }
+.cloudFoldersMenu .cloudAddFolder:hover { background: var(--menu-highlight); border-color: var(--menu-edge); }
+.cloudFolderGlyph { color: var(--muted); }
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .cloudSelectMenu, .cloudFoldersMenu, .modelMenu, .permissionMenu, .branchMenu,
+  .attachmentMenu, .dictationDeviceMenu, .reviewScopeMenu, .ideMenu, .chatProjectMenu,
+  .remoteMenu, .modelPickerMenu, .quantPickerMenu { background: var(--surface-2); backdrop-filter: none; border-color: var(--line-strong); }
+}

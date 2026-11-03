@@ -194,8 +194,8 @@ export function renderInlineMarkdown(text: string, options?: ReviewReferenceOpti
         }
         const file = localFileLink(link.url);
         if (file && options?.onLocalFileClick) {
-          pushFormatted(<button className="inlineFileLink" key={`file-${keyIndex}`} type="button" title={file.path}
-            onClick={() => options.onLocalFileClick?.(file.path, file.line)}>{link.label}</button>);
+          pushFormatted(<button className="inlineFileLink" key={`file-${keyIndex}`} type="button" title={`${file.path}${file.line ? ` · Line ${file.line}` : ""}`}
+            onClick={() => options.onLocalFileClick?.(file.path, file.line)}>{link.label}{file.line && !/(?:\bline\s*\d|[:#]L?\d)/i.test(link.label) && <span className="inlineFileLine">:{file.line}</span>}</button>);
           index = link.end;
           continue;
         }

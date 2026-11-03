@@ -127,7 +127,8 @@ export function validateCloudSettings(value: CloudSettings): CloudSettings {
     config.approvalMode ??= "manual";
     config.serviceTier ??= "default";
     if (["accept-edits", "plan", "read-only"].includes(config.approvalMode)) config.approvalMode = "manual";
-    const modes = provider === "codex" ? ["manual", "auto", "full-access"] : ["manual", "auto", "bypass"];
+    if (provider === "codex" && config.approvalMode === "full-access") config.approvalMode = "manual";
+    const modes = provider === "codex" ? ["manual", "auto"] : ["manual", "auto", "bypass"];
     if (!modes.includes(config.approvalMode)) throw new Error("Choose a supported approval mode.");
     if (typeof config.serviceTier !== "string" || !/^[a-z][a-z0-9_-]{0,39}$/.test(config.serviceTier)) throw new Error("Choose a supported speed.");
     if (provider === "claude") config.serviceTier = "default";

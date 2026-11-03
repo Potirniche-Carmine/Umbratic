@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { Check, FolderOpen, Plus } from "lucide-react";
+import { Check, Folder, Plus } from "lucide-react";
 import { compactPath } from "../compactPath";
 import { Tooltip } from "../Tooltip";
 import type { RepositoryInfo } from "../../shared/desktopApi";
@@ -19,7 +19,7 @@ export function CloudFolders({ projects, selectedIds, disabled, onChange, onAdd 
       const rect = event.currentTarget.getBoundingClientRect();
       element.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - 292))}px`; element.style.top = `${rect.bottom + 8}px`; element.showPopover();
       if (event.detail === 0) element.querySelector<HTMLButtonElement>("[role=checkbox]")?.focus();
-    }}><FolderOpen size={17}/></button></Tooltip>
+    }}><Folder size={18} strokeWidth={1.6}/></button></Tooltip>
     <span className="cloudWorkspaceName" title={selected.map(project => project.rootPath).join("\n")}>{selected.length ? selected.slice(0, 2).map((project, index) => <React.Fragment key={project.id}>{index > 0 && <span className="cloudFolderSeparator" aria-hidden="true">·</span>}{project.name}</React.Fragment>) : "Workspace"}{selected.length > 2 && <span>+{selected.length - 2}</span>}</span>
     <div ref={menu} popover="auto" role="dialog" aria-label="Workspace folders" className="cloudFoldersMenu" onToggle={event => setOpen(event.newState === "open")} onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); menu.current?.hidePopover(); trigger.current?.focus(); return; }
@@ -33,7 +33,7 @@ export function CloudFolders({ projects, selectedIds, disabled, onChange, onAdd 
       <div className="cloudFolderList">{[...projects].sort((a, b) => a.name.localeCompare(b.name) || a.rootPath.localeCompare(b.rootPath)).map(project => {
         const duplicate = projects.some(other => other.id !== project.id && other.name === project.name);
         return <button key={project.id} type="button" role="checkbox" aria-checked={selectedIds.includes(project.id)} title={project.rootPath} disabled={disabled} onClick={() => onChange(selectedIds.includes(project.id) ? selectedIds.filter(id => id !== project.id) : [...selectedIds, project.id])}>
-          <span className="cloudFolderGlyph"><FolderOpen size={16}/></span><span className="cloudFolderIdentity"><strong>{project.name}</strong>{duplicate && <small>{compactPath(project.rootPath, projects.map(item => item.rootPath))}</small>}</span><Check className="cloudFolderCheck" size={14} style={{ visibility: selectedIds.includes(project.id) ? "visible" : "hidden" }}/>
+          <span className="cloudFolderGlyph"><Folder size={17} strokeWidth={1.6}/></span><span className="cloudFolderIdentity"><strong>{project.name}</strong>{duplicate && <small>{compactPath(project.rootPath, projects.map(item => item.rootPath))}</small>}</span><Check className="cloudFolderCheck" size={14} style={{ visibility: selectedIds.includes(project.id) ? "visible" : "hidden" }}/>
         </button>;
       })}</div>
     </div>

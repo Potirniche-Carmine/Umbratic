@@ -244,17 +244,26 @@
 .cloudSettingsLauncher .topbarLogo { width: 20px; height: 22px; }
 .inlineFileLink { display: inline; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--text); font: inherit; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; cursor: pointer; }
 .inlineFileLink:hover { text-decoration-color: currentColor; }
-.cloudFilePreview { width: min(900px, calc(100vw - 48px)); max-height: calc(100dvh - 64px); padding: 0; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px var(--shadow-color); }
+.cloudFilePreview { width: min(1040px, calc(100vw - 64px)); height: min(760px, calc(100dvh - 80px)); padding: 0; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--code-bg); color: var(--text); box-shadow: 0 24px 80px var(--shadow-color); overflow: hidden; }
 .cloudFilePreview::backdrop { background: rgba(0,0,0,.25); backdrop-filter: blur(5px); }
 .cloudFilePreview[open] { display: flex; flex-direction: column; }
-.cloudFilePreview header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
-.cloudFilePreview header span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloudFilePreview header { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); background: var(--surface); font-size: 13px; }
+.cloudFileIdentity { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.cloudFileIdentity strong { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloudFileIdentity span { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloudFileLocation { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; background: var(--control-bg); color: var(--text); font: inherit; font-size: 12px; }
+.cloudFileLocation:hover { background: var(--control-hover); }
 .cloudFilePreview p { padding: 8px 24px 24px; font-size: 13px; color: var(--muted); }
-.cloudFilePreview pre { overflow: auto; margin: 0; padding: 16px 0; font: 12px/1.8 ui-monospace, monospace; }
-.cloudFilePreview pre > span { display: flex; min-width: max-content; padding-right: 24px; }
-.cloudFilePreview pre small { width: 52px; text-align: right; padding-right: 20px; flex-shrink: 0; color: var(--muted); font: inherit; user-select: none; }
-.cloudFilePreview code { font: inherit; }
-.cloudFilePreview .isCurrentLine { background: var(--control-hover); }
+.cloudFilePreview pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 20px 0; font: 14px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; }
+.cloudFilePreview .sourceLine { position: relative; display: flex; min-width: max-content; padding-right: 28px; }
+.cloudFilePreview .sourceLineNumber { position: sticky; left: 0; z-index: 1; width: 64px; flex: 0 0 64px; padding: 0 18px 0 12px; border: 0; border-right: 1px solid var(--line); border-radius: 0; background: var(--code-bg); text-align: right; color: var(--faint); font: inherit; user-select: none; }
+.cloudFilePreview code { padding-left: 18px; font: inherit; }
+.cloudFilePreview .isCurrentLine { background: color-mix(in srgb, var(--blue) 10%, var(--code-bg)); }
+.cloudFilePreview .isCurrentLine .sourceLineNumber { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, var(--code-bg)); box-shadow: inset 3px 0 var(--blue); }
+.sourceToken { color: var(--syntax-dark, inherit); }
+:root[data-theme="light"] .sourceToken { color: var(--syntax-light, inherit); }
+.cloudFilePreview footer { display: flex; justify-content: space-between; flex-shrink: 0; padding: 8px 18px; border-top: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 11px; }
+.inlineFileLine { color: var(--muted); font-size: .9em; font-variant-numeric: tabular-nums; }
 
 /* Folder peers are centered in the title bar, clear of the window controls. */
 .cloudTopbar { position: relative; height: 52px; min-height: 52px; flex-basis: 52px; }

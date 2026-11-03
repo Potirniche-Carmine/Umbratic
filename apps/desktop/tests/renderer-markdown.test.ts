@@ -12,7 +12,7 @@ test("workspace file links render their labels while unsafe URL schemes remain i
     content: "Read [greeting.ts](/private/tmp/App/greeting.ts:12) and [notes](</private/tmp/My Notes/brief.txt>). [unsafe](javascript:alert(1))",
     onLocalFileClick: () => undefined,
   }));
-  assert.match(html, /class="inlineFileLink"[^>]*>greeting.ts<\/button>/);
+  assert.match(html, /class="inlineFileLink"[^>]*>greeting.ts<span class="inlineFileLine">:12<\/span><\/button>/);
   assert.match(html, /title="\/private\/tmp\/My Notes\/brief.txt"[^>]*>notes<\/button>/);
   assert.doesNotMatch(html, /href="javascript:/);
   assert.match(html, /\[unsafe\]\(javascript:alert\(1\)\)/);

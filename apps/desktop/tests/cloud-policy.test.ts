@@ -161,7 +161,7 @@ test("multi-folder workspace instructions distinguish peer roots from the proces
 });
 
 test("removed permission presets migrate to manual rather than bypass", () => {
-  for (const [provider, modes] of [["codex", ["read-only"]], ["claude", ["plan", "accept-edits"]]]) {
+  for (const [provider, modes] of [["codex", ["read-only", "full-access"]], ["claude", ["plan", "accept-edits"]]]) {
     for (const mode of modes) {
       const settings = cloud.defaultCloudSettings(); settings.providers[provider].approvalMode = mode;
       assert.equal(cloud.validateCloudSettings(settings).providers[provider].approvalMode, "manual");

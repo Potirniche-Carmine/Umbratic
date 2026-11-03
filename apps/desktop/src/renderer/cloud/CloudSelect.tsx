@@ -112,8 +112,8 @@ export function CloudSelect({ label, value, children, className = "", disabled, 
         aria-selected={selected === index} aria-disabled={option.disabled || undefined}
         className={`cloudSelectOption ${active === index ? "isActive" : ""}`}
         onPointerMove={() => { if (!option.disabled) setActive(index); }} onClick={() => choose(index)}>
-        <Check size={14} className={selected === index ? "" : "cloudSelectUnchecked"} aria-hidden="true"/>
-        {icons?.[option.value]}<span>{option.label}</span>
+        {icons?.[option.value]}<span className="cloudSelectOptionLabel">{option.label}</span>
+        <Check size={14} strokeWidth={1.8} className={selected === index ? "cloudSelectCheck" : "cloudSelectCheck cloudSelectUnchecked"} aria-hidden="true"/>
       </div>)}
     </div>
   </span>;
