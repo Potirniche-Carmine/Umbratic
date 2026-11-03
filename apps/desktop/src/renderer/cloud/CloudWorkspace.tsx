@@ -1,8 +1,8 @@
 import { useCloudChats } from "./useCloudChats";
 import { CloudChatArchive } from "./CloudChatArchive";
-import { workspaceProviderLabels, type WorkspaceSurfaceProps } from "../WorkspaceNavigation";
+import { type WorkspaceSurfaceProps } from "../WorkspaceNavigation";
 import React, { useMemo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, Plus, PanelRight, RotateCcw, Square, Settings2 } from "lucide-react";
+import { Send, Paperclip, PanelRight, RotateCcw, Square, Settings2 } from "lucide-react";
 import type { DesktopApi, RepositoryInfo } from "../../shared/desktopApi";
 import { modelChoiceError, type CloudImage, type CloudSettings, type CloudChatRecord, type CloudProvider } from "../../shared/cloud";
 import type { ReviewFile } from "../../shared/reviewDiff";
@@ -26,13 +26,14 @@ import { CloudFilePreview } from "./CloudFilePreview";
 import { latestCloudUsage } from "../../shared/cloudUsage";
 import { CloudModelPicker } from "./CloudModelPicker";
 import { CloudApprovalCard } from "./CloudApprovalCard";
-import { cloudProviderIcons } from "./CloudProviderIcon";
 import { CloudSelect } from "./CloudSelect";
 import { CloudFolders } from "./CloudFolders";
 import { CloudTimeline, cloudImageAttachment } from "./CloudTimeline";
 import { CloudUsageIndicator } from "./CloudUsage";
 import type { CloudConnectionController } from "./useCloudConnection";
 import type { SettingsTab } from "../SettingsNav";
+import { ComposerActionRail } from "../ComposerActionRail";
+import { ComposerGreeting } from "../composerChrome";
 
 export function CloudWorkspace({ api, settings, onSettings, active, navigation, onActivity, controllers, settingsVisible, cloudBusy, onOpenSettings }: {
   controllers: Record<CloudProvider, CloudConnectionController>; settingsVisible: boolean; cloudBusy: boolean; onOpenSettings(tab: SettingsTab): void;
@@ -46,7 +47,7 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
   const [error, setError] = useState("");
   const chat = useCloudChats(api, settings.provider, settings.workspaceRepositoryIds || [], setError);
   const { workspace, setWorkspace, prompt, setPrompt, images, setImages, feedback, setFeedback } = chat;
-  const [deleteChat, setDeleteChat] = useState<CloudChatRecord | null>(null);
+  const [deleteChat, setDeleteChat] = useState<CloudChatRecord[] | null>(null);
   const [attachmentPreview, setAttachmentPreview] = useState<CloudImage>();
   const [dictationAvailable, setDictationAvailable] = useState(false);
   const [attaching, setAttaching] = useState(false);
@@ -143,12 +144,12 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
     });
     submitting.current = false; composer.current?.focus();
   }
-  async function chooseFolders() {
+  async function chooseFolders(extend = true) {
     await action(async () => {
       const result = await api.pickCloudFolders();
       if (!result.length) return;
       setProjects(await api.listProjects());
-      await chat.open({ provider, repositoryIds: [...new Set([...selectedIds, ...result.map(project => project.id)])] }, true);
+      await chat.open({ provider, repositoryIds: [...new Set([...(extend ? selectedIds : []), ...result.map(project => project.id)])] }, true, extend);
     });
   }
   function attach(files: File[]) {
@@ -180,7 +181,7 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
   }
   useCloudShortcuts({
     "chat.new": () => { if (!chat.loading && !pending && !attaching && dictation.status.state === "idle") void chat.open({ provider, repositoryIds: selectedIds }, true); },
-    "chat.delete": () => { const row = chat.chats.find(row => row.key === workspace?.key); if (row && !busy) setDeleteChat(row); },
+    "chat.delete": () => { const row = chat.chats.find(row => row.key === workspace?.key); if (row && !busy) setDeleteChat([row]); },
     "app.settings": () => openSettings(),
     "app.shortcuts": () => openSettings("keyboard"),
     "composer.focus": () => composer.current?.focus(),
@@ -195,13 +196,13 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
       <div className="sidebarStack"><CloudChatArchive chats={chat.chats} projects={projects} activeKey={workspace?.key} loading={chat.loading}
         disabled={pending || attaching || chat.loading || dictation.status.state !== "idle"}
         onSelect={key => void chat.open({ provider, key })} onNew={ids => void chat.open({ provider, repositoryIds: ids || selectedIds }, true)}
-        onAddFolder={() => void chooseFolders()} onDelete={setDeleteChat}/></div>
-      <div className="sidebarFooter"><div className="workspacePrivacyNote">{cloudProviderIcons[provider]}<span>{connection?.state === "ready" ? "Subscription connected" : "Connect your subscription"}</span></div>
+        onAddFolder={() => void chooseFolders(false)} onDelete={setDeleteChat}/></div>
+      <div className="sidebarFooter">
         <ShortcutTooltip id="app.settings"><button className="settingsPlaceholder" onClick={() => openSettings()}><Settings2 size={16}/><span>Settings</span></button></ShortcutTooltip>
       </div>
     </aside>
     <header className="cloudTopbar">
-      <div className="workspaceHeaderIdentity"><strong>{chat.chats.find(row => row.key === workspace?.key)?.title || "New chat"}</strong><CloudFolders projects={projects} selectedIds={selectedIds} disabled={busy || !!workspace?.entries.length} onChange={ids => void chat.open({ provider, repositoryIds: ids }, true)} onAdd={() => void chooseFolders()}/></div>
+      <div className="workspaceHeaderIdentity"><strong>{chat.chats.find(row => row.key === workspace?.key)?.title || "New chat"}</strong><small>{repositories.map(project => project.name).join(" · ") || "No folder selected"}</small></div>
       {repositories.some(project => indexingPaths.has(project.rootPath)) && <span className="workspaceIndexing" role="status"><span className="workspaceIndexingSpinner" aria-hidden="true"/>Indexing workspace…</span>}
       <div className="cloudTopbarSpacer"/>
       {gitRepositories.length > 0 && <ShortcutTooltip id="review.toggle" label={reviewOpen ? "Hide review" : "Open review"} placement="bottom"><button className="cloudIconButton" aria-label={reviewOpen ? "Hide review" : "Open review"} aria-pressed={reviewOpen} onClick={() => setReviewOpen(!reviewOpen)}><PanelRight size={18}/></button></ShortcutTooltip>}
@@ -209,13 +210,13 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
     <main className={`cloudMain ${reviewOpen ? "withReview" : ""}`}>
       <div className={`cloudWorkColumn ${!workspace?.entries.length ? "isEmpty" : ""}`}>
         <div className="cloudCanvas" ref={scroller} onScroll={event => { const element = event.currentTarget; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100; }}>
-          {!workspace?.entries.length ? <section className="cloudWelcome"><div className="workspaceWelcomeMark">{cloudProviderIcons[provider]}</div><p className="workspaceEyebrow">{workspaceProviderLabels[provider]}</p><h1>What are we working on?</h1><p className="workspaceWelcomeHint">{repositories.length ? `Working in ${repositories.map(project => project.name).join(" and ")}` : "A question, an idea, a place to start."}</p></section> : <CloudTimeline workspace={workspace} onLocalFile={(path, line) => setFilePreview({ path, line })} onReviewFile={openReviewFile}/>}
+          {!workspace?.entries.length ? <ComposerGreeting label="What are we working on?"/> : <CloudTimeline workspace={workspace} onLocalFile={(path, line) => setFilePreview({ path, line })} onReviewFile={openReviewFile}/>}
           {workspace?.approvals.map(approval => <CloudApprovalCard key={approval.id} approval={approval} onRespond={(allow, answers) => api.respondCloudApproval({ key: workspace.key, id: approval.id, allow, answers })}/>)}
         </div>
         <div className="cloudDockArea">
-          <form className="cloudDock" onSubmit={event => { event.preventDefault(); void submit(); }} onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); void attach(Array.from(event.dataTransfer.files)); } }}>
-            {(images.length > 0 || feedback.length > 0) && <div className="cloudAttachmentStrip"><AttachmentPreviewList files={images.map(cloudImageAttachment)} mode="composer" onOpen={file => setAttachmentPreview(images.find(image => `${image.id}${image.extension || ".png"}` === file.path))} onRemove={file => setImages(current => current.filter(image => `${image.id}${image.extension || ".png"}` !== file.path))}/>{feedback.length > 0 && <ReviewFeedbackChip count={feedback.length} onClick={() => setFeedbackOpen(true)}/>}</div>}
-            <PromptTextarea disabled={chat.loading} dictation={dictation.status} previewCaret={promptCaret.current} ref={composer} aria-label="Give an instruction" placeholder="Ask anything, or give it something to do…" value={prompt} maxLength={100_000} onSelect={event => { promptCaret.current = event.currentTarget.selectionStart; }} onChange={event => setPrompt(event.target.value)} onPaste={event => {
+          <form className="cloudDock promptInputShell" onSubmit={event => { event.preventDefault(); void submit(); }} onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); void attach(Array.from(event.dataTransfer.files)); } }}>
+            <div className="promptAttachmentStrip"><AttachmentPreviewList files={images.map(cloudImageAttachment)} mode="composer" onOpen={file => setAttachmentPreview(images.find(image => `${image.id}${image.extension || ".png"}` === file.path))} onRemove={file => setImages(current => current.filter(image => `${image.id}${image.extension || ".png"}` !== file.path))}/>{feedback.length > 0 && <ReviewFeedbackChip count={feedback.length} onClick={() => setFeedbackOpen(true)}/>}</div>
+            <div className="promptEditor"><PromptTextarea disabled={chat.loading} dictation={dictation.status} previewCaret={promptCaret.current} ref={composer} aria-label="Give an instruction" placeholder="What should we build today?" value={prompt} maxLength={100_000} onSelect={event => { promptCaret.current = event.currentTarget.selectionStart; }} onChange={event => setPrompt(event.target.value)} onPaste={event => {
               const files = Array.from(event.clipboardData.files);
               if (files.length) { event.preventDefault(); void attach(files); return; }
               const text = event.clipboardData.getData("text/plain");
@@ -225,23 +226,23 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
               if (!result) return; event.preventDefault();
               if (result.type === "send") void submit(); else insert(result.insertion);
             }}/>
-            <div className="cloudDockControls">
-              <span className="workspaceComposerProvider" title={`${workspaceProviderLabels[provider]} chat`}>{cloudProviderIcons[provider]}</span>
-              <CloudModelPicker key={provider} compact label="Model" value={selection} models={connection?.models || []} disabled={busy} onChange={orchestrator => void action(() => onSettings({ ...settings, providers: { ...settings.providers, [provider]: { ...settings.providers[provider], orchestrator, serviceTier: connection?.models.find(model => model.id === orchestrator.model)?.serviceTiers?.some(tier => tier.id === settings.providers[provider].serviceTier) ? settings.providers[provider].serviceTier : "default" } } }))}/>
-              <CloudRunControls settings={settings} connection={connection} disabled={busy} onSave={value => void action(() => onSettings(value))}/>
-              <div className="cloudTopbarSpacer"/>
-              <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.txt,.md,.csv,.json,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.rs,.go,.c,.h,.cpp,.sql,.log" multiple hidden onChange={event => { void attach(Array.from(event.target.files || [])); event.target.value = ""; }}/>
-              <button className="cloudIconButton cloudAttach" type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()}><Plus size={20}/></button>
+            </div>
+            <ComposerActionRail leading={<>
               <DictationControl status={dictation.status} enabled={dictationAvailable} devices={dictation.devices} deviceId={dictation.deviceId} onToggle={dictation.toggle} onSelectDevice={dictation.selectDevice} onRequestSetup={() => openSettings("voice")}/>
+              <CloudRunControls settings={settings} connection={connection} disabled={busy} onSave={value => void action(() => onSettings(value))}/>
+            </>} trailing={<>
+              <CloudModelPicker key={provider} compact label="Model" value={selection} models={connection?.models || []} disabled={busy} onChange={orchestrator => void action(() => onSettings({ ...settings, providers: { ...settings.providers, [provider]: { ...settings.providers[provider], orchestrator, serviceTier: connection?.models.find(model => model.id === orchestrator.model)?.serviceTiers?.some(tier => tier.id === settings.providers[provider].serviceTier) ? settings.providers[provider].serviceTier : "default" } } }))}/>
               {connection?.state !== "ready" && !running ? <button type="button" className="cloudAction cloudConnectAction" disabled={busy || checking && working !== "connect"} onClick={() => {
                 if (working === "connect") void controller.cancel(); else openSettings();
-              }}>{working === "connect" ? "Cancel" : checking ? "Connecting…" : connection?.state === "missing" ? "Install" : "Connect"}</button> : running ? <ShortcutTooltip id="run.stop" label="Stop work"><button type="button" className="cloudSend" aria-label="Stop work" disabled={pending} onClick={() => void action(() => api.stopCloudTurn({ key: workspace!.key }))}><Square size={16}/></button></ShortcutTooltip>
-                : <ShortcutTooltip id="composer.send" label="Send prompt" sendOnEnter={sendOnEnter}><button className="cloudSend" type="submit" aria-label="Start work" disabled={busy || !hasDraft || !ready}><ArrowUp size={20}/></button></ShortcutTooltip>}
-            </div>
+              }}>{working === "connect" ? "Cancel" : checking ? "Connecting…" : connection?.state === "missing" ? "Install" : "Connect"}</button> : running ? <ShortcutTooltip id="run.stop" label="Stop work"><button type="button" className="sendButton" aria-label="Stop work" disabled={pending} onClick={() => void action(() => api.stopCloudTurn({ key: workspace!.key }))}><Square size={16}/></button></ShortcutTooltip>
+                : <ShortcutTooltip id="composer.send" label="Send prompt" sendOnEnter={sendOnEnter}><button className="sendButton" type="submit" aria-label="Send prompt" disabled={busy || !hasDraft || !ready}><Send size={17}/></button></ShortcutTooltip>}
+            </>}/>
           </form>
-          <div className="cloudContextBar">
-            <span className="workspaceSessionHint">{workspaceProviderLabels[provider]} · {running ? "Working" : cloudBusy ? "Another chat is working" : connection?.state === "ready" ? "Ready" : "Connect to start"}</span>
-            <span className="cloudComposerStatus" role="status">{workspace?.state === "waiting" ? "Waiting for you" : working === "connect" ? "Connecting…" : ""}</span>
+          <div className="promptControls cloudContextBar">
+            <CloudFolders projects={projects} selectedIds={selectedIds} disabled={busy || !!workspace?.entries.length} onChange={ids => void chat.open({ provider, repositoryIds: ids }, true, true)} onAdd={() => void chooseFolders()}/>
+            <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.txt,.md,.csv,.json,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.rs,.go,.c,.h,.cpp,.sql,.log" multiple hidden onChange={event => { void attach(Array.from(event.target.files || [])); event.target.value = ""; }}/>
+            <button className="attachmentTrigger" type="button" aria-label="Attach files" title="Attach files" disabled={chat.loading || attaching} onClick={() => fileInput.current?.click()}><Paperclip size={14}/></button>
+            <span className="cloudComposerStatus" role="status">{workspace?.state === "waiting" ? "Waiting for you" : working === "connect" ? "Connecting…" : cloudBusy && !running ? "Another chat is working" : ""}</span>
             <div className="cloudContextMetrics">
             {connection?.state === "ready" && <CloudUsageIndicator workspace={workspace} usage={latestCloudUsage([connection.usage, workspace?.account === connection.account ? workspace?.usage : undefined])}/>}
             {!!workspace?.entries.length && <button type="button" className="cloudResetButton" disabled={busy} onClick={() => setResetOpen(true)} title="Reset context" aria-label="Reset context"><RotateCcw size={15} strokeWidth={1.8} aria-hidden="true"/></button>}
@@ -256,7 +257,7 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
           onAddFeedback={comments => { setFeedback(current => [...current, ...comments.map(comment => ({ ...comment, filePath: gitRepositories.length > 1 ? `${reviewRepository!.rootPath}/${comment.filePath}` : comment.filePath }))]); composer.current?.focus(); }}
           onLoadDocumentReview={async () => ({ ok: false, code: "not_available", message: "Open this document in its native app to preview it." })}/>}</aside>}
     </main>
-    {active && deleteChat && <CloudResetDialog deleting busy={pending} onCancel={() => setDeleteChat(null)} onReset={() => void action(async () => { await chat.remove(deleteChat.key); setDeleteChat(null); })}/>}
+    {active && deleteChat && <CloudResetDialog deleting count={deleteChat.length} busy={pending} onCancel={() => setDeleteChat(null)} onReset={() => void action(async () => { await chat.remove(deleteChat.map(chat => chat.key)); setDeleteChat(null); })}/>}
     <ErrorToast message={error || dictation.status.error || null} onDismiss={() => { setError(""); dictation.dismissError(); }}/>
     {active && resetOpen && workspace && <CloudResetDialog busy={pending} onCancel={() => setResetOpen(false)} onReset={() => void action(async () => { setWorkspace(await api.resetCloudContext({ key: workspace.key })); setFeedback([]); setImages([]); setPrompt(""); setResetOpen(false); follow.current = true; composer.current?.focus(); })}/>}
     {active && attachmentPreview && <CloudAttachmentPreview file={attachmentPreview} onClose={() => setAttachmentPreview(undefined)}/>}

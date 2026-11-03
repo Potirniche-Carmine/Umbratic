@@ -1,8 +1,8 @@
 import React, { useState } from "react";
-import { ChevronDown, CircleDashed, Cloud, Ellipsis, FolderPlus, FolderX, GitBranch, MessageSquareX, Monitor, Search, SquarePen, Trash2 } from "lucide-react";
+import { ChevronDown, Cloud, Ellipsis, FolderX, GitBranch, MessageSquareX, Monitor, SquarePen } from "lucide-react";
 import type { ChatRecord } from "../shared/desktopApi";
 import { chatDisplayTitle, chatSubline, closedChatMessage, worktreeTitle, type ChatProjectGroup, type DeleteCandidate, type ProjectDeleteTarget, type WorktreeChatGroup } from "./chatListPresentation";
-import { ShortcutTooltip } from "./Tooltip";
+import { ChatArchiveToolbar, ChatProjectSection, ChatArchiveRow } from "./ChatArchivePrimitives";
 
 type ChatArchiveProps = {
   chatProjectGroups: ChatProjectGroup[];
@@ -52,79 +52,25 @@ export function ChatArchiveContent({
     // it: the slot is already the right size, so holding the modifier changes
     // what the row starts with without moving a single word of it.
     const jumpNumber = chatJumpKeysVisible ? chatJumpNumbersById.get(chat.id) : undefined;
-    return (
-      <div
-        className={`chatRow ${activeChatId === chat.id ? "active" : ""} ${
-          closedChatMessage(chat.taskState) ? "closed" : ""
-        }`}
-        key={chat.id}
-      >
-        <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
-          <span className={`chatRowContent ${connectionLabel || jumpNumber ? "hasConnection" : ""}`}>
-            {jumpNumber ? (
-              <span className="chatJumpKey" aria-hidden="true">{jumpNumber}</span>
-            ) : connectionLabel ? (
-              <span className="chatConnectionIcon" role="img" aria-label={connectionLabel} title={connectionLabel}>
-                {chat.modelEndpointMode === "server" ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
-              </span>
-            ) : null}
-            <strong>{chatDisplayTitle(chat)}</strong>
-            <em title={chat.updatedAt}>{chatSubline(chat)}</em>
-          </span>
-        </button>
-        <button
-          className="chatDeleteButton"
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            setDeleteCandidate({ kind: "chat", chat });
-          }}
-          title="Delete chat"
-        >
-          <Trash2 size={14} />
-        </button>
-      </div>
-    );
+    return <ChatArchiveRow key={chat.id} title={chatDisplayTitle(chat)} active={activeChatId === chat.id} closed={!!closedChatMessage(chat.taskState)}
+      onSelect={() => void selectChat(chat)} onDelete={() => setDeleteCandidate({ kind: "chat", chat })} detail={chatSubline(chat)} updatedAt={chat.updatedAt}
+      icon={jumpNumber ? <span className="chatJumpKey" aria-hidden="true">{jumpNumber}</span> : connectionLabel ? <span className="chatConnectionIcon" role="img" aria-label={connectionLabel} title={connectionLabel}>
+        {chat.modelEndpointMode === "server" ? <Cloud size={12} aria-hidden="true"/> : <Monitor size={12} aria-hidden="true"/>}
+      </span> : undefined}/>;
   }
 
   return (
     <section className="chatArchive">
-      <div className="workspaceArchiveActions">
-        <ShortcutTooltip id="chat.new" placement="bottom"><button className="workspaceNewChat" type="button" onClick={newChat}><SquarePen size={16}/><span>New chat</span></button></ShortcutTooltip>
-        <button className="cloudIconButton" type="button" onClick={() => void newProject()} disabled={busy} aria-label="New project" title="New project"><FolderPlus size={17}/></button>
-      </div>
-      <label className="workspaceChatSearch"><Search size={14}/><input aria-label="Search chats" placeholder="Search chats" value={query} onChange={event => onQueryChange(event.target.value)}/></label>
+      <ChatArchiveToolbar query={query} onQueryChange={onQueryChange} disabled={busy} onNew={() => void newChat()} onAddFolder={() => void newProject()}/>
       <div className="chatList">
         {visibleGroups.length ? (
           visibleGroups.map((group) => {
             const collapsed = !search && collapsedProjectKeys.has(group.key);
             const projectTarget = chatProjectTarget(group);
             return (
-              <section className="chatProject" key={group.key}>
-                <div className="chatProjectHeader">
-                  <button
-                    className="chatProjectToggle"
-                    type="button"
-                    onClick={() => toggleProjectGroup(group.key)}
-                    aria-expanded={!collapsed}
-                    title={group.path ?? group.name}
-                  >
-                    <ChevronDown className={collapsed ? "collapsed" : ""} size={14} />
-                    <span>
-                      <strong>{group.name}</strong>
-                    </span>
-                  </button>
-                  {group.path ? (
-                    <button
-                      className="chatProjectNewButton"
-                      type="button"
-                      onClick={() => void newChatForProject({ name: group.name, path: group.path })}
-                      title={`Start a new chat in "${group.name}"`}
-                    >
-                      <SquarePen size={14} />
-                    </button>
-                  ) : null}
-                  {projectTarget ? (
+              <ChatProjectSection key={group.key} name={group.name} path={group.path} collapsed={collapsed} disabled={busy} hasWorktrees={!!group.worktrees.length}
+                onToggle={() => toggleProjectGroup(group.key)} onNew={group.path ? () => void newChatForProject({ name: group.name, path: group.path }) : undefined}
+                actions={projectTarget ? (
                     <div className="chatProjectActions">
                       <button
                         className="chatProjectActionButton"
@@ -168,10 +114,7 @@ export function ChatArchiveContent({
                         </div>
                       ) : null}
                     </div>
-                  ) : null}
-                </div>
-                {!collapsed ? (
-                  <div className={`chatProjectChats ${group.worktrees.length ? "hasWorktrees" : ""}`}>
+                ) : null}>
                     {group.chats.map((chat) => renderChatRow(chat))}
                     {group.worktrees.map((worktree) => {
                       const worktreeCollapsed = !search && collapsedWorktreeKeys.has(worktree.key);
@@ -210,18 +153,11 @@ export function ChatArchiveContent({
                         </section>
                       );
                     })}
-                    {!group.chats.length && !group.worktrees.length ? <div className="chatProjectEmpty">No chats yet.</div> : null}
-                  </div>
-                ) : null}
-              </section>
+              </ChatProjectSection>
             );
           })
         ) : (
-          <div className="workspaceArchiveEmpty">
-            <CircleDashed size={17} />
-            <strong>{search ? "No matching chats" : "A fresh space for your work"}</strong>
-            {!search && <span>Your conversations will appear here.</span>}
-          </div>
+          search ? <div className="workspaceArchiveEmpty">No matching chats</div> : null
         )}
       </div>
     </section>

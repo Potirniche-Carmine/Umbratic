@@ -27,6 +27,5 @@ export function WorkspaceNavigation({ provider, activity, onSelect }: {
         {activity[id] !== "idle" && <span className={`workspaceActivity is-${activity[id]}`} role="status" aria-label={`${workspaceProviderLabels[id]} ${activity[id] === "waiting" ? "needs your attention" : "is working"}`}/>}
       </button>)}
     </nav>
-    <p className="workspaceProviderNote">{provider === "local" ? "Local models and your Veil server" : `Your ${workspaceProviderLabels[provider]} conversations`}</p>
   </div>;
 }

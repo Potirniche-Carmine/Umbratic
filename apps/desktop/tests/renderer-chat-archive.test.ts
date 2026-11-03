@@ -22,6 +22,7 @@ function props(overrides = {}) {
 function elements(node, tag, found = []) {
   if (!node || typeof node !== "object") return found;
   if (Array.isArray(node)) { node.forEach((child) => elements(child, tag, found)); return found; }
+  if (["ChatArchiveRow", "ChatProjectSection"].includes(node.type?.name)) return elements(node.type(node.props), tag, found);
   if (node.type === tag) found.push(node);
   return elements(node.props?.children, tag, found);
 }
@@ -33,7 +34,7 @@ test("chat archive renders active, empty, collapsed, and keyboard-jump states", 
   assert.match(expanded, /chatRow active/);
   assert.match(expanded, /aria-label="Local model"/);
   assert.doesNotMatch(render({ collapsedProjectKeys: new Set(["project"]) }), /Review the project/);
-  assert.match(render({ chatProjectGroups: [] }), /Your conversations will appear here/);
+  assert.doesNotMatch(render({ chatProjectGroups: [] }), /Your conversations will appear here|No chats yet/);
   assert.match(render({ chatJumpKeysVisible: true }), /chatJumpKey/);
 });
 

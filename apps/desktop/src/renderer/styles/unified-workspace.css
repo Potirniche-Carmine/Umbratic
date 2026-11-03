@@ -94,7 +94,7 @@
 .unifiedWorkspace .promptDock { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 28px 18px; background: var(--workspace-canvas); }
 .unifiedWorkspace .promptDock::before { background: linear-gradient(to top, var(--workspace-canvas), transparent); height: 28px; top: -28px; }
 .unifiedWorkspace .promptDock::after { display: none; }
-.unifiedWorkspace .promptControls { order: 2; width: min(760px, 100%); flex-wrap: wrap; padding: 0 5px; gap: 7px; }
+.unifiedWorkspace .promptControls { order: 2; z-index: 48; width: min(760px, 100%); flex-wrap: wrap; padding: 0 5px; gap: 7px; }
 .unifiedWorkspace .composer { width: min(760px, 100%); min-width: 0; animation: none; }
 .unifiedWorkspace .promptInputShell, .unifiedWorkspace .cloudDock {
   border: 1px solid var(--line-strong);
@@ -104,7 +104,7 @@
   backdrop-filter: blur(24px) saturate(135%);
 }
 .unifiedWorkspace .promptInputShell:focus-within, .unifiedWorkspace .cloudDock:focus-within { border-color: color-mix(in srgb, var(--muted) 40%, var(--line)); box-shadow: inset 0 1px 0 var(--workspace-edge), var(--workspace-shadow); }
-.unifiedWorkspace .composer textarea, .unifiedWorkspace .promptHighlight { padding: 17px 18px 12px; min-height: 82px; font-size: 15px; line-height: 1.6; }
+.unifiedWorkspace .promptInputShell textarea, .unifiedWorkspace .promptHighlight { padding: 14px 16px 10px; min-height: 72px; max-height: min(240px, 30dvh); font-family: var(--app-font); font-size: 15px; font-weight: 400; line-height: 1.6; letter-spacing: 0; }
 .unifiedWorkspace .promptActionRail { padding: 0 12px 12px; gap: 8px; }
 .unifiedWorkspace .sendButton { width: 32px; height: 32px; border: 0; background: var(--text); color: var(--workspace-canvas); box-shadow: none; }
 .unifiedWorkspace .workspaceControl, .unifiedWorkspace .worktreeToggle, .unifiedWorkspace .webToolsToggle, .unifiedWorkspace .attachmentTrigger { border-color: transparent; background: transparent; box-shadow: none; }
@@ -129,7 +129,7 @@
 .unifiedCloudShell .isEmpty .cloudDockArea { margin-top: 0; }
 .unifiedCloudShell .cloudTopbar .cloudFolderPicker { position: static; transform: none; max-width: calc(100% - 44px); }
 .unifiedCloudShell .cloudDockArea { padding-bottom: 15px; }
-.unifiedCloudShell .cloudDock { padding: 17px 15px 12px; }
+.unifiedCloudShell .cloudDock { padding: 0; }
 .unifiedCloudShell .cloudContextBar { padding-top: 10px; gap: 8px; }
 .workspaceSessionHint { font-size: 10px; color: var(--faint); white-space: nowrap; }
 .workspaceComposerProvider { display: grid; place-items: center; padding: 0 4px; }
@@ -203,3 +203,37 @@
 .workspaceHeaderIdentity .cloudWorkspaceName { font-size: 11px; color: var(--muted); font-weight: 400; }
 .workspaceHeaderIdentity .cloudIconButton { width: 18px; height: 20px; }
 .workspaceHeaderIdentity .cloudIconButton svg { width: 13px; height: 13px; }
+
+/* Shared geometry: adding images never changes text size or control placement. */
+.workspaceHeaderIdentity > small { color: var(--muted); font-size: 11px; }
+.unifiedWorkspace .promptInputShell { grid-template-rows: auto minmax(72px, auto) auto; }
+.unifiedWorkspace .composerAttachmentList { gap: 8px; max-height: 64px; padding: 12px 16px 0; }
+.unifiedWorkspace .composerAttachmentList .attachmentPreview.imageAttachment { flex: 0 0 48px; width: 48px; height: 48px; border-radius: 8px; }
+.unifiedWorkspace .composerAttachmentList .attachmentPreview.fileAttachment { height: 36px; max-width: 190px; }
+.unifiedWorkspace .attachmentPreviewFileName { font-size: 12px; }
+.unifiedWorkspace .messageAttachmentList .attachmentPreview.imageAttachment { flex: 0 0 64px; width: 64px; height: 48px; border-radius: 8px; }
+.unifiedWorkspace .userMessage { width: fit-content; max-width: min(760px, 88%); margin: 0 0 24px auto; }
+.unifiedWorkspace .userMessageBubble { padding: 12px 16px; border: 1px solid var(--line); border-radius: 18px 18px 5px 18px; box-shadow: none; }
+.unifiedWorkspace .userPromptText { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 15px/1.6 var(--app-font); letter-spacing: 0; }
+.unifiedWorkspace .userMessageBubble .messageAttachmentList { margin-top: 10px; }
+.unifiedWorkspace .userMessageBubble .messageAttachmentList:first-child { margin-top: 0; }
+.unifiedWorkspace .promptControls .workspaceControl { min-height: 30px; gap: 7px; font-size: 12px; padding: 4px 6px; }
+.unifiedWorkspace .promptControls .workspaceControl strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+.unifiedWorkspace .promptControls .remoteTrigger { border-color: transparent; background: transparent; box-shadow: none; }
+.unifiedWorkspace .promptControls .remoteTrigger:hover { background: var(--control-hover); }
+.unifiedWorkspace .cloudContextBar { justify-content: flex-start; padding: 0 5px; margin-top: 10px; min-height: 30px; }
+.unifiedWorkspace .cloudContextBar .cloudFolderPicker { max-width: 240px; flex: 0 1 auto; }
+.unifiedWorkspace .cloudContextBar .cloudComposerStatus { flex: 1; }
+.unifiedWorkspace .cloudDock .cloudModelTrigger { font-size: 11.5px; font-weight: 500; color: var(--muted); padding: 4px 6px; min-height: 30px; }
+.unifiedWorkspace .cloudDock .cloudRunControls { gap: 4px; }
+.unifiedWorkspace .cloudDock .cloudRunControls .cloudSelectTrigger { font-size: 11.5px !important; font-weight: 500; color: var(--muted); padding: 4px 6px; }
+.unifiedWorkspace .cloudDock .dictationControl { height: 30px; }
+.unifiedWorkspace .cloudDockArea { position: relative; z-index: 24; padding-top: 12px; padding-bottom: 18px; }
+.unifiedWorkspace .composerPendingTray { position: static; display: none; width: min(760px, 100%); transform: none; }
+.unifiedWorkspace .composerPendingTray.hasPending { display: flex; }
+.unifiedWorkspace .promptEditor { font: 400 15px/1.6 var(--app-font); }
+.workspaceFolderFooter { display: flex; justify-content: flex-end; padding: 8px 4px 2px; border-top: 1px solid var(--line); }
+.cloudFoldersMenu { margin: 0; }
+.cloudFoldersMenu:popover-open { display: flex; flex-direction: column; }
+.cloudFoldersMenu .cloudFolderList { min-height: 0; }
+.unifiedWorkspace .chatProjectChats:empty { display: none; }

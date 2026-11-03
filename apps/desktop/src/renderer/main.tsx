@@ -1,4 +1,7 @@
 import { fileToPastedAttachment } from "./pastedAttachments";
+import { UserPrompt } from "./UserPrompt";
+import { WorkspaceFolderPicker } from "./WorkspaceFolderPicker";
+import { ComposerActionRail } from "./ComposerActionRail";
 import { ReviewFeedbackChip, ReviewFeedbackDialog } from "./review/ReviewFeedbackDialog";
 import { PromptTextarea } from "./PromptTextarea";
 import { promptEnterAction } from "./promptKeyboard";
@@ -1861,19 +1864,19 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
     );
   }
 
-  async function pickRepository() {
+  async function pickRepository(project?: RepositoryInfo) {
     setError(null);
     setBusy(true);
     try {
-      const result = await api.pickRepository();
-      if (!result.canceled) {
+      const result = project ? { canceled: false as const, repository: await api.getRepository({ repositoryPath: project.rootPath }) } : await api.pickRepository();
+      if (!result.canceled && result.repository) {
         const nextRepository = result.repository;
         mergeProject(nextRepository);
         setRepository(nextRepository);
         // Only a chat that has not run yet may take the folder; one with a
         // task keeps the workspace it started in.
         const chatWithoutProject = activeChatId
-          ? chats.find((chat) => chat.id === activeChatId && !chat.repositoryPath && !chat.taskId)
+          ? chats.find((chat) => chat.id === activeChatId && !chat.taskId)
           : undefined;
         if (chatWithoutProject) {
           const nextChat = await api.updateChatProject({
@@ -3399,7 +3402,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
               <span>Restart to update</span>
             </button>
           ) : null}
-          <div className="workspacePrivacyNote"><ShieldCheck size={13}/><span>{endpointSettings.mode === "server" ? "Connected through Veil" : "Runs on your computer"}</span></div>
           <ShortcutTooltip id="app.settings">
             <button
               className="settingsPlaceholder"
@@ -3461,11 +3463,8 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
                 <div className="timeline">
                   {composerItems.map((item) =>
                     item.type === "user" ? (
-                      <article className="timelineMessage userMessage" key={item.id}>
-                        <AttachmentPreviewList files={item.attachedFiles} mode="message" onOpen={openMessageAttachment} />
-                        <div className="userMessageBubble">
-                          {item.text ? <MarkdownContent content={item.text} /> : null}
-                          {item.reviewFeedback.length ? (
+                      <UserPrompt key={item.id} text={item.text} files={item.attachedFiles} onOpen={openMessageAttachment} onCopy={() => void copyText(item.rawText)} feedback={
+item.reviewFeedback.length ? (
                             <button
                               className="messageReviewFeedback"
                               type="button"
@@ -3479,14 +3478,7 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
                               <span><strong>Review feedback</strong><small>{item.reviewFeedback.length} {item.reviewFeedback.length === 1 ? "comment" : "comments"}</small></span>
                               <ChevronRight size={13} aria-hidden="true" />
                             </button>
-                          ) : null}
-                        </div>
-                        <div className="messageActions">
-                          <button className="messageAction" type="button" onClick={() => void copyText(item.rawText)} title="Copy prompt">
-                            <Copy size={14} />
-                          </button>
-                        </div>
-                      </article>
+                          ) : null}/>
                     ) : item.type === "compaction" ? (
                       <CompactionRow item={item} key={item.id} clock={activityClock} />
                     ) : item.type === "assistant" ? (
@@ -3586,15 +3578,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
         ) : null}
 
         <section className="promptDock">
-          <div className="promptControls">
-            {/* Everything already committed but not yet answered, in one stack above
-                the controls: messages waiting their turn, and the review comments
-                riding along with the message being written. They were two trays in
-                two places, which read as two unrelated things when they are both
-                just "what is going out next". Anchored to the controls row rather
-                than the dock, because the controls row is the one element that is
-                exactly as wide as the prompt box: a tray anchored to the dock
-                spans the whole pane on a wide window. */}
             <div className={`composerPendingTray ${
               activeQueuedPrompts.length || reviewPromptFeedback.length || dictation.status.error
                 ? "hasPending"
@@ -3631,6 +3614,7 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
               ) : null}
               {reviewPromptFeedback.length ? <ReviewFeedbackChip count={reviewPromptFeedback.length} onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }}/> : null}
             </div>
+          <div className="promptControls">
             {/* A chat that started without a folder can never be given one, so
                 the control goes rather than sitting there greyed out: a dead
                 button is a question the user keeps re-asking. Starting a new
@@ -3640,17 +3624,8 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
                 other control in the row twice. */}
             {chatStartedWithoutFolder ? null : (
               <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
-                <button
-                  className="workspaceControl"
-                  type="button"
-                  onClick={pickRepository}
-                  disabled={busy}
-                >
-                  <span className="controlIcon"><FolderOpen size={14} /></span>
-                  <span>
-                    <strong>{repository ? repository.name : "Select folder"}</strong>
-                  </span>
-                </button>
+                <WorkspaceFolderPicker projects={projects} selectedIds={repository ? [repository.id] : []} disabled={busy || !!task} multiple={false}
+                  onChange={ids => void pickRepository(projects.find(project => project.id === ids[0]))} onAdd={() => void pickRepository()}/>
                 {repository?.kind === "git" ? (
                   <BranchPicker
                     branch={repository.originalBranch}
@@ -3888,7 +3863,7 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
               {/* Always in the flow, so the shell's three rows line up whether or
                   not anything is attached; it collapses to nothing when empty. */}
               <div className="promptAttachmentStrip">
-                <AttachmentPreviewList files={pickedAttachments} mode="composer" onRemove={removeAttachment} />
+                <AttachmentPreviewList files={pickedAttachments} mode="composer" onRemove={removeAttachment} onOpen={openMessageAttachment} />
               </div>
               <div className="promptEditor">
                 <div className="promptHighlight" aria-hidden="true">
@@ -3913,12 +3888,7 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
                   }
                 />
               </div>
-              <div className="promptActionRail">
-                {/* What this turn will do, on the left: speak it instead of
-                    typing it, and whether it may act without asking. What will
-                    answer it, on the right. The two halves are separate
-                    questions and the gap between them is what says so. */}
-                <div className="promptRailGroup promptRailLeft">
+              <ComposerActionRail leading={<>
                   <DictationControl status={dictation.status} enabled={dictationAvailable} onToggle={dictation.toggle}
                     devices={dictation.devices} deviceId={dictation.deviceId} onSelectDevice={dictation.selectDevice}
                     onRequestSetup={() => setDictationSetupOffer(true)} />
@@ -3937,8 +3907,7 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
                       void updatePermissionMode(mode);
                     }}
                   />
-                </div>
-                <div className="promptRailGroup promptRailRight">
+                </>} trailing={<>
                   {composerModels.length > 1 || modelReasoningEfforts.length > 0 || endpointSettings.mode === "local" ? (
                     <ComposerModelPicker
                       models={composerModels}
@@ -4014,8 +3983,7 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
                     </button>
                   </ShortcutTooltip>
                 )}
-                </div>
-              </div>
+                </>}/>
             </div>
           </div>
         </section>

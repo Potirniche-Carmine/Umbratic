@@ -27,7 +27,7 @@ export function useCloudChats(api: CloudApi, provider: CloudProvider, defaultIds
     const row = cloudChatSummary(next);
     setChats(existing => [row, ...existing.filter(chat => chat.key !== row.key)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
   }
-  const open = useCallback(async (input: CloudWorkspaceInput, create = false) => {
+  const open = useCallback(async (input: CloudWorkspaceInput, create = false, carryDraft = false) => {
     const request = ++generation.current;
     const previous = current.current;
     if (previous.workspace) drafts.current.set(previous.workspace.key, previous.draft);
@@ -35,10 +35,16 @@ export function useCloudChats(api: CloudApi, provider: CloudProvider, defaultIds
     try {
       const next = await (create ? api.createCloudChat(input) : api.getCloudWorkspace(input));
       if (request !== generation.current) return;
-      const nextDraft = drafts.current.get(next.key) || emptyDraft();
+      const nextDraft = drafts.current.get(next.key) || (carryDraft ? previous.draft : emptyDraft());
       current.current = { workspace: next, draft: nextDraft };
       setWorkspace(next); setDraft(nextDraft); updateList(next);
       try { localStorage.setItem(storageKey, next.key); } catch { /* In-memory selection remains usable. */ }
+      if (carryDraft && previous.workspace?.chatId && !previous.workspace.entries.length && previous.workspace.key !== next.key) {
+        const previousKey = previous.workspace.key;
+        await api.deleteCloudChat({ key: previousKey, provider: previous.workspace.provider });
+        drafts.current.delete(previousKey);
+        setChats(existing => existing.filter(chat => chat.key !== previousKey));
+      }
     } catch (cause) { if (request === generation.current) error.current(cause instanceof Error ? cause.message : String(cause)); }
     finally { if (request === generation.current) setLoading(false); }
   }, [api, storageKey]);
@@ -59,13 +65,18 @@ export function useCloudChats(api: CloudApi, provider: CloudProvider, defaultIds
     }).catch(cause => { if (!cancelled) { error.current(String(cause)); setLoading(false); } });
     return () => { cancelled = true; generation.current++; unsubscribe(); };
   }, [api, provider, open, storageKey]);
-  async function remove(key: string) {
-    await api.deleteCloudChat({ key, provider });
-    drafts.current.delete(key);
-    const remaining = chats.filter(chat => chat.key !== key); setChats(remaining);
-    if (current.current.workspace?.key === key) {
-      current.current = { workspace: null, draft: emptyDraft() }; setWorkspace(null); setDraft(emptyDraft());
-      await open(remaining[0] ? { provider, key: remaining[0].key } : { provider, repositoryIds: initialIds.current }, !remaining.length);
+  async function remove(keys: string | string[]) {
+    const deleted = new Set<string>();
+    try {
+      for (const key of typeof keys === "string" ? [keys] : keys) {
+        await api.deleteCloudChat({ key, provider }); deleted.add(key); drafts.current.delete(key);
+      }
+    } finally {
+      const remaining = chats.filter(chat => !deleted.has(chat.key)); setChats(remaining);
+      if (current.current.workspace && deleted.has(current.current.workspace.key)) {
+        current.current = { workspace: null, draft: emptyDraft() }; setWorkspace(null); setDraft(emptyDraft());
+        await open(remaining[0] ? { provider, key: remaining[0].key } : { provider, repositoryIds: initialIds.current }, !remaining.length);
+      }
     }
   }
   function field<K extends keyof Draft>(key: K) {

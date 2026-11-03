@@ -93,3 +93,23 @@ test("resetting an unnamed legacy chat removes its stale archive title", async t
   f.publish({ ...workspace("legacy"), chatId: undefined });
   assert.equal(f.render().chats.some(chat => chat.key === "legacy"), false);
 });
+
+test("changing folders preserves an empty chat's draft and replaces only that empty chat", async t => {
+  const deleted = [];
+  const f = fixture("codex", { deleteCloudChat: async input => deleted.push(input.key) }); t.after(f.cleanup); f.render(); await tick();
+  f.render().setPrompt("Keep my folder draft"); f.render().setImages([{ id: "image" }]); f.render();
+  await f.render().open({ provider: "codex", repositoryIds: ["new-folder"] }, true, true);
+  let chat = f.render(); assert.equal(chat.prompt, "Keep my folder draft"); assert.equal(chat.images[0].id, "image");
+  assert.deepEqual(deleted, ["first"]); assert.equal(chat.chats.length, 1);
+  f.publish({ ...chat.workspace, entries: [{ kind: "instruction", text: "Saved history" }] }); f.render();
+  await f.render().open({ provider: "codex", repositoryIds: ["third-folder"] }, true, true);
+  assert.deepEqual(deleted, ["first"]); assert.equal(f.render().chats.length, 2);
+});
+
+test("batch deletion retains undeleted chats and recovers the selection after a partial failure", async t => {
+  const f = fixture("codex", { deleteCloudChat: async ({ key }) => { if (key === "second") throw new Error("Stop this chat first"); } });
+  t.after(f.cleanup); f.render(); await tick(); f.render();
+  f.publish(workspace("second")); f.render();
+  await assert.rejects(f.render().remove(["first", "second"]), /Stop this chat/);
+  assert.equal(f.render().workspace.key, "second"); assert.deepEqual(f.render().chats.map(chat => chat.key), ["second"]);
+});

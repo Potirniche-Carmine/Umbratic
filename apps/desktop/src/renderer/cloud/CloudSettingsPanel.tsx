@@ -26,7 +26,7 @@ export function CloudSettingsPanel({ settings, controllers, busy, onSave }: {
     finally { setSaving(false); }
   }
   return <div className="settingsPanel providerSettings">
-    <div className="settingsPanelHead"><h3>Providers</h3><p>Connect your subscriptions. Each provider keeps its own chats and sessions.</p></div>
+    <div className="settingsPanelHead"><h3>Providers</h3></div>
     <div className="providerSettingsTabs" role="group" aria-label="Provider settings">
       {(["accounts", "experts", "context"] as const).map(id => <button key={id} aria-pressed={id === tab} onClick={() => setTab(id)}>{id === "accounts" ? "Accounts" : id === "experts" ? "Experts" : "Context"}</button>)}
     </div>
@@ -41,11 +41,9 @@ export function CloudSettingsPanel({ settings, controllers, busy, onSave }: {
         disabled={locked || !settings.subagents} onChange={choice => void save({ ...settings, providers: { ...settings.providers, [provider]: { ...config, roles: { ...config.roles, [role]: choice } } } })}/>)}</div>
     </>}
     {tab === "context" && <>
-      <p className="cloudSettingsIntro">Choose when subscription chats start a fresh session after a break.</p>
       <div className="cloudSettingGroup"><div className="cloudSettingRow"><span>Fresh context after</span><CloudSelect label="Reset after a break" disabled={locked} value={settings.idleResetHours} onValueChange={value => void save({ ...settings, idleResetHours: Number(value) })}>
         <option value={0}>Never</option>{Array.from({ length: 24 }, (_, index) => index + 1).map(hours => <option key={hours} value={hours}>{hours} {hours === 1 ? "hour" : "hours"}</option>)}
       </CloudSelect></div></div>
-      <p className="cloudFootnote">Saved messages stay in your chat. Choose Never to keep resuming the same provider session.</p>
     </>}
     {busy && <p className="cloudSettingsMessage" role="status">Provider settings can be changed when the current work finishes.</p>}
     {error && <p className="cloudSettingsMessage" role="alert">{error}</p>}
