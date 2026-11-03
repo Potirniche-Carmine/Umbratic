@@ -34,7 +34,9 @@ export function VoiceSettings({
   serverMode,
   speechAdvertised,
   onBackendStatus,
+  showHeading = true,
 }: {
+  showHeading?: boolean;
   api: DesktopApi;
   backend: BackendStatus | null;
   active: boolean;
@@ -77,9 +79,9 @@ export function VoiceSettings({
 
   return (
     <div className="settingsPanel">
-      <div className="settingsPanelHead">
+      {showHeading && <div className="settingsPanelHead">
         <h3>Voice</h3>
-      </div>
+      </div>}
 
       <div className={`settingsGroup${serverMode ? " voiceServerStatus" : ""}`}>
         {serverMode ? (

@@ -70,7 +70,7 @@ test("file previews only read bounded text inside the selected roots, including 
   } finally { f.close(); fs.rmSync(outside, { recursive: true, force: true }); }
 });
 
-test("native sessions are isolated by provider and reset without replaying visible history", async () => {
+test("provider switches hand off shared history into a fresh session and reset clears both", async () => {
   const f = fixture();
   try {
     const input = { provider: "codex", repositoryId: "project" };
@@ -87,10 +87,21 @@ test("native sessions are isolated by provider and reset without replaying visib
     assert.equal(f.calls[1].workspace.entries.some(entry => entry.text === "A completed result"), true);
     f.calls[1].sink.session("native-2", "account"); f.calls[1].resolve(); await tick();
     const other = f.service.getCloudWorkspace({ provider: "claude", repositoryId: "project" });
-    assert.notEqual(other.key, first.key); assert.equal(other.sessionId, undefined);
+    assert.equal(other.key, first.key); assert.equal(other.sessionId, undefined);
+    assert.ok(other.entries.some(entry => entry.text === "A completed result"));
+    f.service.startCloudTurn({ provider: "claude", repositoryId: "project", prompt: "Continue here" });
+    assert.match(f.calls[2].prompt, /A completed result/);
+    assert.match(f.calls[2].prompt, /Current user request:\nContinue here/);
+    assert.equal(f.calls[2].workspace.sessionId, undefined);
+    assert.throws(() => f.service.getCloudWorkspace(input), /switching providers/);
+    f.calls[2].sink.session("claude-native", "claude-account"); f.calls[2].resolve(); await tick();
     const cleared = f.service.resetCloudContext({ key: first.key });
     assert.equal(cleared.sessionId, undefined); assert.equal(cleared.compactions, 0);
     assert.deepEqual(cleared.entries, []);
+    const back = f.service.getCloudWorkspace(input);
+    assert.deepEqual(back.entries, []); assert.equal(back.sessionId, undefined);
+    f.service.startCloudTurn({ ...input, prompt: "Fresh work" });
+    assert.equal(f.calls[3].prompt, "Fresh work"); f.calls[3].resolve(); await tick();
     assert.throws(() => f.service.getCloudWorkspace({ provider: "codex", repositoryId: "unknown" }), /Open the workspace/);
   } finally { f.close(); }
 });
@@ -140,11 +151,11 @@ test("inactivity persists across app restarts and resets before the next instruc
     const input = { provider: "codex", repositoryId: "project" };
     const fresh = f.service.getCloudWorkspace(input);
     // An uncached provider/workspace loads its last completed turn from SQLite.
-    const otherInput = { provider: "claude", repositoryId: "project" };
+    const otherInput = { provider: "claude", repositoryId: "second" };
     const crypto = await import("node:crypto");
-    const key = crypto.createHash("sha256").update(`claude\0${fresh.path}`).digest("hex");
+    const key = crypto.createHash("sha256").update(`claude\0${path.join(fresh.path, "second")}`).digest("hex");
     f.db.prepare("INSERT INTO settings (key,payload) VALUES (?,?)").run(`cloud:workspace:${key}`, JSON.stringify({
-      ...fresh, key, provider: "claude", sessionId: "previous-session", lastActiveAt: "2020-01-01T00:00:00Z",
+      ...fresh, key, path: path.join(fresh.path, "second"), entries: [{ id: "previous", kind: "instruction", text: "Earlier work", at: "2020-01-01T00:00:00Z" }], provider: "claude", sessionId: "previous-session", lastActiveAt: "2020-01-01T00:00:00Z",
     }));
     f.service.startCloudTurn({ ...otherInput, prompt: "New work" });
     assert.equal(f.calls[0].workspace.sessionId, undefined);

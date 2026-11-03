@@ -62,15 +62,20 @@ export function claudeConnection(account: AccountInfo, models: ModelInfo[], vers
   for (const model of models) {
     const id = model.resolvedModel || model.value;
     // Availability belongs to the signed-in runtime, not a family allowlist.
-    unique.set(id, { id, label: claudeModelLabel(id, model.displayName), efforts: model.supportedEffortLevels || [] });
+    unique.set(id, { id, label: claudeModelLabel(id, model.displayName), efforts: model.supportedEffortLevels || [], supportsAuto: model.supportsAutoMode });
   }
   return { ...common, state: "ready", models: [...unique.values()], accountEmail: account.email || auth.email, planName: planLabel(account.subscriptionType), account: `${account.email || auth.email || "Claude"} · ${account.subscriptionType}`,
     message: "Connected through the official Claude Code runtime." };
 }
 
+export function claudePermissionOptions(mode: string): Pick<Options, "permissionMode" | "allowDangerouslySkipPermissions"> {
+  return { permissionMode: mode === "bypass" ? "bypassPermissions" : mode === "accept-edits" ? "acceptEdits" : mode === "auto" || mode === "plan" ? mode : "default", allowDangerouslySkipPermissions: mode === "bypass" };
+}
+
 function options(settings: CloudSettings, cwd: string): Options {
   return { cwd, pathToClaudeCodeExecutable: claudeExecutable(settings.providers.claude.executable), env: cloudEnvironment(),
-    settingSources: [], settings: { fastMode: false, autoMemoryEnabled: false }, permissionMode: "default", includePartialMessages: true,
+    settingSources: [], settings: { fastMode: false, autoMemoryEnabled: false },
+    ...claudePermissionOptions(settings.providers.claude.approvalMode), includePartialMessages: true,
     systemPrompt: { type: "preset", preset: "claude_code", append: cloudWorkflowInstructions(settings, "claude") },
     disallowedTools: ["Skill", ...(settings.subagents ? [] : ["Agent", "Task"])],
   };
@@ -166,8 +171,8 @@ export const claudeCloudRuntime: CloudRuntime = {
         if (stopped) return;
         if (workspace.account && workspace.account !== connection.account && workspace.sessionId) throw new Error("The signed-in account changed. Clear context before continuing.");
         if (connection.usage) sink.limits?.(connection.usage);
-        gate.send(images.length ? [...(prompt ? [{ type: "text" as const, text: prompt }] : []), ...images.map(image => ({ type: "image" as const,
-          source: { type: "base64" as const, media_type: "image/png" as const, data: fs.readFileSync(image.path).toString("base64") } }))] : prompt);
+        gate.send(images.length ? [...(prompt ? [{ type: "text" as const, text: prompt }] : []), ...images.map(image => image.mimeType === "application/pdf" ? ({ type: "document" as const, source: { type: "base64" as const, media_type: "application/pdf" as const, data: fs.readFileSync(image.path).toString("base64") } }) : image.mimeType.startsWith("image/") ? ({ type: "image" as const,
+          source: { type: "base64" as const, media_type: "image/png" as const, data: fs.readFileSync(image.path).toString("base64") } }) : ({ type: "document" as const, source: { type: "text" as const, media_type: "text/plain" as const, data: fs.readFileSync(image.path, "utf8") } }))] : prompt);
         let resultReceived = false;
         const stream = { messageId: "" };
         for await (const message of query) {

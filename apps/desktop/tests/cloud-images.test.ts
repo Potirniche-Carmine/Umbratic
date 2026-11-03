@@ -13,7 +13,7 @@ test("cloud images accept only bounded decodable images and resolve app-owned ID
     electron: { app: { getPath: () => root }, nativeImage: { createFromBuffer: bytes => bytes.toString() === "image bytes" ? image : { isEmpty: () => true } } },
   } });
   const valid = { name: "../../test.png", dataUrl: "data:image/png;base64,aW1hZ2UgYnl0ZXM=" };
-  for (const files of [[], Array(9).fill(valid), [{ dataUrl: "data:text/plain;base64,aW1hZ2U=" }], [{ dataUrl: "data:image/png;base64,YmFk" }], [{ dataUrl: "x".repeat(30_000_000) }]]) assert.throws(() => api.saveCloudImages({ files }));
+  for (const files of [[], Array(21).fill(valid), [{ name: "unsafe.exe", dataUrl: "data:application/octet-stream;base64,aW1hZ2U=" }], [{ dataUrl: "data:image/png;base64,YmFk" }], [{ dataUrl: "x".repeat(30_000_000) }]]) assert.throws(() => api.saveCloudImages({ files }));
   assert.throws(() => api.resolveCloudImages(["../outside.png"]));
   const saved = api.saveCloudImages({ files: [valid] });
   assert.equal(saved[0].mimeType, "image/png");
@@ -21,5 +21,12 @@ test("cloud images accept only bounded decodable images and resolve app-owned ID
   assert.equal(resolved.length, 1); assert.ok(resolved[0].path.startsWith(path.join(root, "cloud", "images")));
   assert.equal(fs.readFileSync(resolved[0].path, "utf8"), "normalized PNG");
   fs.unlinkSync(resolved[0].path); fs.symlinkSync(path.join(root, "outside.png"), resolved[0].path);
-  assert.throws(() => api.resolveCloudImages([saved[0].id]), /Attach this image again/);
+  assert.throws(() => api.resolveCloudImages([saved[0].id]), /Attach this file again/);
+  const documents = api.saveCloudImages({ files: [
+    { name: "brief.txt", dataUrl: "data:text/plain;base64,aGVsbG8=" },
+    { name: "brief.pdf", dataUrl: `data:application/pdf;base64,${Buffer.from("%PDF-1.4\nfixture").toString("base64")}` },
+  ] });
+  assert.deepEqual(documents.map(file => file.mimeType), ["text/plain", "application/pdf"]);
+  assert.equal(fs.readFileSync(api.resolveCloudImages([documents[0].id])[0].path, "utf8"), "hello");
+  assert.throws(() => api.saveCloudImages({ files: [{ name: "not.pdf", dataUrl: "data:application/pdf;base64,aGVsbG8=" }] }));
 });

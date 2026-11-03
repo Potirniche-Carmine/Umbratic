@@ -6,7 +6,8 @@ function limit(id: string, label: string, percent: unknown, reset: unknown): Clo
   return [{ id, label, usedPercent: Math.max(0, Math.min(100, percent)), ...(Number.isFinite(timestamp) ? { resetsAt: new Date(timestamp).toISOString() } : {}) }];
 }
 export function codexUsage(input: any): CloudUsage {
-  const buckets = input?.rateLimitsByLimitId ? Object.values(input.rateLimitsByLimitId) : input?.rateLimits ? [input.rateLimits] : [];
+  const buckets = [...new Map([...(input?.rateLimits ? [input.rateLimits] : []), ...Object.values(input?.rateLimitsByLimitId || {})]
+    .map((bucket: any) => [bucket.limitId || "codex", bucket])).values()];
   const limits = (buckets as any[]).flatMap(bucket => ["primary", "secondary"].flatMap(window => {
     const value = bucket[window];
     const minutes = value?.windowDurationMins;

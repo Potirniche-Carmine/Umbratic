@@ -125,3 +125,28 @@ test("obsolete activity visibility and reviewer settings migrate away", () => {
   assert.equal(migrated.review, undefined);
   assert.equal(migrated.providers.codex.roles.review, undefined);
 });
+
+test("approval preferences migrate conservatively and reject modes from the other provider", () => {
+  const settings = cloud.defaultCloudSettings();
+  delete settings.providers.codex.approvalMode; delete settings.providers.claude.approvalMode;
+  delete settings.providers.codex.serviceTier;
+  const migrated = cloud.validateCloudSettings(settings);
+  assert.equal(migrated.providers.codex.approvalMode, "manual");
+  assert.equal(migrated.providers.claude.approvalMode, "manual");
+  assert.equal(migrated.providers.codex.serviceTier, "default");
+  migrated.providers.codex.approvalMode = "bypass";
+  assert.throws(() => cloud.validateCloudSettings(migrated), /approval mode/);
+});
+
+test("auto review preserves Codex sandbox boundaries and Claude bypass is explicitly opt-in", () => {
+  const { codexAccess } = loadTypeScriptModule(new URL("../src/main/cloudCodex.ts", import.meta.url), { realm: "host", mocks: { electron: { shell: {} } } });
+  const manual = codexAccess("manual", ["/workspace"]);
+  const auto = codexAccess("auto", ["/workspace"]);
+  assert.deepEqual(auto.sandboxPolicy, manual.sandboxPolicy);
+  assert.equal(auto.approvalsReviewer, "auto_review"); assert.equal(auto.approvalPolicy, "on-request");
+  assert.equal(codexAccess("read-only", []).sandboxPolicy.type, "readOnly");
+  assert.equal(codexAccess("full-access", []).sandboxPolicy.type, "dangerFullAccess");
+  assert.deepEqual(claude.claudePermissionOptions("auto"), { permissionMode: "auto", allowDangerouslySkipPermissions: false });
+  assert.deepEqual(claude.claudePermissionOptions("accept-edits"), { permissionMode: "acceptEdits", allowDangerouslySkipPermissions: false });
+  assert.deepEqual(claude.claudePermissionOptions("bypass"), { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true });
+});

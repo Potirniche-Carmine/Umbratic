@@ -1,3 +1,4 @@
+import { cloudHandoff, switchCloudProvider } from "../shared/cloudHandoff";
 import { resolveCloudImages } from "./cloudImages";
 import { latestCloudUsage } from "../shared/cloudUsage";
 import { app } from "electron";
@@ -97,15 +98,28 @@ export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
   }))].sort();
   if (!paths.length) paths.push(fs.realpathSync(scratchDirectory()));
   const directory = paths[0];
-  const key = crypto.createHash("sha256").update(`${input.provider}\0${paths.join("\0")}`).digest("hex");
+  const key = crypto.createHash("sha256").update(`shared\0${paths.join("\0")}`).digest("hex");
   let workspace = workspaces.get(key);
   if (!workspace) {
     const stored = readStored(`cloud:workspace:${key}`) as CloudWorkspace | undefined;
     workspace = stored?.key === key && stored.path === directory && Array.isArray(stored.entries)
       ? { ...stored, paths, state: "idle", approvals: [] }
       : { key, provider: input.provider, path: directory, paths, compactions: 0, state: "idle", entries: [], approvals: [] };
+    if (!stored) {
+      const previous = (["codex", "claude"] as const).map(provider => {
+        const legacyKey = crypto.createHash("sha256").update(`${provider}\0${paths.join("\0")}`).digest("hex");
+        return readStored(`cloud:workspace:${legacyKey}`) as CloudWorkspace | undefined;
+      }).filter(value => value?.path === directory && Array.isArray(value.entries));
+      workspace.entries = [...new Map(previous.flatMap(value => value!.entries).map(entry => [entry.id, entry])).values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-500);
+      workspace.lastActiveAt = previous.map(value => value!.lastActiveAt || "").sort().at(-1) || undefined;
+    }
     if (stored && stored.state !== "idle") append(workspace, "context", "The previous run was interrupted when Umbratic closed. You can continue from its saved context.");
     workspaces.set(key, workspace);
+  }
+  if (workspace.provider !== input.provider) {
+    if (workspace.state !== "idle") throw new Error("Finish or stop the current work before switching providers.");
+    switchCloudProvider(workspace, input.provider);
+    flush(workspace);
   }
   return structuredClone(workspace);
 }
@@ -173,6 +187,7 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
   const settings = getCloudSettings();
   const reason = contextResetReason(workspace, settings);
   if (reason) clearContext(workspace, reason);
+  const runtimePrompt = workspace.sessionId ? input.prompt.trim() : cloudHandoff(workspace.entries, input.prompt.trim());
   workspace.lastActiveAt = new Date().toISOString();
   append(workspace, "instruction", input.prompt.trim());
   if (images.length) workspace.entries.at(-1)!.images = images.map(image => image.image);
@@ -208,7 +223,7 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
       return new Promise(resolve => approvals.set(id, { key: workspace.key, resolve }));
     },
   };
-  const run = runtime(input.provider).run(settings, structuredClone(workspace), input.prompt.trim(), sink, images);
+  const run = runtime(input.provider).run(settings, structuredClone(workspace), runtimePrompt, sink, images);
   runs.set(workspace.key, run);
   void run.done.catch(error => { if (!closing && !stopping.has(workspace.key)) append(workspace, "error", error instanceof Error ? error.message : "The runtime could not finish this work."); })
     .finally(() => {

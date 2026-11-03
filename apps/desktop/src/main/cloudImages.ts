@@ -11,13 +11,25 @@ function directory(): string {
   return root;
 }
 export function saveCloudImages(input: { files: CloudImageInput[] }): CloudImage[] {
-  if (!Array.isArray(input?.files) || !input.files.length || input.files.length > 8) throw new Error("Attach up to 8 images at a time.");
+  if (!Array.isArray(input?.files) || !input.files.length || input.files.length > 20) throw new Error("Attach up to 20 files at a time.");
   // Validate the entire batch before writing. Normalize to PNG so MIME, bytes,
   // previews and the provider's image input always agree.
   const prepared = input.files.map(file => {
     if (typeof file?.dataUrl !== "string" || file.dataUrl.length > maxBytes * 1.4) throw new Error("Each image must be smaller than 20 MB.");
+    const document = /^data:([^;,]*);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(file.dataUrl);
+    if (document && !document[1].startsWith("image/")) {
+      const bytes = Buffer.from(document[2], "base64");
+      if (bytes.length > maxBytes) throw new Error("Each attachment must be smaller than 20 MB.");
+      const name = path.basename(String(file.name || "Attachment.txt")).slice(0, 160);
+      const extension = path.extname(name).toLowerCase();
+      const pdf = extension === ".pdf" && bytes.subarray(0, 5).toString() === "%PDF-";
+      const textExtensions = [".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".html", ".css", ".js", ".jsx", ".ts", ".tsx", ".py", ".rs", ".go", ".c", ".h", ".cpp", ".sql", ".log"];
+      if (!pdf && (!textExtensions.includes(extension) || bytes.includes(0))) throw new Error("Choose an image, PDF, or text/code file.");
+      if (!pdf) new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return { image: { id: randomUUID(), name, mimeType: pdf ? "application/pdf" : "text/plain", extension, previewDataUrl: "" } as CloudImage, png: bytes };
+    }
     const match = /^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(file.dataUrl);
-    if (!match) throw new Error("Paste a PNG, JPEG, WebP or GIF image.");
+    if (!match) throw new Error("Choose an image, PDF, or text/code file.");
     const bytes = Buffer.from(match[2], "base64");
     if (bytes.length > maxBytes) throw new Error("Each image must be smaller than 20 MB.");
     const decoded = nativeImage.createFromBuffer(bytes);
@@ -32,20 +44,22 @@ export function saveCloudImages(input: { files: CloudImageInput[] }): CloudImage
   });
   const root = directory();
   for (const { image, png } of prepared) {
-    fs.writeFileSync(path.join(root, `${image.id}.png`), png, { flag: "wx", mode: 0o600 });
+    fs.writeFileSync(path.join(root, `${image.id}${image.extension || ".png"}`), png, { flag: "wx", mode: 0o600 });
     fs.writeFileSync(path.join(root, `${image.id}.json`), JSON.stringify(image), { flag: "wx", mode: 0o600 });
   }
   return prepared.map(item => item.image);
 }
 export function resolveCloudImages(ids: string[]): { path: string; mimeType: string; image: CloudImage }[] {
-  if (!Array.isArray(ids) || ids.length > 8 || ids.some(id => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id))) throw new Error("Choose up to 8 attached images.");
+  if (!Array.isArray(ids) || ids.length > 20 || ids.some(id => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id))) throw new Error("Choose up to 20 attachments.");
   if (!ids.length) return [];
   const root = directory();
   return [...new Set(ids)].map(id => {
-    const filename = path.join(root, `${id}.png`);
     const metadata = path.join(root, `${id}.json`);
-    if (!fs.lstatSync(filename).isFile() || !fs.lstatSync(metadata).isFile()) throw new Error("Attach this image again.");
+    if (!fs.lstatSync(metadata).isFile()) throw new Error("Attach this file again.");
     const image = JSON.parse(fs.readFileSync(metadata, "utf8")) as CloudImage;
-    return { path: filename, mimeType: "image/png", image };
+    if (image.extension && !/^\.[a-z0-9]{1,8}$/.test(image.extension)) throw new Error("Attach this file again.");
+    const filename = path.join(root, `${id}${image.extension || ".png"}`);
+    if (!fs.lstatSync(filename).isFile()) throw new Error("Attach this file again.");
+    return { path: filename, mimeType: image.mimeType, image };
   });
 }

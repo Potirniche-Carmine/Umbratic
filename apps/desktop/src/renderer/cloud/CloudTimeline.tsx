@@ -8,7 +8,7 @@ import { AttachmentPreviewList } from "../attachmentPreview";
 import { ReviewFeedbackChip, ReviewFeedbackDialog } from "../review/ReviewFeedbackDialog";
 import { visibleReviewPrompt, type ReviewFeedbackReference } from "../review/reviewComments";
 
-export const cloudImageAttachment = (image: CloudImage): ChatAttachment => ({ path: `${image.id}.png`, name: image.name, kind: "file", previewDataUrl: image.previewDataUrl });
+export const cloudImageAttachment = (image: CloudImage): ChatAttachment => ({ path: `${image.id}${image.extension || ".png"}`, name: image.name, kind: "file", previewDataUrl: image.previewDataUrl });
 type Activity = Extract<ComposerTimelineItem, { type: "activity" }>;
 export function cloudTurns(entries: CloudEntry[], running: boolean): { instruction?: CloudEntry; activity: Activity; answer?: CloudEntry; notes: CloudEntry[] }[] {
   const groups: CloudEntry[][] = [];

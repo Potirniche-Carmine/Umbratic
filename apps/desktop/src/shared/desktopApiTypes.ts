@@ -896,7 +896,7 @@ export type DesktopApi = CloudApi & {
    * credentials stay in the other. Throws when the connected server does not
    * advertise `speech.transcribe`.
    */
-  startDictation(input: { language?: string }): Promise<{ started: boolean }>;
+  startDictation(input: { language?: string; localOnly?: boolean }): Promise<{ started: boolean }>;
   /** Takes microphone consent the way the platform takes it, before the renderer
    *  opens a device — so a refusal is explained where it can be fixed. */
   requestMicrophoneAccess(): Promise<{ granted: boolean }>;

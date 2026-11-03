@@ -50,3 +50,8 @@ test("native activity labels do not masquerade as executed shell commands", () =
   assert.equal(display.commandShellText(run), "cat brief.txt\n\nProject notes");
   assert.equal(display.commandLiveOutputPreview({ ...run, status: "running" }), undefined);
 });
+
+test("an empty per-model map does not hide the primary account windows", () => {
+  const result = usage.codexUsage({ rateLimitsByLimitId: {}, rateLimits: { primary: { usedPercent: 22, windowDurationMins: 300 }, secondary: { usedPercent: 45, windowDurationMins: 10080 } } });
+  assert.deepEqual(result.limits.map(limit => limit.label), ["5 hours", "Weekly"]);
+});

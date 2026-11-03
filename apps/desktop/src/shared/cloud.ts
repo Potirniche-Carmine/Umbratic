@@ -3,8 +3,11 @@ export type AppMode = "private" | "cloud";
 export type CloudRole = "routine" | "architecture" | "research";
 export type CloudEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type CloudModelChoice = { model: string; effort: CloudEffort };
-export type CloudModel = { id: string; label: string; efforts: CloudEffort[]; defaultEffort?: CloudEffort; unavailableReason?: string };
+export type CloudModel = { id: string; label: string; efforts: CloudEffort[]; defaultEffort?: CloudEffort; unavailableReason?: string; serviceTiers?: { id: string; name: string }[]; supportsAuto?: boolean };
+export type CloudApprovalMode = "manual" | "auto" | "read-only" | "full-access" | "accept-edits" | "plan" | "bypass";
 export type CloudProviderSettings = {
+  approvalMode: CloudApprovalMode;
+  serviceTier: string;
   executable: string;
   orchestrator: CloudModelChoice;
   roles: Record<CloudRole, CloudModelChoice>;
@@ -30,7 +33,7 @@ export type CloudConnection = {
 };
 export type CloudLimit = { id: string; label: string; usedPercent: number; resetsAt?: string; severity?: string; active?: boolean };
 export type CloudUsage = { limits: CloudLimit[]; fetchedAt: string };
-export type CloudImage = { id: string; name: string; mimeType: string; previewDataUrl: string };
+export type CloudImage = { id: string; name: string; mimeType: string; previewDataUrl: string; extension?: string; pending?: boolean };
 export type CloudImageInput = { name: string; dataUrl: string; mimeType?: string };
 export type CloudTool = { id: string; label: string; detail?: string; status: "running" | "completed" | "failed" | "stopped" };
 export type CloudEntry = { id: string; kind: "instruction" | "answer" | "activity" | "context" | "error"; text: string; at: string; tool?: CloudTool; images?: CloudImage[] };
@@ -81,11 +84,11 @@ export function defaultCloudSettings(): CloudSettings {
   return {
     mode: "private", provider: "codex", subagents: true, idleResetHours: 3, workspaceRepositoryIds: [],
     providers: {
-      codex: { executable: "", orchestrator: sol("medium"), roles: {
+      codex: { executable: "", approvalMode: "manual", serviceTier: "default", orchestrator: sol("medium"), roles: {
         routine: sol("medium"), architecture: sol("xhigh"),
         research: { model: "gpt-6.1-terra", effort: "high" },
       } },
-      claude: { executable: "", orchestrator: opus("medium"), roles: {
+      claude: { executable: "", approvalMode: "manual", serviceTier: "default", orchestrator: opus("medium"), roles: {
         routine: opus("medium"), architecture: opus("xhigh"),
         research: { model: "claude-sonnet-5-5", effort: "medium" },
       } },
@@ -119,6 +122,15 @@ export function validateCloudSettings(value: CloudSettings): CloudSettings {
   delete result.resetAfterCompactions;
   delete result.contextPolicyVersion;
   for (const provider of ["codex", "claude"] as const) delete (result.providers[provider].roles as Partial<Record<string, CloudModelChoice>>).review;
+  for (const provider of ["codex", "claude"] as const) {
+    const config = result.providers[provider];
+    config.approvalMode ??= "manual";
+    config.serviceTier ??= "default";
+    const modes = provider === "codex" ? ["manual", "auto", "read-only", "full-access"] : ["manual", "auto", "accept-edits", "plan", "bypass"];
+    if (!modes.includes(config.approvalMode)) throw new Error("Choose a supported approval mode.");
+    if (typeof config.serviceTier !== "string" || !/^[a-z][a-z0-9_-]{0,39}$/.test(config.serviceTier)) throw new Error("Choose a supported speed.");
+    if (provider === "claude") config.serviceTier = "default";
+  }
   return result;
 }
 export function modelChoiceError(choice: CloudModelChoice, models: CloudModel[]): string | undefined {
@@ -129,7 +141,7 @@ export function modelChoiceError(choice: CloudModelChoice, models: CloudModel[])
   return undefined;
 }
 export function contextResetReason(workspace: CloudWorkspace, settings: CloudSettings, now = new Date()): string | undefined {
-  if (!workspace.sessionId || workspace.state !== "idle") return undefined;
+  if ((!workspace.sessionId && !workspace.entries?.length) || workspace.state !== "idle") return undefined;
   const lastActive = Date.parse(workspace.lastActiveAt || workspace.entries?.at(-1)?.at || "");
   if (settings.idleResetHours > 0 && Number.isFinite(lastActive) && now.getTime() - lastActive >= settings.idleResetHours * 3_600_000) {
     return `Fresh context after ${settings.idleResetHours} hours away.`;

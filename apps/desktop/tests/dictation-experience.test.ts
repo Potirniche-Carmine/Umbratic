@@ -183,7 +183,7 @@ test("choosing a microphone cannot undo the chosen dictation model", () => {
 test("local dictation needs its own model and nothing else", () => {
   const dictationMain = read("../src/main/dictation.ts");
   const local = dictationMain.slice(
-    dictationMain.indexOf('if (settings.mode === "local") {'),
+    dictationMain.indexOf('if (input.localOnly === true || settings.mode === "local") {'),
     dictationMain.indexOf("// Security-semantic gate"),
   );
   // Veil will not start without a chat model, so routing local dictation
@@ -197,7 +197,7 @@ test("local dictation needs its own model and nothing else", () => {
   // The Veil feature gate still guards the server path, and only that path.
   assert.ok(
     dictationMain.indexOf("connectedVeilSupports(veilFeature.speechTranscribe)")
-    > dictationMain.indexOf('if (settings.mode === "local") {'),
+    > dictationMain.indexOf('if (input.localOnly === true || settings.mode === "local") {'),
   );
 
   // And the button is live whenever the weights are on disk — waiting for a

@@ -1,6 +1,8 @@
+import { VoiceSettings } from "../VoiceSettings";
+import type { DesktopApi, BackendStatus } from "../../shared/desktopApi";
 import { CloudUsageDetails } from "./CloudUsage";
 import React, { useEffect, useRef, useState } from "react";
-import { Check, Monitor, RefreshCw, RotateCcw, Users, X } from "lucide-react";
+import { Check, Mic, Monitor, RefreshCw, RotateCcw, Users, X } from "lucide-react";
 import { cloudRoleLabels, type CloudProvider, type CloudRole, type CloudSettings, type CloudUsage } from "../../shared/cloud";
 import { readAppearanceSettings, writeAppearanceSettings } from "../appearanceStorage";
 import type { AppearanceTheme } from "../rendererTypes";
@@ -10,11 +12,13 @@ import { CloudSelect } from "./CloudSelect";
 import type { useCloudConnection } from "./useCloudConnection";
 
 type ConnectionController = ReturnType<typeof useCloudConnection>;
-export function CloudSettingsPanel({ settings, controller, usage, onSave, onClose }: {
-  usage?: CloudUsage; settings: CloudSettings; controller: ConnectionController;
+export function CloudSettingsPanel({ api, initialTab = "connection", settings, controller, usage, onSave, onClose }: {
+  api: DesktopApi; initialTab?: "connection" | "voice"; usage?: CloudUsage; settings: CloudSettings; controller: ConnectionController;
   onSave(value: CloudSettings): Promise<void>; onClose(): void;
 }) {
-  const [tab, setTab] = useState<"connection" | "experts" | "context">("connection");
+  const [tab, setTab] = useState<"connection" | "experts" | "context" | "voice">(initialTab);
+  const [backend, setBackend] = useState<BackendStatus | null>(null);
+  useEffect(() => { void api.getBackendStatus().then(setBackend); }, [api]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState(() => readAppearanceSettings().theme);
@@ -38,18 +42,18 @@ export function CloudSettingsPanel({ settings, controller, usage, onSave, onClos
     return <div className="cloudSettingRow"><span>{label}</span><button type="button" role="switch" aria-label={label} aria-checked={checked}
       className={`toggle ${checked ? "isOn" : ""}`} disabled={locked || disabled} onClick={() => change(!checked)}><span className="toggleKnob"/></button></div>;
   }
-  return <dialog className="cloudSettings" ref={dialog} aria-labelledby="cloud-settings-title" onCancel={event => { event.preventDefault(); if (!saving && working !== "install") onClose(); }}>
+  return <dialog className="cloudSettings" ref={dialog} aria-labelledby="cloud-settings-title" onClick={event => { if (event.target !== event.currentTarget || locked) return; const bounds = event.currentTarget.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); }} onCancel={event => { event.preventDefault(); if (!saving && working !== "install") onClose(); }}>
     <div className="cloudSettingsSidebar">
       <div className="cloudSettingsTitle"><h2 id="cloud-settings-title">Settings</h2></div>
       <nav aria-label="Cloud settings sections">
         <button aria-current={tab === "connection" ? "page" : undefined} onClick={() => setTab("connection")}><Monitor size={17}/> General</button>
         <button aria-current={tab === "experts" ? "page" : undefined} onClick={() => setTab("experts")}><Users size={17}/> Experts</button>
         <button aria-current={tab === "context" ? "page" : undefined} onClick={() => setTab("context")}><RotateCcw size={17}/> Context</button>
+        <button aria-current={tab === "voice" ? "page" : undefined} onClick={() => setTab("voice")}><Mic size={17}/> Voice</button>
       </nav>
-      <button className="cloudSettingsClose" onClick={onClose} disabled={saving || working === "install"}><X size={17}/> Close settings</button>
     </div>
     <div className="cloudSettingsMain">
-      <header><h3>{tab === "connection" ? "General" : tab === "experts" ? "Experts" : "Context"}</h3><button className="cloudIconButton" aria-label="Close settings" disabled={locked} onClick={onClose}><X size={18}/></button></header>
+      <header><h3>{tab === "connection" ? "General" : tab === "experts" ? "Experts" : tab === "voice" ? "Voice" : "Context"}</h3><button className="cloudIconButton" aria-label="Close settings" disabled={locked} onClick={onClose}><X size={18}/></button></header>
       <section className="cloudSettingsContent">
         {tab === "connection" && <>
           <div className="cloudSettingGroup">
@@ -68,7 +72,7 @@ export function CloudSettingsPanel({ settings, controller, usage, onSave, onClos
               <button className="cloudIconButton" disabled={locked || checking} aria-label="Refresh connection" onClick={() => void refresh()}><RefreshCw size={15}/></button>
             </div>
           </div>
-          <CloudModelPicker label="Main orchestrator" value={config.orchestrator} models={models} disabled={locked} onChange={orchestrator => updateProvider({ orchestrator })}/>
+          <CloudModelPicker label="Main orchestrator" value={config.orchestrator} models={models} disabled={locked} onChange={orchestrator => updateProvider({ orchestrator, serviceTier: models.find(model => model.id === orchestrator.model)?.serviceTiers?.some(tier => tier.id === config.serviceTier) ? config.serviceTier : "default" })}/>
           {connection?.state === "ready" && <CloudUsageDetails usage={usage}/>}
         </>}
         {tab === "experts" && <>
@@ -88,6 +92,7 @@ export function CloudSettingsPanel({ settings, controller, usage, onSave, onClos
           </div>
 
         </>}
+        {tab === "voice" && <VoiceSettings showHeading={false} api={api} backend={backend} active onBackendStatus={setBackend} serverMode={false} speechAdvertised={false}/>}
         {(error || message || connection?.state === "unsupported_account" || connection?.state === "unavailable") && <p className="cloudSettingsMessage" role={error ? "alert" : "status"}>{error || message || connection?.message}</p>}
       </section>
 

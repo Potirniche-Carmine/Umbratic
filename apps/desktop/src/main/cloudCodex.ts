@@ -51,6 +51,7 @@ async function inspect(rpc: CloudRpc): Promise<CloudConnection> {
       if (typeof model.model !== "string" || model.hidden) continue;
       models.push({ id: model.model, label: model.displayName || model.model,
         efforts: (model.supportedReasoningEfforts ?? []).map((item: { reasoningEffort: unknown }) => item.reasoningEffort).filter(isCloudEffort),
+        serviceTiers: (model.serviceTiers || []).filter((tier: any) => typeof tier.id === "string" && typeof tier.name === "string").map((tier: any) => ({ id: tier.id, name: tier.name })),
         defaultEffort: isCloudEffort(model.defaultReasoningEffort) ? model.defaultReasoningEffort : undefined });
     }
     cursor = page.nextCursor || undefined;
@@ -99,10 +100,12 @@ export const codexCloudRuntime: CloudRuntime = {
         if (stopped) return;
         if (workspace.account && workspace.account !== connection.account && workspace.sessionId) throw new Error("The signed-in account changed. Clear context before continuing.");
         const config = settings.providers.codex;
+        const access = codexAccess(config.approvalMode, workspace.paths || [workspace.path]);
+        if (config.serviceTier !== "default" && !connection.models.find(model => model.id === config.orchestrator.model)?.serviceTiers?.some(tier => tier.id === config.serviceTier)) throw new Error("This model no longer offers the selected speed. Choose Standard or another available speed.");
         const result = await rpc.request(workspace.sessionId ? "thread/resume" : "thread/start", {
           ...(workspace.sessionId ? { threadId: workspace.sessionId, excludeTurns: true } : {}),
           cwd: workspace.path, model: config.orchestrator.model, modelProvider: "openai",
-          sandbox: "workspace-write", approvalPolicy: "on-request", approvalsReviewer: "user",
+          sandbox: access.sandbox, approvalPolicy: access.approvalPolicy, approvalsReviewer: access.approvalsReviewer, serviceTier: config.serviceTier,
           developerInstructions: cloudWorkflowInstructions(settings, "codex") + `\nWorkspace folders: ${JSON.stringify(workspace.paths || [workspace.path])}`,
           config: { "sandbox_workspace_write.writable_roots": workspace.paths || [workspace.path], "features.memories": false, "agents.enabled": settings.subagents, "skills.include_instructions": false, "skills.bundled.enabled": false },
         });
@@ -141,8 +144,8 @@ export const codexCloudRuntime: CloudRuntime = {
         void completion.catch(() => undefined);
         // Install listeners before turn/start: notifications can precede its response.
         const turn = await rpc.request("turn/start", { threadId, model: config.orchestrator.model, effort: config.orchestrator.effort,
-          sandboxPolicy: { type: "workspaceWrite", writableRoots: workspace.paths || [workspace.path], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
-          input: [...(prompt ? [{ type: "text", text: prompt, text_elements: [] }] : []), ...images.map(image => ({ type: "localImage", path: image.path }))] });
+          sandboxPolicy: access.sandboxPolicy, approvalPolicy: access.approvalPolicy, approvalsReviewer: access.approvalsReviewer, serviceTier: config.serviceTier,
+          input: [...(prompt ? [{ type: "text", text: prompt, text_elements: [] }] : []), ...images.map(image => image.mimeType.startsWith("image/") ? ({ type: "localImage", path: image.path }) : ({ type: "text", text: `Attached file: ${image.path}\nRead it with native tools as needed.`, text_elements: [] }))] });
         turnId = turn.turn.id;
         if (stopped) { await rpc.request("turn/interrupt", { threadId, turnId }); finish?.(); }
         await completion;
@@ -157,6 +160,12 @@ export const codexCloudRuntime: CloudRuntime = {
     } };
   },
 };
+
+export function codexAccess(mode: string, roots: string[]) {
+  return { sandbox: mode === "full-access" ? "danger-full-access" : mode === "read-only" ? "read-only" : "workspace-write",
+    approvalPolicy: mode === "full-access" ? "never" : "on-request", approvalsReviewer: mode === "auto" ? "auto_review" : "user",
+    sandboxPolicy: mode === "full-access" ? { type: "dangerFullAccess" } : mode === "read-only" ? { type: "readOnly" } : { type: "workspaceWrite", writableRoots: roots, networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false } };
+}
 
 function itemLabel(item: Record<string, any>): string {
   if (item.type === "commandExecution") return "Run command";

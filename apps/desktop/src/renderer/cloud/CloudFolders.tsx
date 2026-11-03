@@ -15,10 +15,11 @@ export function CloudFolders({ projects, selectedIds, disabled, onChange, onAdd 
       const rect = event.currentTarget.getBoundingClientRect();
       element.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - 332))}px`; element.style.top = `${rect.bottom + 8}px`; element.showPopover();
     }}><FolderOpen size={17}/></button>
-    <span className="cloudWorkspaceName" title={selected.map(project => project.rootPath).join("\n")}>{selected.length ? selected.slice(0, 2).map((project, index) => <React.Fragment key={project.id}>{index > 0 && <span className="cloudFolderSeparator" aria-hidden="true">/</span>}{project.name}</React.Fragment>) : "Workspace"}{selected.length > 2 && <span>+{selected.length - 2}</span>}</span>
+    <span className="cloudWorkspaceName" title={selected.map(project => project.rootPath).join("\n")}>{selected.length ? selected.slice(0, 2).map((project, index) => <React.Fragment key={project.id}>{index > 0 && <span className="cloudFolderSeparator" aria-hidden="true">·</span>}{project.name}</React.Fragment>) : "Workspace"}{selected.length > 2 && <span>+{selected.length - 2}</span>}</span>
     <div ref={menu} popover="auto" role="dialog" aria-label="Workspace folders" className="cloudFoldersMenu">
-      {projects.map(project => <button key={project.id} type="button" role="checkbox" aria-checked={selectedIds.includes(project.id)} disabled={disabled} onClick={() => onChange(selectedIds.includes(project.id) ? selectedIds.filter(id => id !== project.id) : [...selectedIds, project.id])}>
-        <Check size={15} style={{ visibility: selectedIds.includes(project.id) ? "visible" : "hidden" }}/><span><strong>{project.name}</strong><small>{project.rootPath}</small></span>
+      <div className="cloudFoldersHeading">Folders<span>{selected.length} selected</span></div>
+      {[...projects].sort((a, b) => Number(selectedIds.includes(b.id)) - Number(selectedIds.includes(a.id)) || a.name.localeCompare(b.name)).map(project => <button key={project.id} type="button" role="checkbox" aria-checked={selectedIds.includes(project.id)} disabled={disabled} onClick={() => onChange(selectedIds.includes(project.id) ? selectedIds.filter(id => id !== project.id) : [...selectedIds, project.id])}>
+        <FolderOpen size={16}/><span title={project.rootPath}><strong>{project.name}</strong><small>{project.rootPath.split(/[\\/]/).slice(0, -1).slice(-2).join("/")}</small></span><Check className="cloudFolderCheck" size={15} style={{ visibility: selectedIds.includes(project.id) ? "visible" : "hidden" }}/>
       </button>)}
       <button type="button" disabled={disabled} onClick={() => { menu.current?.hidePopover(); onAdd(); }}><Plus size={16}/><span>Add folders…</span></button>
     </div>
