@@ -10,7 +10,6 @@ export type CloudProviderSettings = {
   roles: Record<CloudRole, CloudModelChoice>;
 };
 export type CloudSettings = {
-  contextPolicyVersion?: number;
   workspaceRepositoryIds?: string[];
   mode: AppMode;
   provider: CloudProvider;
@@ -18,7 +17,6 @@ export type CloudSettings = {
   subagents: boolean;
   showToolActivity: boolean;
   idleResetHours: number;
-  resetAfterCompactions: number;
 };
 export type CloudConnection = {
   provider: CloudProvider;
@@ -81,7 +79,7 @@ export function defaultCloudSettings(): CloudSettings {
   const sol = (effort: CloudEffort): CloudModelChoice => ({ model: "gpt-6.1-sol", effort });
   const opus = (effort: CloudEffort): CloudModelChoice => ({ model: "claude-opus-5-5", effort });
   return {
-    mode: "private", provider: "codex", subagents: true, showToolActivity: true, idleResetHours: 3, resetAfterCompactions: 0, contextPolicyVersion: 2, workspaceRepositoryIds: [],
+    mode: "private", provider: "codex", subagents: true, showToolActivity: true, idleResetHours: 3, workspaceRepositoryIds: [],
     providers: {
       codex: { executable: "", orchestrator: sol("medium"), roles: {
         routine: sol("medium"), architecture: sol("xhigh"),
@@ -107,7 +105,6 @@ export function validateCloudSettings(value: CloudSettings): CloudSettings {
   const legacy = value as CloudSettings & { dailyReset?: boolean };
   const idleResetHours = Object.hasOwn(value, "idleResetHours") ? value.idleResetHours : legacy.dailyReset === false ? 0 : 3;
   if (!Number.isInteger(idleResetHours) || idleResetHours < 0 || idleResetHours > 24) throw new Error("Choose an inactivity period of 1 to 24 hours, or Never.");
-  if (!Number.isInteger(value.resetAfterCompactions) || value.resetAfterCompactions < 0 || value.resetAfterCompactions > 20) throw new Error("Choose between 0 and 20 compactions.");
   for (const provider of ["codex", "claude"] as const) {
     const config = value.providers?.[provider];
     if (!config || typeof config.executable !== "string" || config.executable.length > 4096) throw new Error("Invalid runtime path.");
@@ -117,10 +114,11 @@ export function validateCloudSettings(value: CloudSettings): CloudSettings {
   }
   const workspaceRepositoryIds = value.workspaceRepositoryIds ?? [];
   if (!Array.isArray(workspaceRepositoryIds) || workspaceRepositoryIds.length > 16 || workspaceRepositoryIds.some(id => typeof id !== "string" || id.length > 200)) throw new Error("Choose up to 16 workspace folders.");
-  const resetAfterCompactions = !value.contextPolicyVersion && value.resetAfterCompactions === 5 ? 0 : value.resetAfterCompactions;
-  const result = structuredClone({ ...value, idleResetHours, showToolActivity, resetAfterCompactions, workspaceRepositoryIds, contextPolicyVersion: 2 }) as CloudSettings & { dailyReset?: boolean; review?: boolean };
+  const result = structuredClone({ ...value, idleResetHours, showToolActivity, workspaceRepositoryIds }) as CloudSettings & { dailyReset?: boolean; review?: boolean; resetAfterCompactions?: number; contextPolicyVersion?: number };
   delete result.dailyReset;
   delete result.review;
+  delete result.resetAfterCompactions;
+  delete result.contextPolicyVersion;
   for (const provider of ["codex", "claude"] as const) delete (result.providers[provider].roles as Partial<Record<string, CloudModelChoice>>).review;
   return result;
 }
@@ -137,6 +135,5 @@ export function contextResetReason(workspace: CloudWorkspace, settings: CloudSet
   if (settings.idleResetHours > 0 && Number.isFinite(lastActive) && now.getTime() - lastActive >= settings.idleResetHours * 3_600_000) {
     return `Fresh context after ${settings.idleResetHours} hours away.`;
   }
-  if (settings.resetAfterCompactions > 0 && workspace.compactions >= settings.resetAfterCompactions) return `Fresh context after ${workspace.compactions} compactions.`;
   return undefined;
 }

@@ -24,7 +24,7 @@ export function claudeUsage(input: any): CloudUsage {
 }
 export function planLabel(value?: string): string | undefined {
   if (!value) return undefined;
-  const names: Record<string, string> = { prolite: "Pro", pro: "Pro", plus: "Plus", max: "Max", team: "Team", business: "Business", enterprise: "Enterprise", free: "Free", edu: "Education" };
+  const names: Record<string, string> = { prolite: "Pro Lite", pro: "Pro", plus: "Plus", max: "Max", team: "Team", business: "Business", enterprise: "Enterprise", free: "Free", edu: "Education" };
   return names[value.toLowerCase()] || value.replace(/[_-]/g, " ").replace(/^./, initial => initial.toUpperCase());
 }
 export function claudeModelLabel(id: string, fallback: string): string {

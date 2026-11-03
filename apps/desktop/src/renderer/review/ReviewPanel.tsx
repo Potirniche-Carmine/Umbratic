@@ -48,6 +48,7 @@ function splitReviewPath(filePath: string): { dir: string; name: string } {
 
 export function ReviewPanel({
   files,
+  chrome = true,
   open,
   initialSelectedPath,
   taskId,
@@ -69,6 +70,7 @@ export function ReviewPanel({
   onLoadDocumentReview,
 }: {
   files: ReviewFile[];
+  chrome?: boolean;
   /** Whether the panel is showing. A hidden panel holds no armed mode. */
   open: boolean;
   initialSelectedPath?: string;
@@ -355,7 +357,7 @@ export function ReviewPanel({
       }}
     >
       {feedbackAdded ? <div className="reviewFeedbackAdded" role="status"><span><Check size={13} /></span><strong>Added — sends with your next message</strong></div> : null}
-      <div
+      {chrome && <div
         className="reviewResizeHandle"
         role="separator"
         aria-label="Resize review panel"
@@ -363,18 +365,18 @@ export function ReviewPanel({
         tabIndex={0}
         onPointerDown={onResizePointerDown}
         onKeyDown={onResizeKeyDown}
-      />
+      />}
       <header className="reviewTopbar">
         <strong className="reviewChangeSummary">Review</strong>
         <div className="reviewTopActions">
-          {files.length ? <button className="reviewControlButton reviewUndoAll" type="button" onClick={onUndoAll} disabled={!canUndoFile} aria-label="Undo all" title={canUndoFile ? "Undo all changes from the latest prompt" : undoUnavailableReason}><Undo2 size={14} /><span>Undo all</span></button> : null}
+          {chrome && files.length ? <button className="reviewControlButton reviewUndoAll" type="button" onClick={onUndoAll} disabled={!canUndoFile} aria-label="Undo all" title={canUndoFile ? "Undo all changes from the latest prompt" : undoUnavailableReason}><Undo2 size={14} /><span>Undo all</span></button> : null}
           {canUseWorktreeScope ? (
             <div className="reviewScopePicker">
               <button type="button" className="reviewControlButton" onClick={() => setScopeOpen((open) => !open)} aria-expanded={scopeOpen}><span>{selectedScope === "worktree" ? "Whole diff" : "Turn changes"}</span><ChevronDown size={13} /></button>
               {scopeOpen ? <div className="reviewScopeMenu" role="menu"><button type="button" role="menuitemradio" aria-checked={selectedScope === "task"} className={selectedScope === "task" ? "isSelected" : ""} onClick={() => chooseScope("task")}><span><strong>Turn changes</strong><small>Changes made in this model turn</small></span>{selectedScope === "task" ? <Check size={14} /> : null}</button><button type="button" role="menuitemradio" aria-checked={selectedScope === "worktree"} className={selectedScope === "worktree" ? "isSelected" : ""} onClick={() => chooseScope("worktree")}><span><strong>Whole diff</strong><small>All uncommitted changes against HEAD</small></span>{selectedScope === "worktree" ? <Check size={14} /> : null}</button></div> : null}
             </div>
           ) : null}
-          <button className="reviewIconButton" type="button" onClick={onClose} title="Hide review" aria-label="Hide review"><PanelRight size={16} /></button>
+          {chrome && <button className="reviewIconButton" type="button" onClick={onClose} title="Hide review" aria-label="Hide review"><PanelRight size={16} /></button>}
         </div>
       </header>
       {files.length && selectedFile ? (
@@ -402,7 +404,7 @@ export function ReviewPanel({
                       </span>
                       {dir ? <small className="reviewNavigatorDir">{dir.replace(/\/$/, "")}</small> : null}
                     </button>
-                    <button className="reviewIconButton" type="button" onClick={() => onUndoFile(file.path)} disabled={!canUndoFile} title={canUndoFile ? `Undo changes to ${name}` : undoUnavailableReason} aria-label={`Undo changes to ${file.path}`}><Undo2 size={14} /></button>
+                    {chrome && <button className="reviewIconButton" type="button" onClick={() => onUndoFile(file.path)} disabled={!canUndoFile} title={canUndoFile ? `Undo changes to ${name}` : undoUnavailableReason} aria-label={`Undo changes to ${file.path}`}><Undo2 size={14} /></button>}
                   </div>
                 );
               })}</div>
@@ -428,8 +430,8 @@ export function ReviewPanel({
                     than as inapplicable. */}
                 {!selectedFileIsDocument && splitFits && selectedFile.status !== "added" ? <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={effectiveViewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} title="Side by side"><Columns2 size={14} /><span>Side by side</span></button><button type="button" className={effectiveViewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} title="Unified"><Rows3 size={14} /><span>Unified</span></button></span> : null}
                 {!selectedFileIsDocument ? <button className={`reviewIconButton ${wrap ? "isActive" : ""}`} type="button" onClick={toggleWrap} title={wrap ? "Disable line wrapping" : "Wrap long lines"}><WrapText size={15} /></button> : null}
-                <button className="reviewIconButton reviewSelectedUndo" type="button" onClick={() => onUndoFile(selectedFile.path)} disabled={!canUndoFile} title={canUndoFile ? `Undo changes to ${splitReviewPath(selectedFile.path).name}` : undoUnavailableReason} aria-label={`Undo changes to ${selectedFile.path}`}><Undo2 size={15} /></button>
-                <button className="reviewIconButton" type="button" onClick={() => onOpenFile(selectedFile.path)} disabled={!canOpenIde || selectedFile.status === "deleted"} title={`Open in ${selectedIdeLabel}`}><ExternalLink size={15} /></button>
+                {chrome && <button className="reviewIconButton reviewSelectedUndo" type="button" onClick={() => onUndoFile(selectedFile.path)} disabled={!canUndoFile} title={canUndoFile ? `Undo changes to ${splitReviewPath(selectedFile.path).name}` : undoUnavailableReason} aria-label={`Undo changes to ${selectedFile.path}`}><Undo2 size={15} /></button>}
+                {(chrome || canOpenIde) && <button className="reviewIconButton" type="button" onClick={() => onOpenFile(selectedFile.path)} disabled={!canOpenIde || selectedFile.status === "deleted"} title={`Open in ${selectedIdeLabel}`}><ExternalLink size={15} /></button>}
               </div>
             </header>
             <div className="reviewFileScroller" ref={scrollerRef}>

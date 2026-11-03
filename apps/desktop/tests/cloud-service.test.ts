@@ -38,7 +38,6 @@ test("native sessions are isolated by provider and reset without replaying visib
   const f = fixture();
   try {
     const input = { provider: "codex", repositoryId: "project" };
-    f.service.saveCloudSettings({ ...f.service.getCloudSettings(), resetAfterCompactions: 5 });
     const first = f.service.startCloudTurn({ ...input, prompt: "First instruction" });
     assert.throws(() => f.service.resetCloudContext({ key: first.key }), /Stop/);
     assert.throws(() => f.service.saveCloudSettings(f.service.getCloudSettings()), /finish/);
@@ -47,9 +46,9 @@ test("native sessions are isolated by provider and reset without replaying visib
     f.calls[0].resolve(); await tick();
     assert.ok(f.service.getCloudWorkspace(input).lastActiveAt);
     f.service.startCloudTurn({ ...input, prompt: "Second instruction" });
-    assert.equal(f.calls[1].workspace.sessionId, undefined);
+    assert.equal(f.calls[1].workspace.sessionId, "native-1");
     assert.equal(f.calls[1].prompt, "Second instruction");
-    assert.equal(f.calls[1].workspace.entries.some(entry => entry.text === "A completed result"), false);
+    assert.equal(f.calls[1].workspace.entries.some(entry => entry.text === "A completed result"), true);
     f.calls[1].sink.session("native-2", "account"); f.calls[1].resolve(); await tick();
     const other = f.service.getCloudWorkspace({ provider: "claude", repositoryId: "project" });
     assert.notEqual(other.key, first.key); assert.equal(other.sessionId, undefined);

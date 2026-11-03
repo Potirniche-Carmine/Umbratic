@@ -12,10 +12,10 @@ test("provider quota percentages retain their units and omit unavailable windows
   assert.deepEqual(usage.claudeUsage({ rate_limits_available: false }).limits, []);
   assert.deepEqual(usage.codexUsage({}).limits, []);
 });
-test("count reset is opt-in and the arbitrary preview default migrates once", () => {
-  const settings = cloud.defaultCloudSettings(); assert.equal(settings.resetAfterCompactions, 0);
-  const legacy = { ...settings, resetAfterCompactions: 5 }; delete legacy.contextPolicyVersion;
-  assert.equal(cloud.validateCloudSettings(legacy).resetAfterCompactions, 0);
-  assert.equal(cloud.validateCloudSettings({ ...settings, resetAfterCompactions: 5 }).resetAfterCompactions, 5);
-  assert.equal(cloud.validateCloudSettings({ ...legacy, resetAfterCompactions: 3 }).resetAfterCompactions, 3);
+test("old compaction-count resets are discarded while inactivity remains configurable", () => {
+  const settings = cloud.validateCloudSettings({ ...cloud.defaultCloudSettings(), resetAfterCompactions: 5, contextPolicyVersion: 2 });
+  assert.equal(Object.hasOwn(settings, "resetAfterCompactions"), false);
+  assert.equal(Object.hasOwn(settings, "contextPolicyVersion"), false);
+  assert.equal(settings.idleResetHours, 3);
+  assert.equal(cloud.contextResetReason({ sessionId: "native", state: "idle", compactions: 99, entries: [], lastActiveAt: new Date().toISOString() }, settings), undefined);
 });

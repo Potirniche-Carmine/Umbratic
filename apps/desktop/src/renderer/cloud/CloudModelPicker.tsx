@@ -17,7 +17,7 @@ export function CloudModelPicker({ label, value, models, disabled, onChange }: {
       onChange({ model: model.id, effort: model.efforts.includes(value.effort) ? value.effort : model.defaultEffort || model.efforts[0] || "medium" });
     }}>
       {!selected && <option value={value.model} disabled>{displayName(value.model)}{models.length ? " · unavailable" : ""}</option>}
-      {models.map(model => <option key={model.id} value={model.id}>{model.label === model.id ? displayName(model.id) : model.label}</option>)}
+      {models.map(model => <option key={model.id} value={model.id} disabled={!!model.unavailableReason}>{model.label === model.id ? displayName(model.id) : model.label}{model.unavailableReason ? " · separate billing" : ""}</option>)}
     </CloudSelect></label>
     <label><span>Effort</span><CloudSelect label={`${label} effort`} value={efforts.length ? value.effort : "default"} disabled={disabled || !efforts.length}
       onValueChange={selectedValue => onChange({ ...value, effort: selectedValue as CloudEffort })}>

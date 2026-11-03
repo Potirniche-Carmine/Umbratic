@@ -1,3 +1,4 @@
+import { CloudUsageDetails } from "./CloudUsage";
 import React, { useEffect, useRef, useState } from "react";
 import { Check, Monitor, RefreshCw, RotateCcw, Users, X } from "lucide-react";
 import { cloudRoleLabels, type CloudProvider, type CloudRole, type CloudSettings } from "../../shared/cloud";
@@ -41,12 +42,13 @@ export function CloudSettingsPanel({ settings, controller, onSave, onClose }: {
   }
   return <dialog className="cloudSettings" ref={dialog} aria-labelledby="cloud-settings-title" onCancel={event => { event.preventDefault(); if (!saving && working !== "install") onClose(); }}>
     <div className="cloudSettingsSidebar">
-      <div className="cloudSettingsTitle"><button className="cloudIconButton" onClick={onClose} disabled={saving || working === "install"} aria-label="Close settings"><X size={16}/></button><h2 id="cloud-settings-title">Settings</h2></div>
+      <div className="cloudSettingsTitle"><h2 id="cloud-settings-title">Settings</h2></div>
       <nav aria-label="Cloud settings sections">
         <button aria-current={tab === "connection" ? "page" : undefined} onClick={() => setTab("connection")}><Monitor size={17}/> General</button>
         <button aria-current={tab === "experts" ? "page" : undefined} onClick={() => setTab("experts")}><Users size={17}/> Experts</button>
         <button aria-current={tab === "context" ? "page" : undefined} onClick={() => setTab("context")}><RotateCcw size={17}/> Context</button>
       </nav>
+      <button className="cloudSettingsClose" onClick={onClose} disabled={saving || working === "install"}><X size={17}/> Close settings</button>
     </div>
     <div className="cloudSettingsMain">
       <header><h3>{tab === "connection" ? "General" : tab === "experts" ? "Experts" : "Context"}</h3></header>
@@ -61,13 +63,15 @@ export function CloudSettingsPanel({ settings, controller, onSave, onClose }: {
             <div className="cloudSettingRow"><span>Provider</span><CloudSelect label="Cloud provider" icons={cloudProviderIcons} value={provider} disabled={locked} onValueChange={selectedValue => void save({ ...settings, provider: selectedValue as CloudProvider })}><option value="codex">ChatGPT</option><option value="claude">Claude Code</option></CloudSelect></div>
             <div className="cloudAccountRow">
               <div className="cloudProviderMark"><CloudProviderIcon provider={provider}/></div>
-              <div className="cloudAccountIdentity"><strong>{provider === "codex" ? "ChatGPT" : "Claude"}</strong><span>{working === "connect" ? "Waiting for sign-in…" : checking ? "Checking connection…" : connection?.state === "ready" ? connection.account || "Connected" : connection?.state === "missing" ? `${name} not installed` : "Not connected"}</span></div>
+              <div className="cloudAccountIdentity"><strong>{provider === "codex" ? "ChatGPT" : "Claude"}</strong><span>{working === "connect" ? "Waiting for sign-in…" : checking ? "Checking connection…" : connection?.state === "ready" ? connection.accountEmail || "Connected" : connection?.state === "missing" ? `${name} not installed` : "Not connected"}</span></div>
+              {connection?.state === "ready" && connection.planName && <span className="cloudPlanBadge">{connection.planName}</span>}
               {connection?.state === "ready" ? <Check className="cloudConnected" size={17} aria-label="Connected"/> : <button className="cloudPrimary cloudAction" disabled={locked || checking && working !== "connect"} onClick={() => void (working === "connect" ? cancel() : connection?.state === "missing" ? install() : connect())}>
                 {working === "install" ? "Installing…" : working === "connect" ? "Cancel" : connection?.state === "missing" ? `Install ${name}` : `Connect ${name}`}
               </button>}
               <button className="cloudIconButton" disabled={locked || checking} aria-label="Refresh connection" onClick={() => void refresh()}><RefreshCw size={15}/></button>
             </div>
           </div>
+          {connection?.state === "ready" && <CloudUsageDetails usage={connection.usage}/>}
           <CloudModelPicker label="Main orchestrator" value={config.orchestrator} models={models} disabled={locked} onChange={orchestrator => updateProvider({ orchestrator })}/>
           <details className="cloudAdvanced"><summary>Advanced</summary><label>Executable<input value={executable} disabled={locked} placeholder="Automatic" onChange={event => setExecutable(event.target.value)}/></label><button className="cloudAction" disabled={locked || executable === config.executable} onClick={() => updateProvider({ executable })}>Apply</button></details>
         </>}
@@ -84,16 +88,13 @@ export function CloudSettingsPanel({ settings, controller, onSave, onClose }: {
             <div className="cloudSettingRow"><span>Reset after a break</span><CloudSelect label="Reset after a break" disabled={locked} value={settings.idleResetHours} onValueChange={selectedValue => void save({ ...settings, idleResetHours: Number(selectedValue) })}>
               <option value={0}>Never</option>{Array.from({ length: 24 }, (_, index) => index + 1).map(hours => <option key={hours} value={hours}>{hours} {hours === 1 ? "hour" : "hours"}</option>)}
             </CloudSelect></div>
-            <div className="cloudSettingRow"><span>Reset after compactions</span><CloudSelect label="Reset after compactions" disabled={locked} value={settings.resetAfterCompactions} onValueChange={selectedValue => void save({ ...settings, resetAfterCompactions: Number(selectedValue) })}>
-              <option value={0}>Never</option>{Array.from({ length: 20 }, (_, index) => index + 1).map(count => <option key={count} value={count}>{count}</option>)}
-            </CloudSelect></div>
+
           </div>
-          <div className="cloudSettingGroup"><div className="cloudSettingRow"><span>Compaction</span><span className="cloudSettingValue">Automatic</span></div><div className="cloudSettingRow"><span>Prompt cache</span><span className="cloudSettingValue">Managed by {name}</span></div></div>
-          <p className="cloudFootnote">Resets before your next message. Files stay.</p>
+
         </>}
         {(error || message || connection?.state === "unsupported_account" || connection?.state === "unavailable") && <p className="cloudSettingsMessage" role={error ? "alert" : "status"}>{error || message || connection?.message}</p>}
       </section>
-      <footer><button className="cloudPrimary cloudAction" onClick={onClose} disabled={saving || working === "install"}>Done</button></footer>
+
     </div>
   </dialog>;
 }

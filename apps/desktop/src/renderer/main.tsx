@@ -1,3 +1,5 @@
+import { fileToPastedAttachment } from "./pastedAttachments";
+import { ReviewFeedbackChip, ReviewFeedbackDialog } from "./review/ReviewFeedbackDialog";
 import { PromptTextarea } from "./PromptTextarea";
 import { promptEnterAction } from "./promptKeyboard";
 import { WorkspaceRoot } from "./cloud/WorkspaceRoot";
@@ -2922,25 +2924,6 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
     return chat.id;
   }
 
-  function fileToPastedAttachment(file: File): Promise<PastedAttachmentInput> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result !== "string") {
-          reject(new Error("Could not read pasted file."));
-          return;
-        }
-        resolve({
-          name: file.name || (file.type.startsWith("image/") ? "pasted-image.png" : "pasted-file"),
-          mimeType: file.type || undefined,
-          dataUrl: reader.result,
-        });
-      };
-      reader.onerror = () => reject(reader.error ?? new Error("Could not read pasted file."));
-      reader.readAsDataURL(file);
-    });
-  }
-
   async function attachPastedFiles(files: File[]) {
     if (!files.length || !canAttachFiles) return;
     setError(null);
@@ -3631,7 +3614,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
                   </button>
                 </div>
               ) : null}
-              {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
+              {reviewPromptFeedback.length ? <ReviewFeedbackChip count={reviewPromptFeedback.length} onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }}/> : null}
             </div>
             {/* A chat that started without a folder can never be given one, so
                 the control goes rather than sitting there greyed out: a dead
@@ -4077,13 +4060,11 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
           setReviewFeedbackPreview(null);
         };
         return (
-          <div className="modalScrim reviewFeedbackScrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}>
-            <section className="reviewFeedbackDialog" role="dialog" aria-modal="true" aria-labelledby="review-feedback-title" onKeyDown={(event) => { if (event.key === "Escape") closeDialog(); }}>
-              <header><span><MessageSquareText size={16} /><strong id="review-feedback-title">Review feedback</strong><small>{dialogFeedback.length}</small></span><button type="button" onClick={closeDialog} aria-label="Close review feedback"><X size={15} /></button></header>
-              <div>{dialogFeedback.map((comment) => <article key={comment.id}><div><button className="reviewFeedbackFileLink" type="button" onClick={() => { closeDialog(); openReviewReference(comment.filePath); }} title={`Open ${comment.filePath} in review`}><strong>{comment.filePath}</strong></button><small>{comment.lineLabel}</small></div><p>{comment.body}</p>{!readOnly ? <button type="button" onClick={() => setReviewPromptFeedback((current) => current.filter((candidate) => candidate.id !== comment.id))} aria-label={`Remove feedback for ${comment.filePath}`}><X size={13} /></button> : null}</article>)}</div>
-              <footer>{!readOnly ? <button type="button" onClick={() => { setReviewPromptFeedback([]); closeDialog(); }}>Remove all</button> : null}<button className="primaryAction" type="button" onClick={closeDialog}>Done</button></footer>
-            </section>
-          </div>
+          <ReviewFeedbackDialog comments={dialogFeedback} onClose={closeDialog}
+            onOpenFile={openReviewReference}
+            onRemove={readOnly ? undefined : id => setReviewPromptFeedback(current => current.filter(comment => comment.id !== id))}
+            onRemoveAll={readOnly ? undefined : () => setReviewPromptFeedback([])}/>
+
         );
       })() : null}
 
