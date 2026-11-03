@@ -227,7 +227,7 @@
 .unifiedWorkspace .cloudDock .cloudModelTrigger { font-size: 11.5px; font-weight: 500; color: var(--muted); padding: 4px 6px; min-height: 30px; }
 .unifiedWorkspace .cloudDock .cloudRunControls { gap: 4px; }
 .unifiedWorkspace .cloudDock .cloudRunControls .cloudSelectTrigger { font-size: 11.5px !important; font-weight: 500; color: var(--muted); padding: 4px 6px; }
-.unifiedWorkspace .cloudDock .dictationControl { height: 30px; }
+.unifiedWorkspace .chatConnectionIcon .cloudProviderIcon { width: 12px; height: 12px; }
 .unifiedWorkspace .cloudDockArea { position: relative; z-index: 24; padding-top: 12px; padding-bottom: 18px; }
 .unifiedWorkspace .composerPendingTray { position: static; display: none; width: min(760px, 100%); transform: none; }
 .unifiedWorkspace .composerPendingTray.hasPending { display: flex; }

@@ -4,6 +4,8 @@ import type { CloudChatRecord } from "../../shared/cloud";
 import type { RepositoryInfo } from "../../shared/desktopApi";
 import { relativeChatAge } from "../chatListPresentation";
 import { ChatArchiveToolbar, ChatProjectSection, ChatArchiveRow } from "../ChatArchivePrimitives";
+import { cloudProviderIcons } from "./CloudProviderIcon";
+import { workspaceProviderLabels } from "../WorkspaceNavigation";
 
 type CloudArchiveGroup = { key: string; name: string; path?: string; ids: string[]; chats: CloudChatRecord[] };
 export function cloudArchiveGroups(chats: CloudChatRecord[], projects: RepositoryInfo[], query: string): CloudArchiveGroup[] {
@@ -49,6 +51,7 @@ export function CloudChatArchiveContent({ chats, projects, activeKey, disabled, 
         </div>}>
         {group.chats.map(chat => <ChatArchiveRow key={chat.key} title={chat.title} active={chat.key === activeKey} disabled={disabled} deleteDisabled={chat.state !== "idle"}
           detail={chat.updatedAt ? relativeChatAge(chat.updatedAt) : ""} updatedAt={chat.updatedAt}
+          icon={<span className="chatConnectionIcon" role="img" aria-label={workspaceProviderLabels[chat.provider]}>{cloudProviderIcons[chat.provider]}</span>}
           status={chat.state !== "idle" && <span className={`workspaceActivity is-${chat.state}`} aria-label={chat.state === "waiting" ? "Needs your attention" : "Working"}/>}
           onSelect={() => onSelect(chat.key)} onDelete={() => onDelete([chat])}/>)}
       </ChatProjectSection>)}

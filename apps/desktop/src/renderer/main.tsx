@@ -762,7 +762,7 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
       if (!existing) {
         existing = {
           key,
-          name: chat.repositoryName || folderName(chat.repositoryPath),
+          name: chat.repositoryName || (chat.repositoryPath ? folderName(chat.repositoryPath) : "Chats"),
           path: chat.repositoryPath,
           chats: [],
           worktrees: [],
@@ -3624,7 +3624,7 @@ item.reviewFeedback.length ? (
                 other control in the row twice. */}
             {chatStartedWithoutFolder ? null : (
               <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
-                <WorkspaceFolderPicker projects={projects} selectedIds={repository ? [repository.id] : []} disabled={busy || !!task} multiple={false}
+                <WorkspaceFolderPicker projects={repository && !projects.some(project => project.id === repository.id) ? [repository, ...projects] : projects} selectedIds={repository ? [repository.id] : []} disabled={busy || !!task} multiple={false}
                   onChange={ids => void pickRepository(projects.find(project => project.id === ids[0]))} onAdd={() => void pickRepository()}/>
                 {repository?.kind === "git" ? (
                   <BranchPicker

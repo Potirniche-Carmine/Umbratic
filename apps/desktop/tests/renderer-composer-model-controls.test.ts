@@ -122,9 +122,10 @@ test("controls this chat can never use are gone, not greyed out", () => {
   const remote = readFileSync(new URL("../src/renderer/RemoteControls.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(remote, /locked/);
   assert.doesNotMatch(remote, /Lock/);
-  // A run is different: it lifts in a moment, and a control that vanished for
-  // its length would move every other control in the row twice.
-  assert.match(main, /className="workspaceControl"[\s\S]*?disabled=\{busy\}/);
+  // The shared picker preserves the folder label after a run locks its scope.
+  assert.match(main, /<WorkspaceFolderPicker[\s\S]*?disabled=\{busy \|\| !!task\}/);
+  const folders = readFileSync(new URL("../src/renderer/WorkspaceFolderPicker.tsx", import.meta.url), "utf8");
+  assert.match(folders, /className="workspaceControl"[\s\S]*?disabled=\{disabled\}/);
 });
 
 test("the model name carries no icon and no context window", () => {
