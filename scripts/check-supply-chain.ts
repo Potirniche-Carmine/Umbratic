@@ -150,7 +150,10 @@ for (const [location, entry] of Object.entries(lock.packages ?? {})) {
   if (typeof entry.integrity !== "string" || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(entry.integrity)) {
     fail(`package-lock.json ${location} must have SHA-512 integrity metadata.`);
   }
-  if (!allowedNpmLicenses.has(entry.license)) {
+  const licenseException = (supplyChainPolicy.reviewedNpmLicenseExceptions ?? []).some((reviewed) => (
+    reviewed.package === npmPackageName(location) && reviewed.version === entry.version && reviewed.license === entry.license
+  ));
+  if (!allowedNpmLicenses.has(entry.license) && !licenseException) {
     fail(`npm package ${location} has an unapproved license expression: ${JSON.stringify(entry.license)}.`);
   }
   const name = npmPackageName(location);

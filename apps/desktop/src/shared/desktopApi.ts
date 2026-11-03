@@ -3,6 +3,18 @@ import type { DesktopApi } from "./desktopApiTypes";
 export * from "./desktopApiTypes";
 
 export const desktopIpcChannels = {
+  getCloudSettings: "umbratic:get-cloud-settings",
+  saveCloudSettings: "umbratic:save-cloud-settings",
+  inspectCloudProvider: "umbratic:inspect-cloud-provider",
+  cancelCloudSignIn: "umbratic:cancel-cloud-sign-in",
+  signInCloudProvider: "umbratic:sign-in-cloud-provider",
+  installCloudProvider: "umbratic:install-cloud-provider",
+  getCloudWorkspace: "umbratic:get-cloud-workspace",
+  startCloudTurn: "umbratic:start-cloud-turn",
+  stopCloudTurn: "umbratic:stop-cloud-turn",
+  resetCloudContext: "umbratic:reset-cloud-context",
+  respondCloudApproval: "umbratic:respond-cloud-approval",
+
   listProjects: "umbratic:list-projects",
   listChats: "umbratic:list-chats",
   createChat: "umbratic:create-chat",
@@ -114,7 +126,7 @@ export const desktopIpcChannels = {
   setAutomaticAppUpdates: "umbratic:set-automatic-app-updates",
   installAppUpdate: "umbratic:install-app-update",
 } as const satisfies Record<
-  Exclude<keyof DesktopApi, "onBackendEvent" | "onWorkspaceIndex" | "onDictationEvent" | "onModelDownloadEvent" | "onAppUpdateStatus">,
+  Exclude<keyof DesktopApi, "onCloudWorkspace" | "onBackendEvent" | "onWorkspaceIndex" | "onDictationEvent" | "onModelDownloadEvent" | "onAppUpdateStatus">,
   string
 >;
 

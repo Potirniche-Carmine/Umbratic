@@ -1,3 +1,4 @@
+import type { CloudApi } from "./cloud";
 import type { ReasoningEffort } from "./modelReasoning";
 export { REASONING_EFFORTS, DEFAULT_REASONING_EFFORT, isReasoningEffort, resolveReasoningEffort } from "./modelReasoning";
 export type { ReasoningEffort } from "./modelReasoning";
@@ -586,7 +587,7 @@ export type SystemProfile = {
 
 export type { LocalCatalogModel, LocalCatalogModelKind, LocalMemoryFit, LocalModelQuant, ModelDownloadEvent } from "./localModels";
 
-export type DesktopApi = {
+export type DesktopApi = CloudApi & {
   listProjects(): Promise<RepositoryInfo[]>;
   listChats(): Promise<ChatRecord[]>;
   createChat(input?: {

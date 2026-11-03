@@ -220,6 +220,17 @@ function verifyMacCodeSignature(appBundle: string) {
 const resources = packagedResources();
 const executable = (name: string) => process.platform === "win32" ? `${name}.exe` : name;
 const appArchive = requireFile(path.join(resources, "app.asar"));
+// Electron cannot spawn a native binary from inside app.asar. Verify both the
+// executable and its original vendor notices in the unpacked platform package.
+const claudePlatform = `${process.platform}-${process.arch}`;
+const claudePackage = path.join(resources, "app.asar.unpacked", "node_modules", "@anthropic-ai", `claude-agent-sdk-${claudePlatform}`);
+const claudeBinary = requireFile(path.join(claudePackage, executable("claude")));
+requireFile(path.join(claudePackage, "LICENSE.md"));
+const claudeProbe = spawnSync(claudeBinary, ["--version"], { encoding: "utf8", timeout: 10_000,
+  env: { ...process.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } });
+if (claudeProbe.status !== 0 || !/^2\.1\.303 \(Claude Code\)/m.test(claudeProbe.stdout)) {
+  throw new Error("The packaged official Claude Code runtime is missing, modified, or cannot start.");
+}
 if (process.platform === "win32") {
   verifyWindowsDependencies(path.resolve(resources, ".."));
   verifyPeArchitecture(path.resolve(resources, "../Umbratic.exe"), process.arch);

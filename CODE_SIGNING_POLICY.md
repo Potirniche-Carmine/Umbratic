@@ -19,7 +19,11 @@ source-code archive links and digest labels to its release page automatically.
 Umbratic has no product analytics or automatic diagnostic uploads. History and
 redacted logs stay on the device. Network activity includes requested model
 downloads, enabled release checks, optional web search, and authentication/model
-requests to the selected Veil server. Server operators set their own data
+requests to the selected Veil server. Cloud mode adds authentication and inference
+requests from the official Codex or Claude Code runtime to the selected provider,
+and network activity from tools the user permits. Runtime analytics and automatic
+memory are disabled; each provider's own data policies and account settings still
+apply. See [Cloud runtime details](docs/cloud-runtimes.md). Server operators set their own data
 policies. External services have their own policies:
 [GitHub](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement),
 [Hugging Face](https://huggingface.co/privacy) and

@@ -9,7 +9,8 @@ test("renderer loads SQLite startup settings before its first app render", () =>
   // And the stored chords are in force before that first paint, so no tooltip
   // is ever drawn advertising a key the user rebound.
   assert.match(source, /setShortcutOverrides\(await api\.getKeyBindings\(\)/);
-  assert.match(source, /render\(<App startupSettings=\{startupSettings\} \/>/);
+  assert.match(source, /render\(<WorkspaceRoot api=\{api\}/);
+  assert.match(source, /renderPrivate=\{onCloud => <App startupSettings=\{startupSettings\} onCloud=\{onCloud\}/);
   assert.doesNotMatch(source, /useState<PermissionMode>\("normal"\)/);
 });
 

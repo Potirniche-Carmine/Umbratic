@@ -62,6 +62,7 @@ export function readAppearanceSettings(): AppearanceSettings {
 
 export function writeAppearanceSettings(settings: AppearanceSettings) {
   window.localStorage.setItem(appearanceSettingsKey, JSON.stringify(settings));
+  window.dispatchEvent(new Event("umbratic:appearance-change"));
 }
 
 export function readWorkspaceMode(): WorkspaceMode {

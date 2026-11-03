@@ -1,3 +1,4 @@
+import { getCloudSettings, saveCloudSettings, inspectCloudProvider, cancelCloudSignIn, signInCloudProvider, installCloudProvider, getCloudWorkspace, startCloudTurn, stopCloudTurn, resetCloudContext, respondCloudApproval, stopCloudService } from "./cloudService";
 import { readGeneratedImage } from "./generatedImage";
 import { imageRuntimeBinary } from "./localImage";
 import { readImageModelSetting, writeImageModelSetting } from "./settingsStorage";
@@ -358,6 +359,18 @@ async function createWindow() {
 
 function desktopIpcHandlers(): DesktopIpcHandlers {
   return {
+    getCloudSettings: async () => getCloudSettings(),
+    saveCloudSettings: async (input) => saveCloudSettings(input),
+    inspectCloudProvider: async (input) => inspectCloudProvider(input),
+    cancelCloudSignIn: async (input) => cancelCloudSignIn(input),
+    signInCloudProvider: async (input) => signInCloudProvider(input),
+    installCloudProvider: async (input) => installCloudProvider(input),
+    getCloudWorkspace: async (input) => getCloudWorkspace(input),
+    startCloudTurn: async (input) => startCloudTurn(input),
+    stopCloudTurn: async (input) => stopCloudTurn(input),
+    resetCloudContext: async (input) => resetCloudContext(input),
+    respondCloudApproval: async (input) => respondCloudApproval(input),
+
     listProjects: () => readProjects(),
     listChats: () => readChats(),
     createChat: (input) => createChat(input),
@@ -638,6 +651,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopCloudService();
   stopAppUpdates();
   stopLocalCacheMaintenance();
   // A download in flight leaves its .partial file behind on purpose: the next

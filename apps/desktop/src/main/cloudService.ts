@@ -1,0 +1,203 @@
+import { app } from "electron";
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { contextResetReason, defaultCloudSettings, isCloudProvider, validateCloudSettings,
+  type CloudConnection, type CloudSettings, type CloudWorkspace, type CloudWorkspaceInput } from "../shared/cloud";
+import { withAppDatabase } from "./storageDatabase";
+import { readProjects } from "./storage";
+import { getMainWindow } from "./mainRuntime";
+import { codexCloudRuntime, codexExecutable, stopCodexLogin } from "./cloudCodex";
+import { claudeCloudRuntime, claudeExecutable, stopClaudeLogin } from "./cloudClaude";
+import { CloudRuntimeMissing, cloudInstallInProgress, installOfficialCloudRuntime, stopCloudInstall } from "./cloudInstall";
+import type { ApprovalAnswer, CloudRun, CloudRuntimeSink } from "./cloudRuntimeTypes";
+
+const workspaces = new Map<string, CloudWorkspace>();
+const runs = new Map<string, CloudRun>();
+const stopping = new Set<string>();
+const approvals = new Map<string, { key: string; resolve(value: ApprovalAnswer): void }>();
+const timers = new Map<string, NodeJS.Timeout>();
+let closing = false;
+
+function readStored(key: string): unknown {
+  return withAppDatabase(db => {
+    const row = db.prepare("SELECT payload FROM settings WHERE key = ?").get(key) as { payload: string } | undefined;
+    try { return row ? JSON.parse(row.payload) : undefined; } catch { return undefined; }
+  });
+}
+function writeStored(key: string, value: unknown): void {
+  withAppDatabase(db => db.prepare("INSERT OR REPLACE INTO settings (key, payload) VALUES (?, ?)").run(key, JSON.stringify(value)));
+}
+export function getCloudSettings(): CloudSettings {
+  const stored = readStored("cloud:settings");
+  if (stored) { try { return validateCloudSettings(stored as CloudSettings); } catch { /* Recover invalid old settings. */ } }
+  return defaultCloudSettings();
+}
+export function saveCloudSettings(input: CloudSettings): CloudSettings {
+  if (runs.size || cloudInstallInProgress()) throw new Error("Wait for the current work or installation to finish before changing settings.");
+  const settings = validateCloudSettings(input);
+  writeStored("cloud:settings", settings);
+  return settings;
+}
+function scratchDirectory(): string {
+  const directory = path.join(app.getPath("userData"), "cloud", "scratch");
+  fs.mkdirSync(directory, { recursive: true });
+  return directory;
+}
+export async function inspectCloudProvider(input: { provider: string }): Promise<CloudConnection> {
+  if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
+  try { return await runtime(input.provider).inspect(getCloudSettings(), scratchDirectory()); }
+  catch (error) { return { provider: input.provider, state: error instanceof CloudRuntimeMissing ? "missing" : "unavailable", models: [], message: error instanceof Error ? error.message : "Could not connect." }; }
+}
+export async function installCloudProvider(input: { provider: string }): Promise<CloudConnection> {
+  if (!isCloudProvider(input?.provider)) throw new Error("Choose Codex or Claude Code.");
+  if (runs.size || closing) throw new Error("Stop the current work before installing.");
+  const settings = getCloudSettings();
+  try { (input.provider === "codex" ? codexExecutable : claudeExecutable)(settings.providers[input.provider].executable); }
+  catch (error) {
+    if (!(error instanceof CloudRuntimeMissing)) throw error;
+    await installOfficialCloudRuntime(input.provider);
+  }
+  return inspectCloudProvider(input);
+}
+export async function signInCloudProvider(input: { provider: string }): Promise<{ message: string }> {
+  if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
+  if (runs.size || cloudInstallInProgress()) throw new Error("Wait for the current work or installation to finish before connecting.");
+  return runtime(input.provider).signIn(getCloudSettings(), scratchDirectory());
+}
+export function cancelCloudSignIn(input: { provider: string }): void {
+  if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
+  if (input.provider === "codex") stopCodexLogin(); else stopClaudeLogin();
+}
+function runtime(provider: string) { return provider === "codex" ? codexCloudRuntime : claudeCloudRuntime; }
+
+export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
+  if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
+  const project = input.repositoryId ? readProjects().find(project => project.id === input.repositoryId) : undefined;
+  if (input.repositoryId && !project) throw new Error("Open the workspace folder again.");
+  const directory = fs.realpathSync(project?.rootPath || scratchDirectory());
+  if (!fs.statSync(directory).isDirectory()) throw new Error("The workspace folder is no longer available.");
+  const key = crypto.createHash("sha256").update(`${input.provider}\0${directory}`).digest("hex");
+  let workspace = workspaces.get(key);
+  if (!workspace) {
+    const stored = readStored(`cloud:workspace:${key}`) as CloudWorkspace | undefined;
+    workspace = stored?.key === key && stored.path === directory && Array.isArray(stored.entries)
+      ? { ...stored, state: "idle", approvals: [] }
+      : { key, provider: input.provider, path: directory, compactions: 0, state: "idle", entries: [], approvals: [] };
+    if (stored && stored.state !== "idle") append(workspace, "context", "The previous run was interrupted when Umbratic closed. You can continue from its saved context.");
+    workspaces.set(key, workspace);
+  }
+  return structuredClone(workspace);
+}
+
+function append(workspace: CloudWorkspace, kind: CloudWorkspace["entries"][number]["kind"], text: string): void {
+  workspace.entries.push({ id: crypto.randomUUID(), kind, text, at: new Date().toISOString() });
+  if (workspace.entries.length > 500) workspace.entries.splice(0, workspace.entries.length - 500);
+}
+function flush(workspace: CloudWorkspace): void {
+  clearTimeout(timers.get(workspace.key)); timers.delete(workspace.key);
+  if (closing) return;
+  writeStored(`cloud:workspace:${workspace.key}`, { ...workspace, approvals: [] });
+  getMainWindow()?.webContents.send("umbratic:cloud-workspace", workspace);
+}
+function publish(workspace: CloudWorkspace): void {
+  workspace.lastActiveAt = new Date().toISOString();
+  if (closing || timers.has(workspace.key)) return;
+  timers.set(workspace.key, setTimeout(() => flush(workspace), 80));
+}
+function clearContext(workspace: CloudWorkspace, reason: string): void {
+  workspace.sessionId = undefined; workspace.account = undefined; workspace.lastActiveAt = undefined;
+  workspace.compactions = 0; workspace.contextWindow = undefined; workspace.inputTokens = undefined;
+  append(workspace, "context", reason);
+}
+function requiredWorkspace(key: string): CloudWorkspace {
+  const workspace = workspaces.get(key);
+  if (!workspace) throw new Error("Open this Cloud workspace again.");
+  return workspace;
+}
+export function resetCloudContext(input: { key: string }): CloudWorkspace {
+  const workspace = requiredWorkspace(input?.key);
+  if (runs.has(workspace.key)) throw new Error("Stop the current work before clearing context.");
+  clearContext(workspace, "Context cleared. Files and recent activity are kept; previous messages will not be sent to the next session.");
+  flush(workspace);
+  return structuredClone(workspace);
+}
+
+export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string }): CloudWorkspace {
+  if (closing) throw new Error("Umbratic is closing.");
+  if (typeof input?.prompt !== "string" || !input.prompt.trim() || input.prompt.length > 100_000) throw new Error("Enter an instruction of up to 100,000 characters.");
+  const snapshot = getCloudWorkspace(input);
+  const workspace = requiredWorkspace(snapshot.key);
+  if (runs.size || cloudInstallInProgress()) throw new Error("Finish or stop the current work or installation first.");
+  const settings = getCloudSettings();
+  const reason = contextResetReason(workspace, settings);
+  if (reason) clearContext(workspace, reason);
+  workspace.lastActiveAt = new Date().toISOString();
+  append(workspace, "instruction", input.prompt.trim());
+  workspace.state = "running";
+  const sink: CloudRuntimeSink = {
+    session(id, account) { workspace.sessionId = id; workspace.account = account; publish(workspace); },
+    text(id, text, additive) {
+      if (!text || closing) return;
+      const entryId = `${workspace.sessionId}:${id}`;
+      const existing = workspace.entries.find(entry => entry.id === entryId);
+      if (existing) existing.text = (additive ? existing.text + text : text).slice(0, 1_000_000);
+      else workspace.entries.push({ id: entryId, kind: "answer", text: text.slice(0, 1_000_000), at: new Date().toISOString() });
+      publish(workspace);
+    },
+    activity(text) { if (workspace.entries.at(-1)?.text !== text) append(workspace, "activity", text); publish(workspace); },
+    compact() { workspace.compactions++; append(workspace, "context", "The runtime compacted this context."); publish(workspace); },
+    usage(contextWindow, inputTokens) { workspace.contextWindow = contextWindow; workspace.inputTokens = inputTokens; publish(workspace); },
+    approval(request) {
+      if (closing || !runs.has(workspace.key)) return Promise.resolve({ allow: false });
+      const id = crypto.randomUUID();
+      workspace.approvals.push({ ...request, id }); workspace.state = "waiting"; publish(workspace);
+      return new Promise(resolve => approvals.set(id, { key: workspace.key, resolve }));
+    },
+  };
+  const run = runtime(input.provider).run(settings, structuredClone(workspace), input.prompt.trim(), sink);
+  runs.set(workspace.key, run);
+  void run.done.catch(error => { if (!closing && !stopping.has(workspace.key)) append(workspace, "error", error instanceof Error ? error.message : "The runtime could not finish this work."); })
+    .finally(() => {
+      if (stopping.delete(workspace.key)) append(workspace, "activity", "Work stopped.");
+      denyApprovals(workspace.key); runs.delete(workspace.key); workspace.state = "idle";
+      workspace.lastActiveAt = new Date().toISOString(); flush(workspace);
+    });
+  flush(workspace);
+  return structuredClone(workspace);
+}
+
+function denyApprovals(key: string): void {
+  for (const [id, pending] of approvals) if (pending.key === key) { approvals.delete(id); pending.resolve({ allow: false }); }
+  const workspace = workspaces.get(key); if (workspace) workspace.approvals = [];
+}
+export function respondCloudApproval(input: { key: string; id: string; allow: boolean; answers?: Record<string, string> }): void {
+  const pending = approvals.get(input?.id);
+  if (!pending || pending.key !== input.key || typeof input.allow !== "boolean") throw new Error("This approval is no longer pending.");
+  const workspace = requiredWorkspace(input.key);
+  const request = workspace.approvals.find(approval => approval.id === input.id);
+  const answers: Record<string, string> = {};
+  if (input.allow && request?.questions) for (const question of request.questions) {
+    const answer = input.answers?.[question.id];
+    if (typeof answer !== "string" || !answer.trim() || answer.length > 10_000) throw new Error("Answer each question before continuing.");
+    answers[question.id] = answer;
+  }
+  approvals.delete(input.id); workspace.approvals = workspace.approvals.filter(approval => approval.id !== input.id);
+  workspace.state = workspace.approvals.length ? "waiting" : "running";
+  pending.resolve({ allow: input.allow, answers }); publish(workspace);
+}
+export async function stopCloudTurn(input: { key: string }): Promise<void> {
+  const run = runs.get(input?.key); if (!run) return;
+  stopping.add(input.key);
+  denyApprovals(input.key);
+  await run.stop();
+}
+export function stopCloudService(): void {
+  for (const workspace of workspaces.values()) flush(workspace);
+  closing = true;
+  stopCodexLogin(); stopClaudeLogin();
+  stopCloudInstall();
+  for (const [key, run] of runs) { denyApprovals(key); void run.stop().catch(() => undefined); }
+  for (const timer of timers.values()) clearTimeout(timer);
+  timers.clear();
+}

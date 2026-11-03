@@ -42,6 +42,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   assert.equal("setResponseFeedback" in exposedApi, false);
 
   const listenerMethods = [
+    "onCloudWorkspace",
     "onBackendEvent",
     "onWorkspaceIndex",
     "onDictationEvent",
@@ -82,6 +83,13 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   ]);
   unsubscribe();
   assert.equal(listeners.has("umbratic:backend-event"), false);
+
+  const cloudSnapshots = [];
+  const stopCloud = exposedApi.onCloudWorkspace(snapshot => cloudSnapshots.push(snapshot));
+  listeners.get("umbratic:cloud-workspace")({}, { key: "workspace", state: "running" });
+  assert.deepEqual(plain(cloudSnapshots), [{ key: "workspace", state: "running" }]);
+  stopCloud();
+  assert.equal(listeners.has("umbratic:cloud-workspace"), false);
 
   const downloadEvents = [];
   const stopDownloads = exposedApi.onModelDownloadEvent((event) => downloadEvents.push(event));

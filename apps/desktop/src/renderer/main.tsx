@@ -1,3 +1,6 @@
+import { PromptTextarea } from "./PromptTextarea";
+import { promptEnterAction } from "./promptKeyboard";
+import { WorkspaceRoot } from "./cloud/WorkspaceRoot";
 import { ImageSettings } from "./ImageSettings";
 import { GeneratedImages } from "./GeneratedImages";
 import { withoutGeneratedImages } from "../shared/generatedImages";
@@ -122,7 +125,6 @@ import {
   attachmentLabel,
   attachmentMention,
   composerPromptForSend,
-  continueNumberedList,
   insertPastedComposerText,
   promptMentionsAttachment,
   rankSkillMatches,
@@ -265,7 +267,7 @@ const sidebarMaxRatio = 0.28;
 /// started sliding out.
 const reviewOpeningControls = ".composerReviewToggle, .reviewSummaryCard, .documentResponseLink, .reviewReferenceToken";
 
-function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
+function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSettings; onCloud?: () => void }) {
   const initialHarnessProfile = isHarnessProfileId(startupSettings.harnessProfile) ? startupSettings.harnessProfile : defaultHarnessProfileId;
   const initialContextLength = normalizeContextLength(startupSettings.contextLength);
   const [backend, setBackend] = useState<BackendStatus | null>(null);
@@ -3044,34 +3046,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         return;
       }
     }
-    if (event.key !== "Enter") {
-      return;
-    }
-    // ⌘/Ctrl+Enter always sends. Plain Enter sends only while "Send with
-    // Enter" is on; switched off, it starts a new line like Shift+Enter does.
-    const modifierSend = event.metaKey || event.ctrlKey;
-    if (!modifierSend && (event.shiftKey || !sendOnEnter)) {
-      const target = event.currentTarget;
-      const continuation = continueNumberedList(target.value, target.selectionStart, target.selectionEnd);
-      if (!continuation) return;
-      event.preventDefault();
-      followComposerScrollRef.current = true;
-      setPrompt(continuation.value);
-      setMention(null);
-      setFileMatches([]);
-      setSelectedFileIndex(0);
-      setSelectedSkillIndex(0);
-      window.requestAnimationFrame(() => {
-        textareaRef.current?.setSelectionRange(continuation.caret, continuation.caret);
-      });
-      return;
-    }
+    const target = event.currentTarget;
+    const action = promptEnterAction({ key: event.key, isComposing: event.nativeEvent.isComposing, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, sendOnEnter, value: target.value, start: target.selectionStart, end: target.selectionEnd });
+    if (!action) return;
     event.preventDefault();
-    if (isGenerating) {
-      queueCurrentPrompt();
-    } else {
-      void startTask();
-    }
+    if (action.type === "insert") {
+      followComposerScrollRef.current = true;
+      setPrompt(action.insertion.value); setMention(null); setFileMatches([]); setSelectedFileIndex(0); setSelectedSkillIndex(0);
+      window.requestAnimationFrame(() => textareaRef.current?.setSelectionRange(action.insertion.caret, action.insertion.caret));
+    } else if (isGenerating) queueCurrentPrompt();
+    else void startTask();
   }
 
   async function newChat() {
@@ -3925,7 +3909,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     ) : null}
                   </div>
                 </div>
-                <textarea
+                <PromptTextarea
                   ref={textareaRef}
                   value={prompt}
                   onChange={handlePromptChange}
@@ -4168,6 +4152,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
                 {settingsTab === "general" ? (
                   <GeneralSettingsPanel
+                    onCloud={onCloud}
+                    modeDisabled={busy}
                     showThinking={showThinking}
                     sendOnEnter={sendOnEnter}
                     launchAtLogin={launchAtLogin}
@@ -4322,7 +4308,7 @@ if (rootElement) {
     })();
   const renderApp = (startupSettings: DesktopStartupSettings) => {
     rootElement.umbraticRoot ??= createRoot(rootElement);
-    rootElement.umbraticRoot.render(<App startupSettings={startupSettings} />);
+    rootElement.umbraticRoot.render(<WorkspaceRoot api={api} renderPrivate={onCloud => <App startupSettings={startupSettings} onCloud={onCloud}/>}/>);
   };
   // The stored chords are put in force before the first paint, not after it: a
   // window that draws its tooltips with the shipped keys and then corrects

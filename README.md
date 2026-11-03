@@ -25,6 +25,7 @@ Umbratic is an open-source desktop AI harness. Give a model access to your proje
 - **Code and files.** Search your project, edit files, run commands, and review code changes side by side.
 - **Documents.** Create documents, spreadsheets, and presentations. Select text in a document and leave feedback for the next draft.
 - **Your models.** Download and run models on your device, or connect to a self-hosted Veil server for shared models and employee access.
+- **Cloud workspaces (0.0.3).** Use the official Codex or Claude Code runtime with your own subscription, choose an orchestrator and specialist models, and keep a continuous workspace with configurable context resets. See [Cloud runtime setup and limits](docs/cloud-runtimes.md).
 
 ![Umbratic document review with a selected sentence and feedback requesting company sign-in.](.github/assets/document-feedback.jpg)
 

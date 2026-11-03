@@ -1,7 +1,7 @@
 {
   "name": "@umbratic/desktop",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Private AI workbench for local and company-managed models",
   "author": "Umbratic",
   "packageManager": "npm@11.20.0",
@@ -28,6 +28,7 @@
     "generate:skill-references": "node scripts/generate-skill-references.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.303",
     "@cantoo/pdf-lib": "2.11.1",
     "@napi-rs/canvas": "1.0.11",
     "@xmldom/xmldom": "0.9.12",

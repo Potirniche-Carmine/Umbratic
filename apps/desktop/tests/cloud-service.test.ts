@@ -1,0 +1,132 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
+
+function fixture() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-cloud-service-"));
+  const db = new DatabaseSync(":memory:"); db.exec("CREATE TABLE settings (key TEXT PRIMARY KEY, payload TEXT)");
+  const calls = []; const events = []; const loginStops = [];
+  const runtime = {
+    run(settings, workspace, prompt, sink) {
+      let resolve; let reject;
+      const done = new Promise((yes, no) => { resolve = yes; reject = no; });
+      const call = { settings, workspace, prompt, sink, resolve, reject };
+      calls.push(call);
+      return { done, stop: async () => reject(new Error("Interrupted")) };
+    },
+  };
+  const service = loadTypeScriptModule(new URL("../src/main/cloudService.ts", import.meta.url), {
+    realm: "host", mocks: {
+      electron: { app: { getPath: () => directory } },
+      "./storageDatabase": { withAppDatabase: fn => fn(db) },
+      "./storage": { readProjects: () => [{ id: "project", rootPath: directory }] },
+      "./mainRuntime": { getMainWindow: () => ({ webContents: { send: (_, snapshot) => events.push(structuredClone(snapshot)) } }) },
+      "./cloudCodex": { codexCloudRuntime: runtime, stopCodexLogin: () => loginStops.push("codex") },
+      "./cloudClaude": { claudeCloudRuntime: runtime, stopClaudeLogin: () => loginStops.push("claude") },
+    },
+  });
+  return { service, calls, events, db, loginStops, close: () => { service.stopCloudService(); db.close(); fs.rmSync(directory, { recursive: true, force: true }); } };
+}
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test("native sessions are isolated by provider and reset without replaying visible history", async () => {
+  const f = fixture();
+  try {
+    const input = { provider: "codex", repositoryId: "project" };
+    const first = f.service.startCloudTurn({ ...input, prompt: "First instruction" });
+    assert.throws(() => f.service.resetCloudContext({ key: first.key }), /Stop/);
+    assert.throws(() => f.service.saveCloudSettings(f.service.getCloudSettings()), /finish/);
+    f.calls[0].sink.session("native-1", "account"); f.calls[0].sink.text("answer", "A completed result", false);
+    for (let index = 0; index < 5; index++) f.calls[0].sink.compact();
+    f.calls[0].resolve(); await tick();
+    assert.ok(f.service.getCloudWorkspace(input).lastActiveAt);
+    f.service.startCloudTurn({ ...input, prompt: "Second instruction" });
+    assert.equal(f.calls[1].workspace.sessionId, undefined);
+    assert.equal(f.calls[1].prompt, "Second instruction");
+    assert.ok(f.calls[1].workspace.entries.some(entry => entry.text === "A completed result"));
+    f.calls[1].sink.session("native-2", "account"); f.calls[1].resolve(); await tick();
+    const other = f.service.getCloudWorkspace({ provider: "claude", repositoryId: "project" });
+    assert.notEqual(other.key, first.key); assert.equal(other.sessionId, undefined);
+    const cleared = f.service.resetCloudContext({ key: first.key });
+    assert.equal(cleared.sessionId, undefined); assert.equal(cleared.compactions, 0);
+    assert.ok(cleared.entries.some(entry => entry.text === "First instruction"));
+    assert.throws(() => f.service.getCloudWorkspace({ provider: "codex", repositoryId: "unknown" }), /Open the workspace/);
+  } finally { f.close(); }
+});
+
+test("approval replies are bound to the workspace, one-use, and denied on cancellation", async () => {
+  const f = fixture();
+  try {
+    const input = { provider: "codex" };
+    const workspace = f.service.startCloudTurn({ ...input, prompt: "Inspect" });
+    const reply = f.calls[0].sink.approval({ title: "Command", detail: "read file" });
+    const pending = f.service.getCloudWorkspace(input).approvals[0];
+    assert.throws(() => f.service.respondCloudApproval({ key: "wrong", id: pending.id, allow: true }), /no longer pending/);
+    f.service.respondCloudApproval({ key: workspace.key, id: pending.id, allow: false });
+    assert.equal((await reply).allow, false);
+    assert.throws(() => f.service.respondCloudApproval({ key: workspace.key, id: pending.id, allow: true }), /no longer pending/);
+    const waiting = f.calls[0].sink.approval({ title: "Another command", detail: "write file" });
+    await f.service.stopCloudTurn({ key: workspace.key }); await tick();
+    assert.equal((await waiting).allow, false);
+    const stopped = f.service.getCloudWorkspace(input);
+    assert.equal(stopped.state, "idle"); assert.equal(stopped.approvals.length, 0);
+    assert.equal(stopped.entries.some(entry => entry.kind === "error"), false);
+  } finally { f.close(); }
+});
+
+test("streamed answers replace by native message id and startup errors release the workspace", async () => {
+  const f = fixture();
+  try {
+    const input = { provider: "claude" };
+    f.service.startCloudTurn({ ...input, prompt: "Hello" });
+    f.calls[0].sink.session("native", "account");
+    f.calls[0].sink.text("message", "Hel", true); f.calls[0].sink.text("message", "lo", true);
+    f.calls[0].sink.text("message", "Hello", false);
+    f.calls[0].reject(new Error("Subscription not active")); await tick();
+    const result = f.service.getCloudWorkspace(input);
+    assert.equal(result.state, "idle"); assert.equal(result.entries.filter(entry => entry.kind === "answer").length, 1);
+    assert.equal(result.entries.find(entry => entry.kind === "answer").text, "Hello");
+    assert.equal(result.entries.at(-1).text, "Subscription not active");
+    const saved = f.service.getCloudSettings(); saved.mode = "cloud";
+    assert.equal(f.service.saveCloudSettings(saved).mode, "cloud");
+  } finally { f.close(); }
+});
+
+
+test("inactivity persists across app restarts and resets before the next instruction", async () => {
+  const f = fixture();
+  try {
+    const input = { provider: "codex", repositoryId: "project" };
+    const fresh = f.service.getCloudWorkspace(input);
+    // An uncached provider/workspace loads its last completed turn from SQLite.
+    const otherInput = { provider: "claude", repositoryId: "project" };
+    const crypto = await import("node:crypto");
+    const key = crypto.createHash("sha256").update(`claude\0${fresh.path}`).digest("hex");
+    f.db.prepare("INSERT INTO settings (key,payload) VALUES (?,?)").run(`cloud:workspace:${key}`, JSON.stringify({
+      ...fresh, key, provider: "claude", sessionId: "previous-session", lastActiveAt: "2020-01-01T00:00:00Z",
+    }));
+    f.service.startCloudTurn({ ...otherInput, prompt: "New work" });
+    assert.equal(f.calls[0].workspace.sessionId, undefined);
+    assert.ok(f.calls[0].workspace.entries.some(entry => /3 hours away/.test(entry.text)));
+    f.calls[0].resolve(); await tick();
+    assert.ok(Date.now() - Date.parse(f.service.getCloudWorkspace(otherInput).lastActiveAt) < 2000);
+  } finally { f.close(); }
+});
+
+
+test("cancelling sign-in stops only the chosen provider and does not block settings", () => {
+  const f = fixture();
+  try {
+    f.service.cancelCloudSignIn({ provider: "claude" });
+    assert.deepEqual(f.loginStops, ["claude"]);
+    f.service.cancelCloudSignIn({ provider: "codex" });
+    assert.deepEqual(f.loginStops, ["claude", "codex"]);
+    assert.throws(() => f.service.cancelCloudSignIn({ provider: "other" }));
+    const settings = f.service.getCloudSettings(); settings.provider = "codex";
+    assert.equal(f.service.saveCloudSettings(settings).provider, "codex");
+  } finally { f.close(); }
+});

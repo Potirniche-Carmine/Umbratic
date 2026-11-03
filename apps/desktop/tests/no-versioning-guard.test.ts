@@ -31,6 +31,9 @@ const bareVersionKey = /(?:^|[^A-Za-z_])(?:"version"|'version'|\bversion)\s*:/;
 // signed entitlement document, the Language Server Protocol, SBOM output),
 // and probe or catalog records reporting a detected tool or skill version.
 const descriptiveVersionFiles = new Set([
+  // Official Codex app-server handshake: clientInfo.version is an external
+  // protocol field reporting our software release, not an internal schema gate.
+  "apps/desktop/src/main/cloudCodex.ts",
   "infrastructure/veil/internal/entitlement/entitlement.go",
   "infrastructure/veil/internal/entitlement/entitlement_test.go",
   "infrastructure/veil-console/internal/entitlement/entitlement.go",

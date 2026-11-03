@@ -1,0 +1,18 @@
+import React, { useState } from "react";
+import type { CloudApproval } from "../../shared/cloud";
+
+export function CloudApprovalCard({ approval, onRespond }: { approval: CloudApproval; onRespond(allow: boolean, answers?: Record<string, string>): Promise<void> }) {
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  async function respond(allow: boolean) { setBusy(true); try { await onRespond(allow, answers); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setBusy(false); } }
+  return <section className="cloudApproval" aria-label="Your input is needed">
+    <h3>{approval.title}</h3>
+    {approval.detail && <pre>{approval.detail}</pre>}
+    {approval.questions?.map(question => <label className="cloudField" key={question.id}>{question.question}
+      {question.options.length > 0 && <div className="cloudAnswerOptions">{question.options.map(option => <button key={option} type="button" aria-pressed={answers[question.id] === option} onClick={() => setAnswers({ ...answers, [question.id]: option })}>{option}</button>)}</div>}
+      <input aria-label={question.question} value={answers[question.id] || ""} onChange={event => setAnswers({ ...answers, [question.id]: event.target.value })}/>
+    </label>)}
+    {error && <p role="alert">{error}</p>}
+    <div className="cloudApprovalActions"><button disabled={busy} onClick={() => void respond(false)}>Decline</button><button className="cloudPrimary" disabled={busy || approval.questions?.some(question => !answers[question.id]?.trim())} onClick={() => void respond(true)}>{approval.questions ? "Continue" : "Allow once"}</button></div>
+  </section>;
+}

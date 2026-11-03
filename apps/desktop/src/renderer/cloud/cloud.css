@@ -1,0 +1,166 @@
+/* App menus share the same materials in the composer and both settings modes.
+   Translucency is a web approximation of Apple materials, not native Liquid Glass. */
+.cloudSelect { position: relative; display: inline-flex; min-width: 0; max-width: 100%; vertical-align: middle; color: var(--text); }
+.cloudSelectTrigger { display: inline-flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 32px; padding: 5px 9px 5px 10px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: var(--control-bg); font: inherit; font-size: 13px !important; line-height: 1.4; cursor: pointer; text-align: left; }
+.cloudSelectText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.cloudSelectTrigger > svg { flex: 0 0 auto; color: var(--muted); }
+.cloudSelectTrigger:hover:not(:disabled), .cloudSelectTrigger[aria-expanded="true"] { background: var(--control-hover); }
+.cloudSelectTrigger:disabled { opacity: .45; cursor: default; }
+.cloudSelectTrigger:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.cloudSelectMenu { position: fixed; inset: auto; margin: 0; box-sizing: border-box; width: max-content; max-width: min(420px, calc(100vw - 24px)); padding: 5px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 11px; background: color-mix(in srgb, var(--surface-2) 96%, transparent); color: var(--text); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; backdrop-filter: blur(24px); box-shadow: inset 0 1px 0 var(--material-edge), 0 8px 30px var(--shadow-color); -webkit-app-region: no-drag; }
+.cloudSelectMenu::backdrop { background: transparent; }
+.cloudSelectOption { display: flex; align-items: center; gap: 8px; padding: 7px 9px 7px 5px; min-height: 31px; box-sizing: border-box; border-radius: 6px; cursor: pointer; user-select: none; }
+.cloudSelectOption > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloudSelectOption > svg { flex: 0 0 14px; }
+.cloudSelectOption.isActive { background: var(--control-hover); }
+.cloudSelectOption[aria-disabled="true"] { opacity: .4; cursor: default; }
+.cloudSelectUnchecked { visibility: hidden; }
+.cloudProviderIcon { display: inline-block; width: 17px; height: 17px; flex: 0 0 auto; object-fit: contain; }
+.cloudProviderMark .cloudProviderIcon { width: 23px; height: 23px; }
+.cloudShell { height: 100dvh; color: var(--text); background: var(--bg); display: flex; flex-direction: column; overflow: hidden; }
+.cloudShell button, .cloudSettings button, .cloudRootError button { cursor: pointer; font: inherit; color: inherit; }
+.cloudShell button:disabled, .cloudSettings button:disabled { cursor: default; opacity: .4; }
+.cloudShell :focus-visible, .cloudSettings :focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.cloudTopbar { display: flex; align-items: center; gap: 12px; min-height: 54px; flex: 0 0 54px; padding: 0 18px 0 24px; -webkit-app-region: drag; background: color-mix(in srgb, var(--chrome) 82%, transparent); backdrop-filter: blur(20px); }
+.macChrome .cloudTopbar { padding-left: 88px; }
+.cloudTopbar button, .cloudTopbar select { -webkit-app-region: no-drag; }
+.cloudBrand { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; letter-spacing: -.2px; }
+.cloudBrand .topbarLogo { width: 17px; height: 19px; }
+.cloudTopbarSpacer { flex: 1; }
+.cloudIconButton { display: inline-flex; align-items: center; justify-content: center; height: 32px; width: 32px; padding: 0; background: transparent; border: 0; border-radius: 8px; flex-shrink: 0; }
+.cloudIconButton:hover { background: var(--control-hover); }
+.cloudIconButton:active, .cloudAction:active, .cloudSend:active { transform: scale(.97); }
+.cloudMain { display: flex; flex: 1; min-height: 0; }
+.cloudWorkColumn { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; }
+.cloudFolderPicker { display: flex; align-items: center; gap: 2px; color: var(--muted); min-width: 0; }
+.cloudFolderPicker .cloudSelect { max-width: 240px; }
+.cloudFolderPicker .cloudSelectTrigger { border: 0; background: transparent; font-size: 12px; }
+.cloudWorkspaceActions { display: flex; gap: 4px; }
+.cloudWorkspaceActions button { display: grid; place-items: center; width: 32px; height: 32px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; }
+.cloudWorkspaceActions button[aria-pressed="true"], .cloudWorkspaceActions button:hover { color: var(--text); background: var(--control-hover); }
+.cloudCanvas { flex: 1; overflow: auto; min-height: 0; padding: 32px max(28px, calc((100% - 760px) / 2)); }
+.cloudWorkColumn.isEmpty { justify-content: center; padding-bottom: 10vh; }
+.isEmpty .cloudCanvas { flex: 0 0 auto; padding-top: 20px; padding-bottom: 28px; overflow: visible; }
+.cloudWelcome { text-align: center; }
+.cloudWelcome h1 { font-size: clamp(23px, 2.5vw, 30px); font-weight: 500; line-height: 1.25; letter-spacing: -.9px; margin: 0; }
+.cloudWorkStream { margin: 0 auto; width: 100%; max-width: 760px; padding-bottom: 20px; }
+.cloudEntry { margin-bottom: 24px; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+.cloudEntry p { margin: 5px 0; white-space: pre-wrap; }
+.cloudEntry-instruction { padding-top: 24px; margin-top: 24px; border-top: 1px solid var(--line); }
+.cloudEntry-instruction:first-child { border: 0; padding-top: 0; margin-top: 0; }
+.cloudEntry-instruction > p { font-size: 19px; line-height: 1.45; letter-spacing: -.25px; font-weight: 500; }
+.cloudEntry-context, .cloudEntry-activity { color: var(--muted); font-size: 12px; padding-left: 12px; border-left: 1px solid var(--line-strong); }
+.cloudEntry-error { color: var(--red); }
+.cloudEntry-answer pre { white-space: pre-wrap; max-width: 100%; overflow: auto; }
+.cloudDockArea { width: min(816px, 100%); padding: 10px 28px 12px; margin: 0 auto; box-sizing: border-box; }
+.cloudDock { padding: 17px 16px 12px; border: 1px solid var(--line-strong); border-radius: 20px; background: color-mix(in srgb, var(--surface-2) 88%, transparent); backdrop-filter: blur(24px); box-shadow: inset 0 1px 0 var(--material-edge), 0 7px 24px color-mix(in srgb, var(--shadow-color) 35%, transparent); }
+.cloudDock textarea { width: 100%; box-sizing: border-box; resize: none; min-height: 72px; max-height: 190px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 15px; line-height: 1.6; padding: 0 3px 12px; }
+.cloudDock textarea::placeholder { color: var(--muted); opacity: 1; }
+.cloudDock textarea:focus { outline: 0; }
+.cloudDock:focus-within { border-color: var(--muted); }
+.cloudDockControls { display: flex; align-items: center; gap: 8px; }
+.cloudModelPicker { display: grid; grid-template-columns: minmax(0, 1fr) 124px; gap: 10px; margin: 20px 0; }
+.cloudModelPicker label { min-width: 0; display: flex; flex-direction: column; gap: 9px; font-size: 12px; color: var(--text); }
+.cloudModelPicker label:last-child > span:first-child { color: var(--muted); }
+.cloudModelPicker .cloudSelect { width: 100%; }
+.cloudDock .cloudModelPicker { margin: 0; display: flex; gap: 4px; flex: 0 1 auto; max-width: 390px; }
+.cloudDock .cloudModelPicker label { display: block; }
+.cloudDock .cloudModelPicker label > span:first-child { display: none; }
+.cloudDock .cloudSelectTrigger { border: 0; background: transparent; font-size: 12px; min-height: 30px; }
+.cloudDock .cloudSelectTrigger:hover { background: var(--control-hover); }
+.cloudDock .cloudModelPicker label:last-child { max-width: 112px; }
+.cloudProviderPicker { max-width: 158px; flex-shrink: 0; padding-right: 5px; border-right: 1px solid var(--line); }
+.cloudSend { flex: 0 0 32px; height: 32px; border: 0; border-radius: 50%; display: grid; place-items: center; background: var(--text); color: var(--bg) !important; }
+.cloudContextBar { display: flex; gap: 12px; align-items: center; min-height: 27px; padding: 6px 3px 0; color: var(--muted); font-size: 11px; }
+.cloudContextBar > span:first-child { flex: 1; }
+.cloudContextBar button { display: inline-flex; gap: 6px; align-items: center; background: transparent; border: 0; font-size: 11px; color: var(--muted); padding: 3px; }
+.cloudNotice { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 0 2px 12px; font-size: 12px; line-height: 1.5; color: var(--amber); }
+.cloudNotice button { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 6px 10px; font-size: 12px; }
+.cloudAction { display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; border: 1px solid var(--line-strong); background: var(--control-bg); border-radius: 8px; min-height: 31px; padding: 5px 13px; font-size: 12px !important; }
+.cloudAction:hover { background: var(--control-hover); }
+.cloudPrimary { background: var(--text) !important; color: var(--bg) !important; border-color: transparent; }
+/* The native dialog owns focus containment; sidebar and content share one surface. */
+.cloudSettings { color: var(--text); background: var(--modal-bg); border: 1px solid var(--line-strong); border-radius: 20px; width: min(760px, calc(100vw - 40px)); height: min(584px, calc(100dvh - 64px)); max-height: calc(100dvh - 40px); padding: 0; box-shadow: 0 24px 80px var(--shadow-color); overflow: hidden; }
+.cloudSettings::backdrop { background: rgba(0, 0, 0, .24); backdrop-filter: blur(7px); }
+.cloudSettings[open] { display: flex; }
+.cloudSettingsSidebar { width: 170px; flex: 0 0 170px; background: color-mix(in srgb, var(--surface-2) 70%, transparent); border-right: 1px solid var(--line); padding: 16px 10px; box-sizing: border-box; }
+.cloudSettingsTitle { display: flex; align-items: center; gap: 6px; margin-bottom: 22px; }
+.cloudSettings h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.cloudSettingsSidebar nav button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); text-align: left; margin-bottom: 3px; font-size: 13px; }
+.cloudSettingsSidebar nav button:hover { background: var(--control-hover); }
+.cloudSettingsSidebar nav button[aria-current="page"] { color: var(--text); background: var(--surface-3); }
+.cloudSettingsMain { min-width: 0; display: flex; flex-direction: column; flex: 1; }
+.cloudSettingsMain > header { padding: 27px 28px 18px; }
+.cloudSettings h3 { margin: 0; font-size: 17px; font-weight: 600; text-transform: none; color: var(--text); letter-spacing: -.35px; }
+.cloudSettingsContent { padding: 0 28px 18px; overflow-y: auto; flex: 1; min-width: 0; }
+.cloudSettingGroup { padding: 0 14px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--surface) 65%, transparent); margin-bottom: 20px; }
+.cloudSettingRow { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 52px; font-size: 13px; }
+.cloudSettingRow + .cloudSettingRow, .cloudAccountRow { border-top: 1px solid var(--line); }
+.cloudSettingRow > .cloudSelect { max-width: 200px; }
+.cloudSettingRow > .cloudSelect .cloudSelectTrigger { border: 0; background: transparent; text-align: right; }
+.cloudSettingValue { color: var(--muted); font-size: 12px; text-align: right; }
+.cloudAccountRow { display: flex; gap: 10px; align-items: center; padding: 16px 0; }
+.cloudProviderMark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: var(--surface-3); flex-shrink: 0; }
+.cloudAccountIdentity { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 0; }
+.cloudAccountIdentity strong { font-size: 13px; font-weight: 500; }
+.cloudAccountIdentity span { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.cloudConnected { color: var(--green); flex-shrink: 0; }
+.cloudExpertList .cloudModelPicker { margin: 0; padding: 13px 0; }
+.cloudExpertList .cloudModelPicker + .cloudModelPicker { border-top: 1px solid var(--line); }
+.cloudAdvanced { margin-top: 23px; font-size: 12px; color: var(--muted); }
+.cloudAdvanced summary { cursor: pointer; }
+.cloudAdvanced label { display: grid; gap: 8px; margin-top: 14px; }
+.cloudAdvanced input { width: 100%; box-sizing: border-box; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; color: var(--text); font: inherit; }
+.cloudAdvanced button { margin-top: 10px; }
+.cloudFootnote { font-size: 11px; color: var(--muted); margin: -6px 2px 0; line-height: 1.5; }
+.cloudSettingsMessage { font-size: 12px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; margin: 18px 0 0; }
+.cloudSettingsMessage[role="alert"] { color: var(--red); }
+.cloudSettings footer { display: flex; justify-content: flex-end; padding: 13px 24px; }
+.cloudSettings footer button { min-width: 74px; }
+.cloudApproval { max-width: 760px; margin: 20px auto; padding: 20px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); }
+.cloudApproval h3 { font-size: 15px; font-weight: 500; margin: 0 0 14px; text-transform: none; }
+.cloudApproval pre { white-space: pre-wrap; max-height: 250px; overflow: auto; font: 12px/1.6 ui-monospace, monospace; color: var(--muted); }
+.cloudApprovalActions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.cloudApproval button { background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 14px; }
+.cloudAnswerOptions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cloudAnswerOptions button[aria-pressed="true"] { border-color: var(--blue); }
+.cloudReview { width: min(48vw, 800px); min-width: 360px; border-left: 1px solid var(--line); position: relative; overflow: hidden; }
+.cloudReview > .reviewPanel { height: 100%; width: 100%; }
+.cloudLoading { height: 100dvh; display: grid; place-items: center; color: var(--muted); }
+.cloudRootError { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); z-index: 200; }
+@media (prefers-reduced-motion: no-preference) {
+  .cloudSettings[open] { animation: cloudSheetIn 180ms cubic-bezier(.2,.8,.2,1); }
+  @keyframes cloudSheetIn { from { opacity: 0; transform: scale(.98) translateY(4px); } to { opacity: 1; transform: none; } }
+}
+@media (max-width: 800px) {
+  .cloudTopbar { gap: 8px; padding-right: 12px; }
+  .cloudCanvas { padding: 24px; }
+  .cloudSettingsSidebar { width: 145px; flex-basis: 145px; }
+  .cloudSettingsContent { padding: 0 20px 18px; }
+  .cloudSettingsMain > header { padding-left: 20px; }
+  .cloudMain.withReview .cloudWorkColumn { display: none; }
+  .cloudReview { width: 100%; min-width: 0; }
+}
+@media (max-width: 580px) {
+  .cloudBrand { display: none; }
+  .cloudDockArea { padding-left: 16px; padding-right: 16px; }
+  .cloudDockControls { flex-wrap: wrap; }
+  .cloudDock .cloudModelPicker { order: 2; flex-basis: calc(100% - 40px); max-width: none; }
+  .cloudSend { order: 3; margin-left: auto; }
+  .cloudSettings[open] { flex-direction: column; }
+  .cloudSettingsSidebar { width: 100%; flex-basis: auto; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .cloudSettingsTitle { margin: 0; }
+  .cloudSettingsSidebar nav { display: flex; }
+  .cloudSettingsSidebar nav button { justify-content: center; }
+  .cloudSettingsMain { min-height: 0; }
+  .cloudSettingsMain > header { padding-top: 18px; }
+  .cloudAccountRow { flex-wrap: wrap; }
+  .cloudModelPicker { grid-template-columns: minmax(0, 1fr) 112px; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .cloudSelectMenu, .cloudDock, .cloudTopbar, .cloudSettingsSidebar { background: var(--surface); backdrop-filter: none; }
+  .cloudSettings::backdrop { backdrop-filter: none; background: rgba(0, 0, 0, .5); }
+}
+@media (prefers-contrast: more) { .cloudShell, .cloudSettings { --line: var(--muted); --line-strong: var(--text); } }
+
+.cloudConnectAction { flex: 0 0 auto; min-height: 32px; }

@@ -1,3 +1,4 @@
+import type { CloudSettings, CloudWorkspace, CloudWorkspaceInput, CloudProvider } from "../shared/cloud";
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 import type { BackendUiEvent } from "../shared/backendEvents";
 import type {
@@ -52,6 +53,23 @@ function invoke(channel: string, ...args: unknown[]): Promise<any> {
 }
 
 const umbraticApi = {
+  getCloudSettings: () => invoke("umbratic:get-cloud-settings"),
+  saveCloudSettings: (input: CloudSettings) => invoke("umbratic:save-cloud-settings", input),
+  inspectCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:inspect-cloud-provider", input),
+  cancelCloudSignIn: (input: { provider: CloudProvider }) => invoke("umbratic:cancel-cloud-sign-in", input),
+  signInCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:sign-in-cloud-provider", input),
+  installCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:install-cloud-provider", input),
+  getCloudWorkspace: (input: CloudWorkspaceInput) => invoke("umbratic:get-cloud-workspace", input),
+  startCloudTurn: (input: CloudWorkspaceInput & { prompt: string }) => invoke("umbratic:start-cloud-turn", input),
+  stopCloudTurn: (input: { key: string }) => invoke("umbratic:stop-cloud-turn", input),
+  resetCloudContext: (input: { key: string }) => invoke("umbratic:reset-cloud-context", input),
+  respondCloudApproval: (input: { key: string; id: string; allow: boolean; answers?: Record<string, string> }) => invoke("umbratic:respond-cloud-approval", input),
+  onCloudWorkspace: (callback: (workspace: CloudWorkspace) => void) => {
+    const listener = (_event: IpcRendererEvent, value: CloudWorkspace) => callback(value);
+    ipcRenderer.on("umbratic:cloud-workspace", listener);
+    return () => ipcRenderer.removeListener("umbratic:cloud-workspace", listener);
+  },
+
   listProjects: () => invoke("umbratic:list-projects"),
   listChats: () => invoke("umbratic:list-chats"),
   createChat: (input?: ChatInput) => invoke("umbratic:create-chat", input ?? {}),

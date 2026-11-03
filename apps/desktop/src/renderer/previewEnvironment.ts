@@ -1,3 +1,4 @@
+import { createPreviewCloudApi } from "./cloud/previewCloudApi";
 import {
   DEFAULT_CONTEXT_LENGTH,
   normalizeContextLength,
@@ -103,6 +104,7 @@ function createPreviewApi(): DesktopApi {
 let previewLocalMtp = true;
 
   const previewApi: DesktopApi = {
+    ...createPreviewCloudApi(),
   listProjects: async () => readPreviewProjects(),
   listChats: async () => readPreviewChats(),
   createChat: async (input) => {
