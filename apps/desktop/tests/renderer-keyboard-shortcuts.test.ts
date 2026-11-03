@@ -177,7 +177,7 @@ test("the shortcuts that fire and the shortcuts that are documented are one tabl
 
   const nav = fs.readFileSync(new URL("../src/renderer/SettingsNav.tsx", import.meta.url), "utf8");
   assert.match(nav, /id: "keyboard", label: "Keyboard"/);
-  assert.match(main, /settingsTab === "keyboard" \? <KeyboardSettingsPanel api=\{api\} sendOnEnter=\{sendOnEnter\} \/> : null/);
+  assert.match(main, /settingsTab === "keyboard" \? <KeyboardSettingsPanel api=\{api\} mode=\{active \? "private" : "cloud"\} sendOnEnter=\{sendOnEnter\} \/> : null/);
 });
 
 test("a rebound chord replaces the shipped one everywhere at once", () => {

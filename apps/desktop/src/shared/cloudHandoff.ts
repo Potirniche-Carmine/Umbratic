@@ -27,11 +27,13 @@ export function rememberCloudSession(workspace: CloudWorkspace): void {
 }
 
 export function cloudTurnPrompt(workspace: CloudWorkspace, prompt: string): string {
-  if (!workspace.sessionId) return cloudHandoff(workspace.entries, prompt);
+  const boundary = workspace.contextStartEntryId ? workspace.entries.findIndex(entry => entry.id === workspace.contextStartEntryId) : -1;
+  const entries = boundary >= 0 ? workspace.entries.slice(boundary + 1) : workspace.entries;
+  if (!workspace.sessionId) return cloudHandoff(entries, prompt);
   const last = workspace.sessions?.[workspace.provider]?.lastEntryId;
   // Legacy sessions already contain the visible history. New sessions track a cursor.
   if (!last) return prompt;
-  const index = workspace.entries.findIndex(entry => entry.id === last);
-  return cloudHandoff(index < 0 ? workspace.entries : workspace.entries.slice(index + 1), prompt);
+  const index = entries.findIndex(entry => entry.id === last);
+  return cloudHandoff(index < 0 ? entries : entries.slice(index + 1), prompt);
 }
 

@@ -4,7 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadRendererFile } from "./helpers/load-renderer.ts";
 
-const { ChatArchive } = loadRendererFile("ChatArchive.tsx");
+const { ChatArchive, ChatArchiveContent } = loadRendererFile("ChatArchive.tsx");
 const chat = { id: "chat-a", title: "Review the project", modelEndpointMode: "local", updatedAt: "2026-09-19T12:00:00Z", taskState: "completed" };
 const group = { key: "project", name: "Project", path: "/workspace", chats: [chat], worktrees: [] };
 
@@ -33,15 +33,22 @@ test("chat archive renders active, empty, collapsed, and keyboard-jump states", 
   assert.match(expanded, /chatRow active/);
   assert.match(expanded, /aria-label="Local model"/);
   assert.doesNotMatch(render({ collapsedProjectKeys: new Set(["project"]) }), /Review the project/);
-  assert.match(render({ chatProjectGroups: [] }), /No chats yet/);
+  assert.match(render({ chatProjectGroups: [] }), /Your conversations will appear here/);
   assert.match(render({ chatJumpKeysVisible: true }), /chatJumpKey/);
 });
 
 test("chat archive routes selection and deletion through the supplied actions", () => {
   const calls = [];
-  const tree = ChatArchive(props({ selectChat: async (selected) => calls.push(["select", selected.id]), setDeleteCandidate: (candidate) => calls.push([candidate.kind, candidate.chat.id]) }));
+  const tree = ChatArchiveContent(props({ query: "", onQueryChange() {}, selectChat: async (selected) => calls.push(["select", selected.id]), setDeleteCandidate: (candidate) => calls.push([candidate.kind, candidate.chat.id]) }));
   const buttons = elements(tree, "button");
   buttons.find((button) => button.props.className === "chatRowMain").props.onClick();
   buttons.find((button) => button.props.className === "chatDeleteButton").props.onClick({ stopPropagation() {} });
   assert.deepEqual(calls, [["select", chat.id], ["chat", chat.id]]);
+});
+
+test("search finds chats inside collapsed projects without including unrelated history", () => {
+  const render = query => renderToStaticMarkup(React.createElement(ChatArchiveContent, props({ query, onQueryChange() {}, collapsedProjectKeys: new Set(["project"]) })));
+  assert.match(render("review"), /Review the project/);
+  assert.doesNotMatch(render("unrelated"), /Review the project/);
+  assert.match(render("unrelated"), /No matching chats/);
 });

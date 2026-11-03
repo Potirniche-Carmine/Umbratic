@@ -201,6 +201,7 @@ function clearContext(workspace: CloudWorkspace, reason: string, pendingImageIds
   workspace.usage = undefined;
   workspace.compactions = 0; workspace.contextWindow = undefined; workspace.inputTokens = undefined;
   workspace.entries = []; workspace.approvals = [];
+  workspace.contextStartEntryId = undefined;
   if (reason) append(workspace, "context", reason);
 }
 function requiredWorkspace(key: string): CloudWorkspace {
@@ -243,7 +244,11 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
   if (runs.size || cloudInstallInProgress() || disconnecting.size) throw new Error("Finish or stop the current work or installation first.");
   const settings = getCloudSettings();
   const reason = contextResetReason(workspace, settings);
-  if (reason) clearContext(workspace, reason, images.map(image => image.image.id));
+  if (reason) {
+    forgetCloudProviderSession(workspace, workspace.provider);
+    append(workspace, "context", reason);
+    workspace.contextStartEntryId = workspace.entries.at(-1)!.id;
+  }
   const runtimePrompt = cloudTurnPrompt(workspace, input.prompt.trim());
   workspace.lastActiveAt = new Date().toISOString();
   append(workspace, "instruction", input.prompt.trim());

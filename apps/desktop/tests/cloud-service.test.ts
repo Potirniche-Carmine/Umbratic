@@ -163,6 +163,8 @@ test("inactivity persists across app restarts and resets before the next instruc
     f.service.startCloudTurn({ ...otherInput, prompt: "New work" });
     assert.equal(f.calls[0].workspace.sessionId, undefined);
     assert.ok(f.calls[0].workspace.entries.some(entry => /3 hours away/.test(entry.text)));
+    assert.ok(f.calls[0].workspace.entries.some(entry => entry.text === "Earlier work"));
+    assert.equal(f.calls[0].prompt, "New work");
     f.calls[0].resolve(); await tick();
     assert.ok(Date.now() - Date.parse(f.service.getCloudWorkspace(otherInput).lastActiveAt) < 2000);
   } finally { f.close(); }

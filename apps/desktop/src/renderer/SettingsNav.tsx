@@ -1,12 +1,13 @@
 import { ShortcutTooltip } from "./Tooltip";
-import { BarChart3, Brain, Info, Image, Keyboard, Mic, Server, Settings2, Sparkles, Type, User } from "lucide-react";
+import { BarChart3, Brain, Cloud, Info, Image, Keyboard, Mic, Server, Settings2, Sparkles, Type, User } from "lucide-react";
 
 /** The sections of the settings dialog, in the order they are shown. */
-export type SettingsTab = "general" | "account" | "remote" | "harness" | "appearance" | "image" | "voice" | "keyboard" | "skills" | "diagnostics" | "about";
+export type SettingsTab = "general" | "providers" | "account" | "remote" | "harness" | "appearance" | "image" | "voice" | "keyboard" | "skills" | "diagnostics" | "about";
 
 const sections: Array<{ id: SettingsTab; label: string; icon: typeof User }> = [
   { id: "general", label: "General", icon: Settings2 },
-  { id: "account", label: "Connection", icon: User },
+  { id: "providers", label: "Providers", icon: Cloud },
+  { id: "account", label: "Local & Veil", icon: User },
   { id: "remote", label: "Remote", icon: Server },
   { id: "harness", label: "Harness", icon: Brain },
   { id: "appearance", label: "Appearance", icon: Type },

@@ -67,6 +67,8 @@ export type CloudWorkspace = {
   contextWindow?: number;
   inputTokens?: number;
   sessions?: Partial<Record<CloudProvider, CloudSession>>;
+  /** Visible history before this boundary is not replayed into a fresh session. */
+  contextStartEntryId?: string;
 };
 export type CloudWorkspaceInput = { provider: CloudProvider; repositoryId?: string; repositoryIds?: string[]; chatId?: string; key?: string };
 export type CloudChatRecord = Pick<CloudWorkspace, "key" | "provider" | "state"> & {

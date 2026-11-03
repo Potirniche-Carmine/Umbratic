@@ -1,4 +1,5 @@
 import React from "react";
+import type { SettingsTab } from "./SettingsNav";
 import { Monitor } from "lucide-react";
 import { cloudProviderIcons } from "./cloud/CloudProviderIcon";
 
@@ -6,6 +7,12 @@ export type WorkspaceProvider = "local" | "codex" | "claude";
 export type WorkspaceActivity = "idle" | "running" | "waiting";
 export const workspaceProviderLabels: Record<WorkspaceProvider, string> = { local: "Local & Veil", codex: "ChatGPT", claude: "Claude" };
 export type WorkspaceSurfaceProps = { active: boolean; navigation: React.ReactNode; onActivity(state: WorkspaceActivity): void };
+
+export type LocalWorkspaceSurfaceProps = WorkspaceSurfaceProps & {
+  settingsRequest: { id: number; tab: SettingsTab } | null;
+  providerSettings: React.ReactNode;
+  onSettingsVisibility(visible: boolean): void;
+};
 
 export function WorkspaceNavigation({ provider, activity, onSelect }: {
   provider: WorkspaceProvider; activity: Record<WorkspaceProvider, WorkspaceActivity>; onSelect(provider: WorkspaceProvider): void;

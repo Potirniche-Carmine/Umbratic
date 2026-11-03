@@ -2,7 +2,7 @@ import { fileToPastedAttachment } from "./pastedAttachments";
 import { ReviewFeedbackChip, ReviewFeedbackDialog } from "./review/ReviewFeedbackDialog";
 import { PromptTextarea } from "./PromptTextarea";
 import { promptEnterAction } from "./promptKeyboard";
-import type { WorkspaceSurfaceProps } from "./WorkspaceNavigation";
+import type { LocalWorkspaceSurfaceProps } from "./WorkspaceNavigation";
 import { WorkspaceRoot } from "./cloud/WorkspaceRoot";
 import { ImageSettings } from "./ImageSettings";
 import { GeneratedImages } from "./GeneratedImages";
@@ -94,7 +94,7 @@ import {
 import { ShortcutTooltip } from "./Tooltip";
 import { KeyboardSettingsPanel } from "./KeyboardSettings";
 import { AboutSettingsPanel } from "./AboutSettings";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
   AtSign,
@@ -270,7 +270,7 @@ const sidebarMaxRatio = 0.34;
 /// started sliding out.
 const reviewOpeningControls = ".composerReviewToggle, .reviewSummaryCard, .documentResponseLink, .reviewReferenceToken";
 
-function App({ startupSettings, active, navigation, onActivity }: { startupSettings: DesktopStartupSettings } & WorkspaceSurfaceProps) {
+function App({ startupSettings, active, navigation, onActivity, settingsRequest, providerSettings, onSettingsVisibility }: { startupSettings: DesktopStartupSettings } & LocalWorkspaceSurfaceProps) {
   const surfaceActive = useRef(active); surfaceActive.current = active;
   const initialHarnessProfile = isHarnessProfileId(startupSettings.harnessProfile) ? startupSettings.harnessProfile : defaultHarnessProfileId;
   const initialContextLength = normalizeContextLength(startupSettings.contextLength);
@@ -335,6 +335,8 @@ function App({ startupSettings, active, navigation, onActivity }: { startupSetti
   // The dictation offer, raised by pressing a microphone that is not set up.
   const [dictationSetupOffer, setDictationSetupOffer] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  useEffect(() => { if (settingsRequest) { setSettingsTab(settingsRequest.tab); setSettingsOpen(true); setAppearanceSettings(readAppearanceSettings()); } }, [settingsRequest]);
+  useEffect(() => { onSettingsVisibility(settingsOpen); }, [settingsOpen, onSettingsVisibility]);
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [contextLength, setContextLength] = useState(initialContextLength);
@@ -910,7 +912,7 @@ function App({ startupSettings, active, navigation, onActivity }: { startupSetti
   }, [repository?.rootPath]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active && !settingsOpen) return;
     writeAppearanceSettings(appearanceSettings);
     document.documentElement.dataset.theme = effectiveTheme;
     document.documentElement.style.colorScheme = effectiveTheme;
@@ -1135,7 +1137,7 @@ function App({ startupSettings, active, navigation, onActivity }: { startupSetti
     || showElevatedPermissionsDialog
     || reviewFeedbackDialogOpen
     || approvalPending;
-  const modalOpen = active && (settingsOpen || nonSettingsModalOpen);
+  const modalOpen = settingsOpen || (active && nonSettingsModalOpen);
 
   /** Opens the microphone, or offers the way in when dictation is not set up. */
   function toggleDictation() {
@@ -1197,12 +1199,13 @@ function App({ startupSettings, active, navigation, onActivity }: { startupSetti
   shortcutsBlockedRef.current = modalOpen || !active;
   // Settings and Keyboard shortcuts remain available inside Settings.
   // Other dialogs keep every app action out.
-  settingsToggleAllowedRef.current = active && settingsOpen && !nonSettingsModalOpen;
+  settingsToggleAllowedRef.current = settingsOpen && !(active && nonSettingsModalOpen);
 
   useEffect(() => {
     const runShortcut = (event: KeyboardEvent) => {
       // Never on the auto-repeat of a held key, and never mid-IME sequence.
-      if (!surfaceActive.current || event.repeat || event.isComposing) return;
+      if (event.repeat || event.isComposing) return;
+      if (!surfaceActive.current && !settingsToggleAllowedRef.current) return;
       if (shortcutsBlockedRef.current) {
         // Settings can close itself or show Keyboard. Every other modal
         // keeps app shortcuts out.
@@ -1293,7 +1296,7 @@ function App({ startupSettings, active, navigation, onActivity }: { startupSetti
     };
     document.addEventListener("keydown", trapFocus);
     return () => { window.cancelAnimationFrame(frame); document.removeEventListener("keydown", trapFocus); };
-  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending, reviewFeedbackDialogOpen]);
+  }, [modalOpen, settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending, reviewFeedbackDialogOpen]);
 
 
   // The offset lives on the DOM node rather than in the style prop, so it needs
@@ -4018,7 +4021,7 @@ function App({ startupSettings, active, navigation, onActivity }: { startupSetti
         </section>
       </main>
 
-      <aside className="reviewSidebar">
+      <aside className="reviewSidebar" aria-hidden={!reviewLayoutOpen} inert={!reviewLayoutOpen}>
         <ReviewPanel
           files={reviewFiles}
           // False the moment the panel is asked to close, not when its spring
@@ -4066,8 +4069,8 @@ function App({ startupSettings, active, navigation, onActivity }: { startupSetti
         );
       })() : null}
 
-      {settingsOpen ? (
-        <div className="modalScrim" role="presentation">
+      {settingsOpen ? createPortal(
+        <div className="modalScrim unifiedSettingsScrim" role="presentation">
           <section ref={modalRef} tabIndex={-1} className="settingsDialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" onKeyDown={(event) => { if (event.key === "Escape") closeSettingsDialog(); }}>
             <header className="settingsDialogHeader">
               <span>
@@ -4083,6 +4086,7 @@ function App({ startupSettings, active, navigation, onActivity }: { startupSetti
               <SettingsNav active={settingsTab} onSelect={setSettingsTab} />
 
               <div className="settingsContent">
+                {settingsTab === "providers" ? providerSettings : null}
                 {settingsTab === "account" ? <ConnectionSettingsPanel controller={connectionSettings} /> : null}
 
                 {settingsTab === "remote" ? <RemoteSettingsPanel controller={remoteSettings} /> : null}
@@ -4122,9 +4126,9 @@ function App({ startupSettings, active, navigation, onActivity }: { startupSetti
                 {settingsTab === "image" ? <ImageSettings api={api} serverMode={connectionSettings.settings.mode === "server"} /> : null}
                 {settingsTab === "voice" ? (
                   <VoiceSettings api={api} backend={backend} active onBackendStatus={setBackend}
-                    serverMode={connectionSettings.settings.mode === "server"} speechAdvertised={dictationAvailable} />
+                    serverMode={active && connectionSettings.settings.mode === "server"} speechAdvertised={active && dictationAvailable} />
                 ) : null}
-                {settingsTab === "keyboard" ? <KeyboardSettingsPanel api={api} sendOnEnter={sendOnEnter} /> : null}
+                {settingsTab === "keyboard" ? <KeyboardSettingsPanel api={api} mode={active ? "private" : "cloud"} sendOnEnter={sendOnEnter} /> : null}
                 {settingsTab === "skills" ? (
                   <SkillsSettingsPanel {...skillSettings.panelProps} />
                 ) : null}
@@ -4153,7 +4157,7 @@ function App({ startupSettings, active, navigation, onActivity }: { startupSetti
               </div>
             </div>
           </section>
-        </div>
+        </div>, document.body
       ) : null}
 
       {previewAttachment?.previewDataUrl ? (

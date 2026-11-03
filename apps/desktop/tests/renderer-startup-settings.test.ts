@@ -10,7 +10,7 @@ test("renderer loads SQLite startup settings before its first app render", () =>
   // is ever drawn advertising a key the user rebound.
   assert.match(source, /setShortcutOverrides\(await api\.getKeyBindings\(\)/);
   assert.match(source, /render\(<WorkspaceRoot api=\{api\}/);
-  assert.match(source, /renderPrivate=\{onCloud => <App startupSettings=\{startupSettings\} onCloud=\{onCloud\}/);
+  assert.match(source, /renderPrivate=\{surface => <App startupSettings=\{startupSettings\} \{\.\.\.surface\}/);
   assert.doesNotMatch(source, /useState<PermissionMode>\("normal"\)/);
 });
 

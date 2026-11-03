@@ -25,14 +25,18 @@ type ChatArchiveProps = {
   busy: boolean;
 };
 
-export function ChatArchive({
+export function ChatArchive(props: ChatArchiveProps) {
+  const [query, setQuery] = useState("");
+  return <ChatArchiveContent {...props} query={query} onQueryChange={setQuery}/>;
+}
+
+export function ChatArchiveContent({
   chatProjectGroups, activeChatId, chatJumpKeysVisible, chatJumpNumbersById,
   collapsedProjectKeys, collapsedWorktreeKeys, projectActionMenuKey,
   setProjectActionMenuKey, setDeleteCandidate, chatProjectTarget,
   toggleProjectGroup, toggleWorktreeGroup, selectChat, newChat, newProject,
-  newChatForProject, newChatForWorktree, busy,
-}: ChatArchiveProps) {
-  const [query, setQuery] = useState("");
+  newChatForProject, newChatForWorktree, busy, query, onQueryChange,
+}: ChatArchiveProps & { query: string; onQueryChange(query: string): void }) {
   const search = query.trim().toLowerCase();
   const visibleGroups = chatProjectGroups.map(group => !search || group.name.toLowerCase().includes(search) ? group : ({ ...group,
     chats: group.chats.filter(chat => chatDisplayTitle(chat).toLowerCase().includes(search)),
@@ -89,11 +93,11 @@ export function ChatArchive({
         <ShortcutTooltip id="chat.new" placement="bottom"><button className="workspaceNewChat" type="button" onClick={newChat}><SquarePen size={16}/><span>New chat</span></button></ShortcutTooltip>
         <button className="cloudIconButton" type="button" onClick={() => void newProject()} disabled={busy} aria-label="New project" title="New project"><FolderPlus size={17}/></button>
       </div>
-      <label className="workspaceChatSearch"><Search size={14}/><input aria-label="Search chats" placeholder="Search chats" value={query} onChange={event => setQuery(event.target.value)}/></label>
+      <label className="workspaceChatSearch"><Search size={14}/><input aria-label="Search chats" placeholder="Search chats" value={query} onChange={event => onQueryChange(event.target.value)}/></label>
       <div className="chatList">
         {visibleGroups.length ? (
           visibleGroups.map((group) => {
-            const collapsed = collapsedProjectKeys.has(group.key);
+            const collapsed = !search && collapsedProjectKeys.has(group.key);
             const projectTarget = chatProjectTarget(group);
             return (
               <section className="chatProject" key={group.key}>
@@ -170,7 +174,7 @@ export function ChatArchive({
                   <div className={`chatProjectChats ${group.worktrees.length ? "hasWorktrees" : ""}`}>
                     {group.chats.map((chat) => renderChatRow(chat))}
                     {group.worktrees.map((worktree) => {
-                      const worktreeCollapsed = collapsedWorktreeKeys.has(worktree.key);
+                      const worktreeCollapsed = !search && collapsedWorktreeKeys.has(worktree.key);
                       const canCreateWorktreeChat = /^task-[A-Za-z0-9_-]+$/.test(worktree.rootTaskId);
                       return (
                         <section className="chatWorktree" key={worktree.key}>

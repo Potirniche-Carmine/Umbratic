@@ -170,3 +170,29 @@
 @media (prefers-contrast: more) {
   .unifiedWorkspace { --line: var(--muted); --line-strong: var(--text); --faint: var(--muted); }
 }
+
+.unifiedSettingsScrim { inset: 0; padding: 32px; background: rgba(8, 12, 18, .28); backdrop-filter: blur(8px); }
+.unifiedSettingsScrim .settingsDialog { width: min(960px, 100%); height: min(740px, 100%); border-radius: 22px; box-shadow: inset 0 1px 0 var(--workspace-edge), 0 24px 80px var(--shadow-color); }
+.unifiedSettingsScrim .settingsDialogHeader { padding: 18px 22px; background: transparent; border-bottom: 1px solid var(--line); }
+.unifiedSettingsScrim .settingsLayout { grid-template-columns: 190px minmax(0, 1fr); }
+.unifiedSettingsScrim .settingsNav { flex-direction: column; align-items: stretch; min-width: 0; overflow-x: hidden; border-right: 1px solid var(--line); border-bottom: 0; padding: 16px 12px; background: color-mix(in srgb, var(--surface-2) 65%, transparent); }
+.unifiedSettingsScrim .settingsNavItem { min-height: 38px; font-size: 12px; font-weight: 500; border-radius: 8px; }
+.unifiedSettingsScrim .settingsContent { padding: 26px 30px; }
+.unifiedSettingsScrim .settingsPanelHead h3 { font-size: 20px; font-weight: 550; letter-spacing: -.5px; }
+.unifiedSettingsScrim .settingsPanelHead p { font-size: 12px; line-height: 1.7; max-width: 52ch; color: var(--muted); }
+.providerSettingsTabs { display: flex; align-items: center; gap: 3px; width: fit-content; padding: 3px; border-radius: 10px; background: var(--control-bg); margin-bottom: 24px; }
+.providerSettingsTabs button { padding: 7px 16px; color: var(--muted); border-radius: 7px; font-size: 12px; }
+.providerSettingsTabs button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); box-shadow: inset 0 1px 0 var(--workspace-edge); }
+.providerSettings .cloudAccountRow { padding: 18px 0; }
+@media (max-width: 720px) {
+  .unifiedSettingsScrim { padding: 14px; }
+  .unifiedSettingsScrim .settingsLayout { grid-template-columns: 150px minmax(0, 1fr); }
+  .unifiedSettingsScrim .settingsContent { padding: 20px; }
+}
+@media (max-width: 500px) {
+  .unifiedSettingsScrim .settingsLayout { grid-template-columns: 48px minmax(0, 1fr); }
+  .unifiedSettingsScrim .settingsNav { padding: 10px 4px; }
+  .unifiedSettingsScrim .settingsNavItem span { display: none; }
+  .unifiedSettingsScrim .settingsNavItem { justify-content: center; }
+}
+@media (prefers-reduced-transparency: reduce) { .unifiedSettingsScrim { backdrop-filter: none; background: rgba(0, 0, 0, .65); } }

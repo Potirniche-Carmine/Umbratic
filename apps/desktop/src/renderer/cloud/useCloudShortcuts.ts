@@ -20,7 +20,7 @@ export function useCloudShortcuts(actions: CloudShortcutActions, blocked: boolea
   useEffect(() => {
     const listen = (event: KeyboardEvent) => {
       const current = state.current;
-      const covered = current.blocked || !!document.querySelector("dialog[open], :popover-open:not([role=tooltip]), [aria-modal='true']");
+      const covered = current.blocked || Array.from(document.querySelectorAll("dialog[open], :popover-open:not([role=tooltip]), [aria-modal='true']")).some(element => element.checkVisibility());
       if (dispatchCloudShortcut(event, current.actions, covered)) return;
       if (!covered && !event.defaultPrevented && !event.repeat && !event.isComposing && event.key === "Escape") current.dismissReview();
     };
