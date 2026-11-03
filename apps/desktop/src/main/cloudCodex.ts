@@ -1,3 +1,4 @@
+import { codexUsage, optionalRuntimeRead, planLabel } from "./cloudUsage";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -56,7 +57,8 @@ async function inspect(rpc: CloudRpc): Promise<CloudConnection> {
     if (cursor && cursors.has(cursor)) throw new Error("Codex returned a repeated model catalog page.");
     if (cursor) cursors.add(cursor);
   } while (cursor);
-  return { provider: "codex", state: "ready", models, account: `${account.email || "ChatGPT"} · ${account.planType || "plan"}`, message: "Connected through the official Codex runtime." };
+  const usage = await optionalRuntimeRead(rpc.request("account/rateLimits/read", {}));
+  return { provider: "codex", state: "ready", models, usage: usage ? codexUsage(usage) : undefined, accountEmail: account.email, planName: planLabel(account.planType), account: `${account.email || "ChatGPT"} · ${account.planType || "plan"}`, message: "Connected through the official Codex runtime." };
 }
 
 let login: CloudRpc | undefined;
@@ -84,7 +86,7 @@ export const codexCloudRuntime: CloudRuntime = {
       return { message: "Finish connecting in your browser." };
     } catch (error) { rpc.close(); throw error; }
   },
-  run(settings, workspace, prompt, sink) {
+  run(settings, workspace, prompt, sink, images = []) {
     let rpc: CloudRpc | undefined;
     let threadId = ""; let turnId = ""; let stopped = false;
     let finish: (() => void) | undefined;
@@ -93,6 +95,7 @@ export const codexCloudRuntime: CloudRuntime = {
       try {
         const connection = await inspect(rpc);
         validateCloudConnection(connection, settings);
+        if (connection.usage) sink.limits?.(connection.usage);
         if (stopped) return;
         if (workspace.account && workspace.account !== connection.account && workspace.sessionId) throw new Error("The signed-in account changed. Clear context before continuing.");
         const config = settings.providers.codex;
@@ -100,8 +103,8 @@ export const codexCloudRuntime: CloudRuntime = {
           ...(workspace.sessionId ? { threadId: workspace.sessionId, excludeTurns: true } : {}),
           cwd: workspace.path, model: config.orchestrator.model, modelProvider: "openai",
           sandbox: "workspace-write", approvalPolicy: "on-request", approvalsReviewer: "user",
-          developerInstructions: cloudWorkflowInstructions(settings, "codex"),
-          config: { "features.memories": false, "agents.enabled": settings.subagents, "skills.include_instructions": false, "skills.bundled.enabled": false },
+          developerInstructions: cloudWorkflowInstructions(settings, "codex") + `\nWorkspace folders: ${JSON.stringify(workspace.paths || [workspace.path])}`,
+          config: { "sandbox_workspace_write.writable_roots": workspace.paths || [workspace.path], "features.memories": false, "agents.enabled": settings.subagents, "skills.include_instructions": false, "skills.bundled.enabled": false },
         });
         threadId = result.thread.id;
         sink.session(threadId, connection.account || "ChatGPT");
@@ -118,12 +121,14 @@ export const codexCloudRuntime: CloudRuntime = {
             if (message.method === "turn/started") turnId = params.turn?.id || turnId;
             if (message.method === "item/agentMessage/delta") sink.text(params.itemId, params.delta, true);
             if (message.method === "item/started" && params.item?.type !== "agentMessage" && params.item?.type !== "userMessage") {
-              sink.activity(itemLabel(params.item));
+              if (params.item?.type !== "reasoning") sink.activity(itemLabel(params.item), toolItem(params.item, "running"));
             }
             if (message.method === "item/completed") {
               if (params.item?.type === "agentMessage") sink.text(params.item.id, params.item.text || "", false);
               if (params.item?.type === "contextCompaction") sink.compact();
+              else if (params.item && !["agentMessage", "userMessage", "reasoning"].includes(params.item.type)) sink.activity(itemLabel(params.item), toolItem(params.item, params.item.status === "failed" || (typeof params.item.exitCode === "number" && params.item.exitCode !== 0) ? "failed" : "completed"));
             }
+            if (message.method === "account/rateLimits/updated") sink.limits?.(codexUsage(params));
             if (message.method === "thread/tokenUsage/updated") sink.usage(params.tokenUsage?.modelContextWindow, params.tokenUsage?.last?.inputTokens);
             if (message.method === "turn/completed") {
               if (params.turn?.status === "failed") reject(new Error(params.turn.error?.message || "Codex could not complete this turn."));
@@ -136,10 +141,13 @@ export const codexCloudRuntime: CloudRuntime = {
         void completion.catch(() => undefined);
         // Install listeners before turn/start: notifications can precede its response.
         const turn = await rpc.request("turn/start", { threadId, model: config.orchestrator.model, effort: config.orchestrator.effort,
-          input: [{ type: "text", text: prompt, text_elements: [] }] });
+          sandboxPolicy: { type: "workspaceWrite", writableRoots: workspace.paths || [workspace.path], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
+          input: [...(prompt ? [{ type: "text", text: prompt, text_elements: [] }] : []), ...images.map(image => ({ type: "localImage", path: image.path }))] });
         turnId = turn.turn.id;
         if (stopped) { await rpc.request("turn/interrupt", { threadId, turnId }); finish?.(); }
         await completion;
+        const usage = await optionalRuntimeRead(rpc.request("account/rateLimits/read", {}));
+        if (usage) sink.limits?.(codexUsage(usage));
       } finally { if (rpc) { rpc.onClose = () => undefined; rpc.close(); } }
     })();
     return { done, async stop() {
@@ -151,12 +159,18 @@ export const codexCloudRuntime: CloudRuntime = {
 };
 
 function itemLabel(item: Record<string, any>): string {
-  if (item.type === "commandExecution") return `Running ${item.command || "a command"}`;
-  if (item.type === "fileChange") return `Updating ${(item.changes || []).map((change: { path: string }) => change.path).join(", ") || "files"}`;
-  if (item.type === "contextCompaction") return "Compacting context";
-  if (item.type === "webSearch") return `Searching ${item.query || "the web"}`;
-  if (item.type === "collabAgentToolCall") return "Working with a subagent";
-  return "Working";
+  if (item.type === "commandExecution") return "Run command";
+  if (item.type === "fileChange") return "Edit files";
+  if (item.type === "contextCompaction") return "Compact context";
+  if (item.type === "webSearch") return "Search the web";
+  if (item.type === "collabAgentToolCall") return "Delegate task";
+  if (item.type === "mcpToolCall" || item.type === "dynamicToolCall") return item.tool || "Use tool";
+  return "Work";
+}
+function toolItem(item: Record<string, any>, status: "running" | "completed" | "failed") {
+  const detail = item.command || item.query || (item.changes || []).map((change: { path: string }) => change.path).join("\n") || item.tool || "";
+  const output = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput.slice(-12000) : "";
+  return { id: String(item.id), label: itemLabel(item), detail: [detail, output].filter(Boolean).join("\n\n"), status };
 }
 
 async function answerRequest(rpc: CloudRpc, message: RpcMessage, sink: Parameters<CloudRuntime["run"]>[3]): Promise<void> {

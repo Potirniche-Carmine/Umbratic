@@ -1,3 +1,4 @@
+import { resolveCloudImages } from "./cloudImages";
 import { app } from "electron";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -73,17 +74,25 @@ function runtime(provider: string) { return provider === "codex" ? codexCloudRun
 
 export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
   if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
-  const project = input.repositoryId ? readProjects().find(project => project.id === input.repositoryId) : undefined;
-  if (input.repositoryId && !project) throw new Error("Open the workspace folder again.");
-  const directory = fs.realpathSync(project?.rootPath || scratchDirectory());
-  if (!fs.statSync(directory).isDirectory()) throw new Error("The workspace folder is no longer available.");
-  const key = crypto.createHash("sha256").update(`${input.provider}\0${directory}`).digest("hex");
+  const ids = input.repositoryIds ?? (input.repositoryId ? [input.repositoryId] : []);
+  if (!Array.isArray(ids) || ids.length > 16 || ids.some(id => typeof id !== "string")) throw new Error("Choose up to 16 workspace folders.");
+  const projects = readProjects();
+  const paths = [...new Set(ids.map(id => {
+    const project = projects.find(project => project.id === id);
+    if (!project) throw new Error("Open the workspace folder again.");
+    const root = fs.realpathSync(project.rootPath);
+    if (!fs.statSync(root).isDirectory()) throw new Error("The workspace folder is no longer available.");
+    return root;
+  }))].sort();
+  if (!paths.length) paths.push(fs.realpathSync(scratchDirectory()));
+  const directory = paths[0];
+  const key = crypto.createHash("sha256").update(`${input.provider}\0${paths.join("\0")}`).digest("hex");
   let workspace = workspaces.get(key);
   if (!workspace) {
     const stored = readStored(`cloud:workspace:${key}`) as CloudWorkspace | undefined;
     workspace = stored?.key === key && stored.path === directory && Array.isArray(stored.entries)
-      ? { ...stored, state: "idle", approvals: [] }
-      : { key, provider: input.provider, path: directory, compactions: 0, state: "idle", entries: [], approvals: [] };
+      ? { ...stored, paths, state: "idle", approvals: [] }
+      : { key, provider: input.provider, path: directory, paths, compactions: 0, state: "idle", entries: [], approvals: [] };
     if (stored && stored.state !== "idle") append(workspace, "context", "The previous run was interrupted when Umbratic closed. You can continue from its saved context.");
     workspaces.set(key, workspace);
   }
@@ -108,7 +117,8 @@ function publish(workspace: CloudWorkspace): void {
 function clearContext(workspace: CloudWorkspace, reason: string): void {
   workspace.sessionId = undefined; workspace.account = undefined; workspace.lastActiveAt = undefined;
   workspace.compactions = 0; workspace.contextWindow = undefined; workspace.inputTokens = undefined;
-  append(workspace, "context", reason);
+  workspace.entries = []; workspace.approvals = [];
+  if (reason) append(workspace, "context", reason);
 }
 function requiredWorkspace(key: string): CloudWorkspace {
   const workspace = workspaces.get(key);
@@ -118,14 +128,15 @@ function requiredWorkspace(key: string): CloudWorkspace {
 export function resetCloudContext(input: { key: string }): CloudWorkspace {
   const workspace = requiredWorkspace(input?.key);
   if (runs.has(workspace.key)) throw new Error("Stop the current work before clearing context.");
-  clearContext(workspace, "Context cleared. Files and recent activity are kept; previous messages will not be sent to the next session.");
+  clearContext(workspace, "");
   flush(workspace);
   return structuredClone(workspace);
 }
 
-export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string }): CloudWorkspace {
+export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; imageIds?: string[] }): CloudWorkspace {
   if (closing) throw new Error("Umbratic is closing.");
-  if (typeof input?.prompt !== "string" || !input.prompt.trim() || input.prompt.length > 100_000) throw new Error("Enter an instruction of up to 100,000 characters.");
+  if (typeof input?.prompt !== "string" || (!input.prompt.trim() && !input.imageIds?.length) || input.prompt.length > 100_000) throw new Error("Enter an instruction of up to 100,000 characters.");
+  const images = resolveCloudImages(input.imageIds ?? []);
   const snapshot = getCloudWorkspace(input);
   const workspace = requiredWorkspace(snapshot.key);
   if (runs.size || cloudInstallInProgress()) throw new Error("Finish or stop the current work or installation first.");
@@ -134,6 +145,7 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string }):
   if (reason) clearContext(workspace, reason);
   workspace.lastActiveAt = new Date().toISOString();
   append(workspace, "instruction", input.prompt.trim());
+  if (images.length) workspace.entries.at(-1)!.images = images.map(image => image.image);
   workspace.state = "running";
   const sink: CloudRuntimeSink = {
     session(id, account) { workspace.sessionId = id; workspace.account = account; publish(workspace); },
@@ -145,7 +157,15 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string }):
       else workspace.entries.push({ id: entryId, kind: "answer", text: text.slice(0, 1_000_000), at: new Date().toISOString() });
       publish(workspace);
     },
-    activity(text) { if (workspace.entries.at(-1)?.text !== text) append(workspace, "activity", text); publish(workspace); },
+    activity(text, tool) {
+      const id = tool ? `${workspace.sessionId}:tool:${tool.id}` : undefined;
+      const existing = id ? workspace.entries.find(entry => entry.id === id) : undefined;
+      if (existing) { existing.text = text === "Tool finished" ? existing.text : text; existing.tool = text === "Tool finished" ? { ...existing.tool!, status: tool!.status } : tool; }
+      else if (tool) workspace.entries.push({ id: id!, kind: "activity", text, tool, at: new Date().toISOString() });
+      else if (workspace.entries.at(-1)?.text !== text) append(workspace, "activity", text);
+      publish(workspace);
+    },
+    limits(usage) { workspace.usage = usage; publish(workspace); },
     compact() { workspace.compactions++; append(workspace, "context", "The runtime compacted this context."); publish(workspace); },
     usage(contextWindow, inputTokens) { workspace.contextWindow = contextWindow; workspace.inputTokens = inputTokens; publish(workspace); },
     approval(request) {
@@ -155,11 +175,12 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string }):
       return new Promise(resolve => approvals.set(id, { key: workspace.key, resolve }));
     },
   };
-  const run = runtime(input.provider).run(settings, structuredClone(workspace), input.prompt.trim(), sink);
+  const run = runtime(input.provider).run(settings, structuredClone(workspace), input.prompt.trim(), sink, images);
   runs.set(workspace.key, run);
   void run.done.catch(error => { if (!closing && !stopping.has(workspace.key)) append(workspace, "error", error instanceof Error ? error.message : "The runtime could not finish this work."); })
     .finally(() => {
       if (stopping.delete(workspace.key)) append(workspace, "activity", "Work stopped.");
+      for (const entry of workspace.entries) if (entry.tool?.status === "running") entry.tool.status = "stopped";
       denyApprovals(workspace.key); runs.delete(workspace.key); workspace.state = "idle";
       workspace.lastActiveAt = new Date().toISOString(); flush(workspace);
     });

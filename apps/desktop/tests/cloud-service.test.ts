@@ -9,6 +9,7 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-cloud-service-"));
   const db = new DatabaseSync(":memory:"); db.exec("CREATE TABLE settings (key TEXT PRIMARY KEY, payload TEXT)");
+  const secondRoot = path.join(directory, "second"); fs.mkdirSync(secondRoot);
   const calls = []; const events = []; const loginStops = [];
   const runtime = {
     run(settings, workspace, prompt, sink) {
@@ -23,7 +24,7 @@ function fixture() {
     realm: "host", mocks: {
       electron: { app: { getPath: () => directory } },
       "./storageDatabase": { withAppDatabase: fn => fn(db) },
-      "./storage": { readProjects: () => [{ id: "project", rootPath: directory }] },
+      "./storage": { readProjects: () => [{ id: "project", rootPath: directory }, { id: "second", rootPath: secondRoot }] },
       "./mainRuntime": { getMainWindow: () => ({ webContents: { send: (_, snapshot) => events.push(structuredClone(snapshot)) } }) },
       "./cloudCodex": { codexCloudRuntime: runtime, stopCodexLogin: () => loginStops.push("codex") },
       "./cloudClaude": { claudeCloudRuntime: runtime, stopClaudeLogin: () => loginStops.push("claude") },
@@ -37,6 +38,7 @@ test("native sessions are isolated by provider and reset without replaying visib
   const f = fixture();
   try {
     const input = { provider: "codex", repositoryId: "project" };
+    f.service.saveCloudSettings({ ...f.service.getCloudSettings(), resetAfterCompactions: 5 });
     const first = f.service.startCloudTurn({ ...input, prompt: "First instruction" });
     assert.throws(() => f.service.resetCloudContext({ key: first.key }), /Stop/);
     assert.throws(() => f.service.saveCloudSettings(f.service.getCloudSettings()), /finish/);
@@ -47,13 +49,13 @@ test("native sessions are isolated by provider and reset without replaying visib
     f.service.startCloudTurn({ ...input, prompt: "Second instruction" });
     assert.equal(f.calls[1].workspace.sessionId, undefined);
     assert.equal(f.calls[1].prompt, "Second instruction");
-    assert.ok(f.calls[1].workspace.entries.some(entry => entry.text === "A completed result"));
+    assert.equal(f.calls[1].workspace.entries.some(entry => entry.text === "A completed result"), false);
     f.calls[1].sink.session("native-2", "account"); f.calls[1].resolve(); await tick();
     const other = f.service.getCloudWorkspace({ provider: "claude", repositoryId: "project" });
     assert.notEqual(other.key, first.key); assert.equal(other.sessionId, undefined);
     const cleared = f.service.resetCloudContext({ key: first.key });
     assert.equal(cleared.sessionId, undefined); assert.equal(cleared.compactions, 0);
-    assert.ok(cleared.entries.some(entry => entry.text === "First instruction"));
+    assert.deepEqual(cleared.entries, []);
     assert.throws(() => f.service.getCloudWorkspace({ provider: "codex", repositoryId: "unknown" }), /Open the workspace/);
   } finally { f.close(); }
 });
@@ -128,5 +130,31 @@ test("cancelling sign-in stops only the chosen provider and does not block setti
     assert.throws(() => f.service.cancelCloudSignIn({ provider: "other" }));
     const settings = f.service.getCloudSettings(); settings.provider = "codex";
     assert.equal(f.service.saveCloudSettings(settings).provider, "codex");
+  } finally { f.close(); }
+});
+
+test("multi-folder identity is independent of selection order and rejects unregistered roots", () => {
+  const f = fixture();
+  try {
+    const first = f.service.getCloudWorkspace({ provider: "codex", repositoryIds: ["project", "second"] });
+    const reordered = f.service.getCloudWorkspace({ provider: "codex", repositoryIds: ["second", "project", "second"] });
+    assert.equal(first.key, reordered.key); assert.equal(first.paths.length, 2);
+    assert.notEqual(first.key, f.service.getCloudWorkspace({ provider: "codex", repositoryId: "project" }).key);
+    assert.throws(() => f.service.getCloudWorkspace({ provider: "codex", repositoryIds: ["project", "/private"] }), /Open the workspace/);
+  } finally { f.close(); }
+});
+
+test("tool completion updates one row and keeps its original description", async () => {
+  const f = fixture();
+  try {
+    const input = { provider: "claude" };
+    f.service.startCloudTurn({ ...input, prompt: "Check" });
+    f.calls[0].sink.session("session", "account");
+    f.calls[0].sink.activity("Read", { id: "tool-1", label: "Read file", detail: "README.md", status: "running" });
+    f.calls[0].sink.activity("Tool finished", { id: "tool-1", label: "Tool finished", status: "completed" });
+    f.calls[0].resolve(); await tick();
+    const activities = f.service.getCloudWorkspace(input).entries.filter(entry => entry.kind === "activity");
+    assert.equal(activities.length, 1); assert.equal(activities[0].tool.label, "Read file");
+    assert.equal(activities[0].tool.status, "completed"); assert.equal(activities[0].tool.detail, "README.md");
   } finally { f.close(); }
 });

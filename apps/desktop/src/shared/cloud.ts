@@ -3,13 +3,15 @@ export type AppMode = "private" | "cloud";
 export type CloudRole = "routine" | "architecture" | "research";
 export type CloudEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type CloudModelChoice = { model: string; effort: CloudEffort };
-export type CloudModel = { id: string; label: string; efforts: CloudEffort[]; defaultEffort?: CloudEffort };
+export type CloudModel = { id: string; label: string; efforts: CloudEffort[]; defaultEffort?: CloudEffort; unavailableReason?: string };
 export type CloudProviderSettings = {
   executable: string;
   orchestrator: CloudModelChoice;
   roles: Record<CloudRole, CloudModelChoice>;
 };
 export type CloudSettings = {
+  contextPolicyVersion?: number;
+  workspaceRepositoryIds?: string[];
   mode: AppMode;
   provider: CloudProvider;
   providers: Record<CloudProvider, CloudProviderSettings>;
@@ -23,15 +25,25 @@ export type CloudConnection = {
   state: "ready" | "sign_in" | "missing" | "unavailable" | "unsupported_account";
   message: string;
   account?: string;
+  accountEmail?: string;
+  planName?: string;
+  usage?: CloudUsage;
   version?: string;
   models: CloudModel[];
 };
-export type CloudEntry = { id: string; kind: "instruction" | "answer" | "activity" | "context" | "error"; text: string; at: string };
+export type CloudLimit = { id: string; label: string; usedPercent: number; resetsAt?: string };
+export type CloudUsage = { limits: CloudLimit[]; fetchedAt: string };
+export type CloudImage = { id: string; name: string; mimeType: string; previewDataUrl: string };
+export type CloudImageInput = { name: string; dataUrl: string; mimeType?: string };
+export type CloudTool = { id: string; label: string; detail?: string; status: "running" | "completed" | "failed" | "stopped" };
+export type CloudEntry = { id: string; kind: "instruction" | "answer" | "activity" | "context" | "error"; text: string; at: string; tool?: CloudTool; images?: CloudImage[] };
 export type CloudApproval = { id: string; title: string; detail: string; questions?: { id: string; question: string; options: string[] }[] };
 export type CloudWorkspace = {
   key: string;
   provider: CloudProvider;
   path: string;
+  paths?: string[];
+  usage?: CloudUsage;
   sessionId?: string;
   account?: string;
   lastActiveAt?: string;
@@ -42,8 +54,10 @@ export type CloudWorkspace = {
   contextWindow?: number;
   inputTokens?: number;
 };
-export type CloudWorkspaceInput = { provider: CloudProvider; repositoryId?: string };
+export type CloudWorkspaceInput = { provider: CloudProvider; repositoryId?: string; repositoryIds?: string[] };
 export type CloudApi = {
+  pickCloudFolders(): Promise<import("./desktopApiTypes").RepositoryInfo[]>;
+  saveCloudImages(input: { files: CloudImageInput[] }): Promise<CloudImage[]>;
   getCloudSettings(): Promise<CloudSettings>;
   saveCloudSettings(input: CloudSettings): Promise<CloudSettings>;
   inspectCloudProvider(input: { provider: CloudProvider }): Promise<CloudConnection>;
@@ -51,7 +65,7 @@ export type CloudApi = {
   cancelCloudSignIn(input: { provider: CloudProvider }): Promise<void>;
   installCloudProvider(input: { provider: CloudProvider }): Promise<CloudConnection>;
   getCloudWorkspace(input: CloudWorkspaceInput): Promise<CloudWorkspace>;
-  startCloudTurn(input: CloudWorkspaceInput & { prompt: string }): Promise<CloudWorkspace>;
+  startCloudTurn(input: CloudWorkspaceInput & { prompt: string; imageIds?: string[] }): Promise<CloudWorkspace>;
   stopCloudTurn(input: { key: string }): Promise<void>;
   resetCloudContext(input: { key: string }): Promise<CloudWorkspace>;
   respondCloudApproval(input: { key: string; id: string; allow: boolean; answers?: Record<string, string> }): Promise<void>;
@@ -67,7 +81,7 @@ export function defaultCloudSettings(): CloudSettings {
   const sol = (effort: CloudEffort): CloudModelChoice => ({ model: "gpt-6.1-sol", effort });
   const opus = (effort: CloudEffort): CloudModelChoice => ({ model: "claude-opus-5-5", effort });
   return {
-    mode: "private", provider: "codex", subagents: true, showToolActivity: true, idleResetHours: 3, resetAfterCompactions: 5,
+    mode: "private", provider: "codex", subagents: true, showToolActivity: true, idleResetHours: 3, resetAfterCompactions: 0, contextPolicyVersion: 2, workspaceRepositoryIds: [],
     providers: {
       codex: { executable: "", orchestrator: sol("medium"), roles: {
         routine: sol("medium"), architecture: sol("xhigh"),
@@ -101,7 +115,10 @@ export function validateCloudSettings(value: CloudSettings): CloudSettings {
       if (!choice || typeof choice.model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:/()[\]-]{0,159}$/.test(choice.model) || !isCloudEffort(choice.effort)) throw new Error("Invalid model preset.");
     }
   }
-  const result = structuredClone({ ...value, idleResetHours, showToolActivity }) as CloudSettings & { dailyReset?: boolean; review?: boolean };
+  const workspaceRepositoryIds = value.workspaceRepositoryIds ?? [];
+  if (!Array.isArray(workspaceRepositoryIds) || workspaceRepositoryIds.length > 16 || workspaceRepositoryIds.some(id => typeof id !== "string" || id.length > 200)) throw new Error("Choose up to 16 workspace folders.");
+  const resetAfterCompactions = !value.contextPolicyVersion && value.resetAfterCompactions === 5 ? 0 : value.resetAfterCompactions;
+  const result = structuredClone({ ...value, idleResetHours, showToolActivity, resetAfterCompactions, workspaceRepositoryIds, contextPolicyVersion: 2 }) as CloudSettings & { dailyReset?: boolean; review?: boolean };
   delete result.dailyReset;
   delete result.review;
   for (const provider of ["codex", "claude"] as const) delete (result.providers[provider].roles as Partial<Record<string, CloudModelChoice>>).review;
@@ -110,6 +127,7 @@ export function validateCloudSettings(value: CloudSettings): CloudSettings {
 export function modelChoiceError(choice: CloudModelChoice, models: CloudModel[]): string | undefined {
   const model = models.find(item => item.id === choice.model);
   if (!model) return `${choice.model} is not available from this runtime. Choose another model in Settings.`;
+  if (model.unavailableReason) return model.unavailableReason;
   if (model.efforts.length && !model.efforts.includes(choice.effort)) return `${model.label} does not report support for ${cloudEffortLabels[choice.effort]} effort.`;
   return undefined;
 }

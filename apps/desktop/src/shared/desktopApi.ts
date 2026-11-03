@@ -9,6 +9,8 @@ export const desktopIpcChannels = {
   cancelCloudSignIn: "umbratic:cancel-cloud-sign-in",
   signInCloudProvider: "umbratic:sign-in-cloud-provider",
   installCloudProvider: "umbratic:install-cloud-provider",
+  pickCloudFolders: "umbratic:pick-cloud-folders",
+  saveCloudImages: "umbratic:save-cloud-images",
   getCloudWorkspace: "umbratic:get-cloud-workspace",
   startCloudTurn: "umbratic:start-cloud-turn",
   stopCloudTurn: "umbratic:stop-cloud-turn",

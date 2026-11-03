@@ -1,3 +1,4 @@
+import { claudeUsage, claudeModelLabel, optionalRuntimeRead, planLabel } from "./cloudUsage";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -27,9 +28,9 @@ export function claudeExecutable(configured: string): string {
 }
 
 class PromptGate {
-  private resolve!: (value: string | undefined) => void;
-  private next = new Promise<string | undefined>(resolve => { this.resolve = resolve; });
-  send(text: string): void { this.resolve(text); }
+  private resolve!: (value: SDKUserMessage["message"]["content"] | undefined) => void;
+  private next = new Promise<SDKUserMessage["message"]["content"] | undefined>(resolve => { this.resolve = resolve; });
+  send(text: SDKUserMessage["message"]["content"]): void { this.resolve(text); }
   close(): void { this.resolve(undefined); }
   async *messages(): AsyncGenerator<SDKUserMessage> {
     const text = await this.next;
@@ -62,10 +63,11 @@ export function claudeConnection(account: AccountInfo, models: ModelInfo[], vers
     const id = model.resolvedModel || model.value;
     // Fable has separate usage billing. Only offer the subscription model
     // families; the runtime still enforces the user's entitlement and limits.
-    if (!/^claude-(opus|sonnet|haiku)-/.test(id)) continue;
-    unique.set(id, { id, label: model.displayName, efforts: model.supportedEffortLevels || [] });
+    const subscriptionModel = /^claude-(opus|sonnet|haiku)-/.test(id);
+    unique.set(id, { id, label: claudeModelLabel(id, model.displayName), efforts: model.supportedEffortLevels || [],
+      ...(!subscriptionModel ? { unavailableReason: "This model is not verified for subscription-only billing." } : {}) });
   }
-  return { ...common, state: "ready", models: [...unique.values()], account: `${account.email || auth.email || "Claude"} · ${account.subscriptionType}`,
+  return { ...common, state: "ready", models: [...unique.values()], accountEmail: account.email || auth.email, planName: planLabel(account.subscriptionType), account: `${account.email || auth.email || "Claude"} · ${account.subscriptionType}`,
     message: "Connected through the official Claude Code runtime." };
 }
 
@@ -80,7 +82,12 @@ function options(settings: CloudSettings, cwd: string): Options {
 async function inspect(query: Query, settings: CloudSettings, cwd: string): Promise<CloudConnection> {
   const init = await query.initializationResult();
   const account = await query.accountInfo();
-  return claudeConnection(account, await query.supportedModels(), init.claude_code_version, await authStatus(settings, cwd));
+  const connection = claudeConnection(account, await query.supportedModels(), init.claude_code_version, await authStatus(settings, cwd));
+  if (connection.state === "ready") {
+    const usage = await optionalRuntimeRead(query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
+    if (usage) connection.usage = claudeUsage(usage);
+  }
+  return connection;
 }
 
 function agentDefinitions(settings: CloudSettings): Record<string, AgentDefinition> {
@@ -111,7 +118,7 @@ export const claudeCloudRuntime: CloudRuntime = {
     await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", () => { clearTimeout(timer); reject(new Error("Could not start Claude Code sign-in.")); }); });
     return { message: "Finish connecting in your browser." };
   },
-  run(settings, workspace, prompt, sink) {
+  run(settings, workspace, prompt, sink, images = []) {
     let query: Query | undefined; let stopped = false;
     const gate = new PromptGate();
     const done = (async () => {
@@ -119,7 +126,7 @@ export const claudeCloudRuntime: CloudRuntime = {
       if (stopped) return;
       const config = settings.providers.claude;
       query = sdk.query({ prompt: gate.messages(), options: {
-        ...options(settings, workspace.path), model: config.orchestrator.model,
+        ...options(settings, workspace.path), additionalDirectories: (workspace.paths || []).filter(root => root !== workspace.path), model: config.orchestrator.model,
         effort: config.orchestrator.effort === "none" || config.orchestrator.effort === "minimal" || config.orchestrator.effort === "ultra" ? undefined : config.orchestrator.effort,
         agents: agentDefinitions(settings), resume: workspace.sessionId, enableFileCheckpointing: true,
         canUseTool: async (tool, input, details) => {
@@ -135,13 +142,24 @@ export const claudeCloudRuntime: CloudRuntime = {
         validateCloudConnection(connection, settings);
         if (stopped) return;
         if (workspace.account && workspace.account !== connection.account && workspace.sessionId) throw new Error("The signed-in account changed. Clear context before continuing.");
-        gate.send(prompt);
+        if (connection.usage) sink.limits?.(connection.usage);
+        gate.send(images.length ? [...(prompt ? [{ type: "text" as const, text: prompt }] : []), ...images.map(image => ({ type: "image" as const,
+          source: { type: "base64" as const, media_type: "image/png" as const, data: fs.readFileSync(image.path).toString("base64") } }))] : prompt);
         let resultReceived = false;
         const stream = { messageId: "" };
         for await (const message of query) {
           consumeMessage(message, sink, connection.account || "Claude", stream);
-          if (message.type === "result") {
+          if (message.type === "user" && Array.isArray(message.message?.content)) {
+    for (const block of message.message.content) if (block.type === "tool_result") sink.activity("Tool finished", { id: block.tool_use_id, label: "Tool finished", status: block.is_error ? "failed" : "completed" });
+  }
+  if (message.type === "result") {
             resultReceived = true;
+            const [context, usage] = await Promise.all([
+              optionalRuntimeRead(query.getContextUsage({ detail: "summary" })),
+              optionalRuntimeRead(query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })),
+            ]);
+            if (context) sink.usage(context.rawMaxTokens, context.totalTokens);
+            if (usage) sink.limits?.(claudeUsage(usage));
             if (message.is_error) throw new Error("errors" in message ? message.errors.join("\n") : "Claude could not complete this turn.");
             break;
           }
@@ -168,7 +186,10 @@ export function consumeClaudeMessage(message: any, sink: CloudRuntimeSink, accou
   if (message.type === "assistant") {
     const content = message.message.content || [];
     sink.text(message.message.id, content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n"), false);
-    for (const block of content) if (block.type === "tool_use") sink.activity(`${block.name}${typeof block.input?.description === "string" ? ` · ${block.input.description}` : ""}`);
+    for (const block of content) if (block.type === "tool_use") sink.activity(block.name, { id: block.id, label: block.input?.description || block.name, detail: typeof block.input?.command === "string" ? block.input.command : JSON.stringify(block.input, null, 2).slice(0, 12000), status: "running" });
+  }
+  if (message.type === "user" && Array.isArray(message.message?.content)) {
+    for (const block of message.message.content) if (block.type === "tool_result") sink.activity("Tool finished", { id: block.tool_use_id, label: "Tool finished", status: block.is_error ? "failed" : "completed" });
   }
   if (message.type === "result") {
     const usage = Object.values(message.modelUsage || {}) as { contextWindow: number; inputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }[];

@@ -28,6 +28,8 @@ export function createPreviewCloudApi(): CloudApi {
     installCloudProvider: async ({ provider }) => { state[provider] = "sign_in"; return connection(provider); },
     cancelCloudSignIn: async () => undefined,
     signInCloudProvider: async ({ provider }) => { if (params.get("login") !== "pending") state[provider] = "ready"; return { message: "Preview connection" }; },
+    pickCloudFolders: async () => [],
+    saveCloudImages: async ({ files }) => files.map(file => ({ id: crypto.randomUUID(), name: file.name, mimeType: file.mimeType || "image/png", previewDataUrl: file.dataUrl })),
     getCloudWorkspace: async ({ provider }) => ({ key: `preview-${provider}`, provider, path: "/preview", state: "idle", compactions: 0, entries: [], approvals: [] }),
     startCloudTurn: async () => { throw new Error("This is a design preview. Open the desktop app to start work."); },
     stopCloudTurn: async () => undefined,

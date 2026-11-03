@@ -32,6 +32,7 @@ test("context resets measure inactivity across midnight, only between turns", ()
   assert.equal(cloud.contextResetReason(workspace, settings, new Date("2026-11-03T22:59:59Z")), undefined);
   assert.match(cloud.contextResetReason(workspace, settings, new Date("2026-11-03T23:00:00Z")), /24 hours away/);
   settings.idleResetHours = 0;
+  settings.resetAfterCompactions = 5;
   assert.match(cloud.contextResetReason({ ...workspace, compactions: 5 }, settings), /5 compactions/);
   settings.resetAfterCompactions = 0;
   assert.equal(cloud.contextResetReason({ ...workspace, compactions: 99 }, settings), undefined);
@@ -85,8 +86,10 @@ test("Claude requires native subscription authentication, not a cached plan labe
   assert.equal(claude.claudeConnection({ ...account, apiKeySource: "apiKeyHelper" }, models, undefined, auth).state, "unsupported_account");
   assert.equal(claude.claudeConnection(account, models, undefined, { ...auth, authMethod: "api_key" }).state, "unsupported_account");
   const connected = claude.claudeConnection(account, models, "2.1.303", auth);
-  assert.equal(connected.state, "ready"); assert.equal(connected.models.length, 1);
+  assert.equal(connected.state, "ready"); assert.equal(connected.models.length, 2);
   assert.equal(connected.models[0].id, "claude-opus-5-5");
+  assert.equal(connected.models[0].label, "Opus 5.5");
+  assert.match(connected.models[1].unavailableReason, /subscription-only/);
 });
 
 test("workflow settings enable only the requested roles and use the saved models", () => {
