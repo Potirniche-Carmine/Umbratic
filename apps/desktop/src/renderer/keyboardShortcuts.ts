@@ -420,7 +420,7 @@ export function titleWithShortcut(label: string, id: ShortcutId, mac = isMacPlat
 }
 
 export type ShortcutMode = "private" | "cloud";
-const privateOnlyShortcuts = new Set<ShortcutId>(["chat.new", "chat.jump", "chat.delete", "composer.mention"]);
+const privateOnlyShortcuts = new Set<ShortcutId>(["chat.jump", "composer.mention"]);
 export function shortcutAvailable(id: ShortcutId, mode: ShortcutMode): boolean {
   return mode === "private" || !privateOnlyShortcuts.has(id);
 }

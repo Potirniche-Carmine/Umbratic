@@ -1,5 +1,4 @@
 import { Columns2, Rows3 } from "lucide-react";
-import { CloudSelect } from "./cloud/CloudSelect";
 
 import { setReviewLayout, setReviewWrap, useReviewLayout, useReviewWrap } from "./review/reviewPreferences";
 
@@ -43,8 +42,6 @@ function ToggleRow({
  * how reviews open, and whether the app starts with the machine.
  */
 export function GeneralSettingsPanel({
-  onCloud,
-  modeDisabled,
   showThinking,
   sendOnEnter,
   launchAtLogin,
@@ -52,8 +49,6 @@ export function GeneralSettingsPanel({
   onToggleSendOnEnter,
   onToggleLaunchAtLogin,
 }: {
-  onCloud?: () => void;
-  modeDisabled?: boolean;
   showThinking: boolean;
   sendOnEnter: boolean;
   launchAtLogin: { enabled: boolean; available: boolean };
@@ -73,7 +68,6 @@ export function GeneralSettingsPanel({
         <h3>General</h3>
       </div>
 
-      {onCloud && <div className="settingsGroup"><div className="generalSettingRow"><strong>Mode</strong><CloudSelect label="Mode" value="private" disabled={modeDisabled} onValueChange={selectedValue => { if (selectedValue === "cloud") onCloud(); }}><option value="private">Private</option><option value="cloud">Cloud</option></CloudSelect></div></div>}
       <div className="settingsGroup">
         <ToggleRow
           title="Show model thinking"

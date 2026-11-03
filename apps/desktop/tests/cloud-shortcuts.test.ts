@@ -37,7 +37,7 @@ test("Cloud shortcuts do not cross a modal, repeat, IME, or already handled even
 
 test("Cloud documents only its available shortcuts and respects the send preference", () => {
   const rows = registry.shortcutSections("cloud", false).flatMap(group => group.rows);
-  for (const id of ["chat.new", "chat.delete", "chat.jump", "composer.mention"]) {
+  for (const id of ["chat.jump", "composer.mention"]) {
     assert.ok(!rows.some(row => row.id === id));
     assert.equal(registry.shortcutAvailable(id, "cloud"), false);
   }
@@ -45,7 +45,9 @@ test("Cloud documents only its available shortcuts and respects the send prefere
   assert.deepEqual(Array.from(registry.shortcutKeys(send, true)), ["⌘", "Enter"]);
   assert.deepEqual(Array.from(registry.shortcutKeys(send, false)), ["Ctrl", "Enter"]);
   assert.deepEqual(Array.from(registry.shortcutKeys(registry.composerSendShortcut(true), true)), ["Enter"]);
-  assert.equal(dispatchCloudShortcut(key("n"), { "chat.new": () => assert.fail("Private action must not run") }, false), false);
+  let created = false;
+  assert.equal(dispatchCloudShortcut(key("n"), { "chat.new": () => { created = true; } }, false), true);
+  assert.equal(created, true);
 });
 
 test("compact file labels keep same-name files distinguishable without exposing full paths", () => {

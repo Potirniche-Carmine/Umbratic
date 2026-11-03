@@ -54,7 +54,7 @@ export function CloudSettingsPanel({ api, initialTab = "connection", sendOnEnter
   }} onClick={event => { if (event.target !== event.currentTarget || locked) return; const bounds = event.currentTarget.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); }} onCancel={event => { event.preventDefault(); if (!locked) onClose(); }}>
     <div className="cloudSettingsSidebar">
       <div className="cloudSettingsTitle"><h2 id="cloud-settings-title">Settings</h2></div>
-      <nav aria-label="Cloud settings sections">
+      <nav aria-label="Settings sections">
         <button aria-current={tab === "connection" ? "page" : undefined} onClick={() => setTab("connection")}><Monitor size={17}/> General</button>
         <button aria-current={tab === "experts" ? "page" : undefined} onClick={() => setTab("experts")}><Users size={17}/> Experts</button>
         <button aria-current={tab === "context" ? "page" : undefined} onClick={() => setTab("context")}><RotateCcw size={17}/> Context</button>
@@ -67,7 +67,6 @@ export function CloudSettingsPanel({ api, initialTab = "connection", sendOnEnter
       <section className="cloudSettingsContent">
         {tab === "connection" && <>
           <div className="cloudSettingGroup">
-            <div className="cloudSettingRow"><span>Mode</span><CloudSelect label="Mode" value={settings.mode} disabled={locked} onValueChange={selectedValue => void save({ ...settings, mode: selectedValue as "cloud" | "private" })}><option value="cloud">Cloud</option><option value="private">Private</option></CloudSelect></div>
             <div className="cloudSettingRow"><span>Appearance</span><CloudSelect label="Appearance" value={theme} onValueChange={selectedValue => { const value = selectedValue as AppearanceTheme; setTheme(value); writeAppearanceSettings({ ...readAppearanceSettings(), theme: value }); }}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></CloudSelect></div>
           </div>
           <h4 className="cloudSettingsSectionLabel">Connected accounts</h4>

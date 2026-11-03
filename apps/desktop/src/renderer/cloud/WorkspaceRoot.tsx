@@ -1,29 +1,63 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import type { DesktopApi } from "../../shared/desktopApi";
 import { defaultCloudSettings, type CloudSettings } from "../../shared/cloud";
 import { cssFontValue, readAppearanceSettings } from "../appearanceStorage";
+import { WorkspaceNavigation, type WorkspaceActivity, type WorkspaceProvider, type WorkspaceSurfaceProps } from "../WorkspaceNavigation";
 import { CloudWorkspace } from "./CloudWorkspace";
 
-export function WorkspaceRoot({ api, renderPrivate }: { api: DesktopApi; renderPrivate(onCloud: () => void): React.ReactNode }) {
+const selectionKey = "umbratic.workspace-provider";
+function initialProvider(settings: CloudSettings): WorkspaceProvider {
+  try {
+    const saved = localStorage.getItem(selectionKey);
+    if (saved === "local" || saved === "codex" || saved === "claude") return saved;
+  } catch { /* Storage can be unavailable in a restricted window. */ }
+  return settings.mode === "private" ? "local" : settings.provider;
+}
+
+export function WorkspaceRoot({ api, renderPrivate }: { api: DesktopApi; renderPrivate(props: WorkspaceSurfaceProps): React.ReactNode }) {
   const [settings, setSettings] = useState<CloudSettings | null>(null);
+  const [provider, setProvider] = useState<WorkspaceProvider>("local");
+  const [visited, setVisited] = useState<Set<WorkspaceProvider>>(new Set());
+  const [activity, setActivity] = useState<Record<WorkspaceProvider, WorkspaceActivity>>({ local: "idle", codex: "idle", claude: "idle" });
   const [error, setError] = useState("");
-  useEffect(() => { void api.getCloudSettings().then(setSettings).catch(cause => { setSettings(defaultCloudSettings()); setError(String(cause)); }); }, [api]);
   useEffect(() => {
-    if (settings?.mode !== "cloud") return;
+    let current = true;
+    void api.getCloudSettings().catch(cause => { setError(String(cause)); return defaultCloudSettings(); }).then(value => {
+      if (!current) return;
+      const selected = initialProvider(value); setSettings(value); setProvider(selected); setVisited(new Set([selected]));
+    });
+    return () => { current = false; };
+  }, [api]);
+  useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
       const appearance = readAppearanceSettings();
       const theme = appearance.theme === "system" ? media.matches ? "dark" : "light" : appearance.theme;
       document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme;
       document.documentElement.style.setProperty("--app-font", cssFontValue(appearance.uiFont, "system-ui, sans-serif"));
+      document.documentElement.style.setProperty("--mono-font", cssFontValue(appearance.monoFont, "ui-monospace, monospace"));
       void api.setWindowChromeTheme(theme);
     };
     apply(); media.addEventListener("change", apply); window.addEventListener("umbratic:appearance-change", apply);
     return () => { media.removeEventListener("change", apply); window.removeEventListener("umbratic:appearance-change", apply); };
-  }, [settings?.mode, api]);
-  async function save(next: CloudSettings) { const value = await api.saveCloudSettings(next); setSettings(value); }
-  function switchMode() { if (settings) void save({ ...settings, mode: settings.mode === "private" ? "cloud" : "private" }).catch(cause => setError(cause instanceof Error ? cause.message : String(cause))); }
+  }, [api]);
+  const reportActivity = useCallback((id: WorkspaceProvider, state: WorkspaceActivity) => {
+    setActivity(current => current[id] === state ? current : { ...current, [id]: state });
+  }, []);
+  function select(id: WorkspaceProvider) {
+    setProvider(id); setVisited(current => new Set([...current, id]));
+    try { localStorage.setItem(selectionKey, id); } catch { /* Selection still works in memory. */ }
+  }
+  async function save(next: CloudSettings) { setSettings(await api.saveCloudSettings(next)); }
   if (!settings) return <div className="cloudLoading" role="status">Opening your workspace…</div>;
-  return <>{settings.mode === "private" ? renderPrivate(switchMode) : <CloudWorkspace api={api} settings={settings} onSettings={save}/>}
-    {error && <div className="cloudRootError" role="alert">{error}<button onClick={() => setError("")}>Dismiss</button></div>}</>;
+  const navigation = <WorkspaceNavigation provider={provider} activity={activity} onSelect={select}/>;
+  return <div className="unifiedWorkspace">
+    {visited.has("local") && <div className="workspaceSurface" hidden={provider !== "local"} inert={provider !== "local"}>
+      {renderPrivate({ active: provider === "local", navigation, onActivity: state => reportActivity("local", state) })}
+    </div>}
+    {(["codex", "claude"] as const).filter(id => visited.has(id)).map(id => <div key={id} className="workspaceSurface" hidden={provider !== id} inert={provider !== id}>
+      <CloudWorkspace api={api} settings={{ ...settings, provider: id }} onSettings={save} active={provider === id} navigation={navigation} onActivity={state => reportActivity(id, state)}/>
+    </div>)}
+    {error && <div className="cloudRootError" role="alert">{error}<button onClick={() => setError("")}>Dismiss</button></div>}
+  </div>;
 }

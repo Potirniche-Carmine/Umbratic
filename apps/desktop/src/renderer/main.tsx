@@ -2,6 +2,7 @@ import { fileToPastedAttachment } from "./pastedAttachments";
 import { ReviewFeedbackChip, ReviewFeedbackDialog } from "./review/ReviewFeedbackDialog";
 import { PromptTextarea } from "./PromptTextarea";
 import { promptEnterAction } from "./promptKeyboard";
+import type { WorkspaceSurfaceProps } from "./WorkspaceNavigation";
 import { WorkspaceRoot } from "./cloud/WorkspaceRoot";
 import { ImageSettings } from "./ImageSettings";
 import { GeneratedImages } from "./GeneratedImages";
@@ -255,21 +256,22 @@ export function takeBatchedBackendEvents(pendingEvents: BackendUiEvent[]): Backe
   return pendingEvents.splice(0);
 }
 
-const sidebarDefaultWidth = 230;
-const sidebarMinWidth = 168;
-const sidebarMaxWidth = 230;
+const sidebarDefaultWidth = 246;
+const sidebarMinWidth = 196;
+const sidebarMaxWidth = 300;
 const reviewMinWidth = 360;
 const reviewDefaultWidth = 440;
 const reviewOpenWidthRatio = 0.65;
 const reviewMaxWidthRatio = 0.95;
-const sidebarMaxRatio = 0.28;
+const sidebarMaxRatio = 0.34;
 /// Every control that opens the review panel. A pointerdown on one of these is
 /// not a click away from the panel: the button's own click lands after the
 /// pointerdown, so closing here would only make it reopen what had just
 /// started sliding out.
 const reviewOpeningControls = ".composerReviewToggle, .reviewSummaryCard, .documentResponseLink, .reviewReferenceToken";
 
-function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSettings; onCloud?: () => void }) {
+function App({ startupSettings, active, navigation, onActivity }: { startupSettings: DesktopStartupSettings } & WorkspaceSurfaceProps) {
+  const surfaceActive = useRef(active); surfaceActive.current = active;
   const initialHarnessProfile = isHarnessProfileId(startupSettings.harnessProfile) ? startupSettings.harnessProfile : defaultHarnessProfileId;
   const initialContextLength = normalizeContextLength(startupSettings.contextLength);
   const [backend, setBackend] = useState<BackendStatus | null>(null);
@@ -815,7 +817,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
   const chatJumpNumbersById = useMemo(() => chatJumpNumbers(visibleChats), [visibleChats]);
   const layoutStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
-    "--sidebar-reserved-width": `${sidebarDefaultWidth}px`,
+    "--sidebar-reserved-width": `${sidebarWidth}px`,
     "--sidebar-visual-gap": `${Math.max(0, sidebarDefaultWidth - sidebarWidth)}px`,
     "--review-width": `${reviewWidth}px`,
   } as React.CSSProperties;
@@ -908,6 +910,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
   }, [repository?.rootPath]);
 
   useEffect(() => {
+    if (!active) return;
     writeAppearanceSettings(appearanceSettings);
     document.documentElement.dataset.theme = effectiveTheme;
     document.documentElement.style.colorScheme = effectiveTheme;
@@ -921,6 +924,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
     );
     void api.setWindowChromeTheme(effectiveTheme);
   }, [appearanceSettings, effectiveTheme]);
+  useEffect(() => { if (active) { setAppearanceSettings(readAppearanceSettings()); void loadProjects(); } }, [active]);
 
   useEffect(() => {
     const media = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -1131,7 +1135,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
     || showElevatedPermissionsDialog
     || reviewFeedbackDialogOpen
     || approvalPending;
-  const modalOpen = settingsOpen || nonSettingsModalOpen;
+  const modalOpen = active && (settingsOpen || nonSettingsModalOpen);
 
   /** Opens the microphone, or offers the way in when dictation is not set up. */
   function toggleDictation() {
@@ -1190,15 +1194,15 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
   chatJumpTargetsRef.current = visibleChats.slice(0, chatJumpLimit);
   // Read the same way, so a chord cannot reach past a dialog to a window the
   // user cannot currently see.
-  shortcutsBlockedRef.current = modalOpen;
+  shortcutsBlockedRef.current = modalOpen || !active;
   // Settings and Keyboard shortcuts remain available inside Settings.
   // Other dialogs keep every app action out.
-  settingsToggleAllowedRef.current = settingsOpen && !nonSettingsModalOpen;
+  settingsToggleAllowedRef.current = active && settingsOpen && !nonSettingsModalOpen;
 
   useEffect(() => {
     const runShortcut = (event: KeyboardEvent) => {
       // Never on the auto-repeat of a held key, and never mid-IME sequence.
-      if (event.repeat || event.isComposing) return;
+      if (!surfaceActive.current || event.repeat || event.isComposing) return;
       if (shortcutsBlockedRef.current) {
         // Settings can close itself or show Keyboard. Every other modal
         // keeps app shortcuts out.
@@ -3346,9 +3350,11 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
   }
 
 
+  useEffect(() => { onActivity(pendingPermission ? "waiting" : isGenerating ? "running" : "idle"); }, [pendingPermission, isGenerating, onActivity]);
+
   return (
     <div
-      className={`appShell ${isMacLike ? "macChrome" : ""} sidebarOpen ${
+      className={`appShell unifiedLocalShell ${isMacLike ? "macChrome" : ""} sidebarOpen ${
         reviewLayoutOpen ? "" : "reviewClosed"
       } ${reviewLayoutOpen ? "reviewOpen" : ""} ${reviewClosing ? "reviewClosing" : ""}`}
       ref={shellRef}
@@ -3363,6 +3369,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
       </header>
 
       <aside className="sidebar">
+        {navigation}
         <div className="sidebarResizeHandle" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={sidebarMinWidth} aria-valuemax={sidebarMaxAvailableWidth()} aria-valuenow={Math.round(sidebarWidth)} aria-label="Sidebar width" onPointerDown={beginSidebarResize} onKeyDown={(event) => { const step = event.shiftKey ? 24 : 8; if (event.key === "ArrowLeft") { event.preventDefault(); setSidebarWidth((width) => clamp(width - step, sidebarMinWidth, sidebarMaxAvailableWidth())); } if (event.key === "ArrowRight") { event.preventDefault(); setSidebarWidth((width) => clamp(width + step, sidebarMinWidth, sidebarMaxAvailableWidth())); } }} />
         <div className="sidebarStack">
           <ChatArchive
@@ -3389,7 +3396,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
               <span>Restart to update</span>
             </button>
           ) : null}
-          <div className="sidebarBrand" aria-hidden="true"><span className="sidebarBrandRow"><span className="sidebarBrandMark" /><span className="sidebarBrandName">Umbratic</span></span><span className="confidentialMark">Private and Confidential</span></div>
+          <div className="workspacePrivacyNote"><ShieldCheck size={13}/><span>{endpointSettings.mode === "server" ? "Connected through Veil" : "Runs on your computer"}</span></div>
           <ShortcutTooltip id="app.settings">
             <button
               className="settingsPlaceholder"
@@ -3535,7 +3542,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
                   ) : null}
                 </div>
               ) : (
-                <ComposerGreeting label={todayPromptLabel} />
+                <ComposerGreeting label="What are we working on?" />
               )}
             </div>
           </section>
@@ -4124,8 +4131,6 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
 
                 {settingsTab === "general" ? (
                   <GeneralSettingsPanel
-                    onCloud={onCloud}
-                    modeDisabled={busy}
                     showThinking={showThinking}
                     sendOnEnter={sendOnEnter}
                     launchAtLogin={launchAtLogin}
@@ -4144,7 +4149,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
                   />
                 ) : null}
                 {settingsTab === "about" ? <AboutSettingsPanel api={api} /> : null}
-                <div className="settingsFooter" aria-hidden="true"><span className="sidebarBrandMark" /><span>Umbratic · Private and confidential</span></div>
+                <div className="settingsFooter" aria-hidden="true"><span className="sidebarBrandMark" /><span>Umbratic</span></div>
               </div>
             </div>
           </section>
@@ -4280,7 +4285,7 @@ if (rootElement) {
     })();
   const renderApp = (startupSettings: DesktopStartupSettings) => {
     rootElement.umbraticRoot ??= createRoot(rootElement);
-    rootElement.umbraticRoot.render(<WorkspaceRoot api={api} renderPrivate={onCloud => <App startupSettings={startupSettings} onCloud={onCloud}/>}/>);
+    rootElement.umbraticRoot.render(<WorkspaceRoot api={api} renderPrivate={surface => <App startupSettings={startupSettings} {...surface}/>}/>);
   };
   // The stored chords are put in force before the first paint, not after it: a
   // window that draws its tooltips with the shipped keys and then corrects

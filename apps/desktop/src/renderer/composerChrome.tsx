@@ -84,7 +84,10 @@ export function DocumentReviewResponseLink({
 export function ComposerGreeting({ label }: { label: string }) {
   return (
     <div className="composerGreeting">
-      <span>{label}</span>
+      <div className="workspaceWelcomeMark"><span className="topbarLogo" aria-hidden="true"/></div>
+      <p className="workspaceEyebrow">Local &amp; Veil</p>
+      <h1>{label}</h1>
+      <p className="workspaceWelcomeHint">Your workspace. Your models. Room to think.</p>
     </div>
   );
 }

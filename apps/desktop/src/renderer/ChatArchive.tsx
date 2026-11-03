@@ -1,5 +1,5 @@
-import React from "react";
-import { ChevronDown, CircleDashed, Cloud, Ellipsis, FolderPlus, FolderX, GitBranch, MessageSquareX, Monitor, SquarePen, Trash2 } from "lucide-react";
+import React, { useState } from "react";
+import { ChevronDown, CircleDashed, Cloud, Ellipsis, FolderPlus, FolderX, GitBranch, MessageSquareX, Monitor, Search, SquarePen, Trash2 } from "lucide-react";
 import type { ChatRecord } from "../shared/desktopApi";
 import { chatDisplayTitle, chatSubline, closedChatMessage, worktreeTitle, type ChatProjectGroup, type DeleteCandidate, type ProjectDeleteTarget, type WorktreeChatGroup } from "./chatListPresentation";
 import { ShortcutTooltip } from "./Tooltip";
@@ -32,6 +32,12 @@ export function ChatArchive({
   toggleProjectGroup, toggleWorktreeGroup, selectChat, newChat, newProject,
   newChatForProject, newChatForWorktree, busy,
 }: ChatArchiveProps) {
+  const [query, setQuery] = useState("");
+  const search = query.trim().toLowerCase();
+  const visibleGroups = chatProjectGroups.map(group => !search || group.name.toLowerCase().includes(search) ? group : ({ ...group,
+    chats: group.chats.filter(chat => chatDisplayTitle(chat).toLowerCase().includes(search)),
+    worktrees: group.worktrees.map(tree => ({ ...tree, chats: tree.chats.filter(chat => chatDisplayTitle(chat).toLowerCase().includes(search)) })).filter(tree => tree.chats.length),
+  })).filter(group => !search || group.name.toLowerCase().includes(search) || group.chats.length || group.worktrees.length);
   function renderChatRow(chat: ChatRecord) {
     const connectionLabel = chat.modelEndpointMode === "server"
       ? "Company server"
@@ -79,29 +85,14 @@ export function ChatArchive({
 
   return (
     <section className="chatArchive">
-      <div className="sideHeader">
-        <h2>Chats</h2>
-        <div className="newActionSplit" role="toolbar" aria-label="Create">
-          <ShortcutTooltip id="chat.new" placement="bottom">
-            <button className="newActionButton" type="button" onClick={newChat} aria-label="New chat">
-              <SquarePen size={13} />
-            </button>
-          </ShortcutTooltip>
-          <button
-            className="newActionButton"
-            type="button"
-            onClick={() => void newProject()}
-            disabled={busy}
-            aria-label="New project"
-            title="New project"
-          >
-            <FolderPlus size={13} />
-          </button>
-        </div>
+      <div className="workspaceArchiveActions">
+        <ShortcutTooltip id="chat.new" placement="bottom"><button className="workspaceNewChat" type="button" onClick={newChat}><SquarePen size={16}/><span>New chat</span></button></ShortcutTooltip>
+        <button className="cloudIconButton" type="button" onClick={() => void newProject()} disabled={busy} aria-label="New project" title="New project"><FolderPlus size={17}/></button>
       </div>
+      <label className="workspaceChatSearch"><Search size={14}/><input aria-label="Search chats" placeholder="Search chats" value={query} onChange={event => setQuery(event.target.value)}/></label>
       <div className="chatList">
-        {chatProjectGroups.length ? (
-          chatProjectGroups.map((group) => {
+        {visibleGroups.length ? (
+          visibleGroups.map((group) => {
             const collapsed = collapsedProjectKeys.has(group.key);
             const projectTarget = chatProjectTarget(group);
             return (
@@ -222,9 +213,10 @@ export function ChatArchive({
             );
           })
         ) : (
-          <div className="archiveEmpty">
+          <div className="workspaceArchiveEmpty">
             <CircleDashed size={17} />
-            <span>No chats yet.</span>
+            <strong>{search ? "No matching chats" : "A fresh space for your work"}</strong>
+            {!search && <span>Your conversations will appear here.</span>}
           </div>
         )}
       </div>

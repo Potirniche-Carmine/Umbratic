@@ -30,7 +30,7 @@ export function createPreviewCloudApi(): CloudApi {
     };
   }
   const chats = new Map<string, CloudWorkspace>();
-  const emptyChat = (provider: CloudProvider, key = `preview-${provider}`): CloudWorkspace => ({ key, provider, path: "/preview", state: "idle", compactions: 0, entries: [], approvals: [] });
+  const emptyChat = (provider: CloudProvider, key = `preview-${provider}`): CloudWorkspace => ({ key, chatId: key, provider, path: "/preview", state: "idle", compactions: 0, entries: [], approvals: [] });
   return {
     listCloudChats: async ({ provider }) => [...chats.values()].filter(chat => chat.provider === provider).map(chat => ({ key: chat.key, provider, title: chat.entries[0]?.text || "New chat", paths: [chat.path], state: chat.state, updatedAt: chat.lastActiveAt || "" })),
     createCloudChat: async ({ provider }) => { const chat = emptyChat(provider, crypto.randomUUID()); chats.set(chat.key, chat); return chat; },
