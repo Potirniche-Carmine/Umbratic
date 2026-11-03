@@ -68,8 +68,8 @@ export function CloudSettingsPanel({ settings, controller, usage, onSave, onClos
               <button className="cloudIconButton" disabled={locked || checking} aria-label="Refresh connection" onClick={() => void refresh()}><RefreshCw size={15}/></button>
             </div>
           </div>
-          {connection?.state === "ready" && <CloudUsageDetails usage={usage}/>}
           <CloudModelPicker label="Main orchestrator" value={config.orchestrator} models={models} disabled={locked} onChange={orchestrator => updateProvider({ orchestrator })}/>
+          {connection?.state === "ready" && <CloudUsageDetails usage={usage}/>}
         </>}
         {tab === "experts" && <>
           <div className="cloudSettingGroup">

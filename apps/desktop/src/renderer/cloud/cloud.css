@@ -176,6 +176,10 @@
 .cloudPlanBadge { border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; font-size: 10px; color: var(--muted); white-space: nowrap; }
 /* Quota is remaining; context is used. Color follows pressure in both. */
 .cloudUsageDetails { display: grid; gap: 18px; margin: 18px 0 22px; }
+.cloudSettingsContent > .cloudUsageDetails { grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 16px; }
+.cloudSettingsContent > .cloudUsageDetails .cloudUsageWindow { align-items: flex-start; gap: 8px; }
+.cloudSettingsContent > .cloudUsageDetails .cloudUsageRing { width: 38px; height: 38px; flex-basis: 38px; }
+.cloudSettingsContent > .cloudUsageDetails .cloudUsageRing > span { font-size: 11px; }
 .cloudUsageWindow { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .cloudUsageWindow > div { display: grid; gap: 3px; min-width: 0; }
 .cloudUsageWindow strong { font-size: 12px; font-weight: 500; color: var(--text); }
@@ -194,7 +198,16 @@
 .cloudUsageRing.is-critical { color: var(--red); }
 .cloudUsageRing.isCompact { flex-basis: 24px; width: 24px; height: 24px; }
 .cloudUsageRing.isCompact circle { stroke-width: 4; }
-.cloudUsagePopover, .cloudFoldersMenu { width: 320px; padding: 5px; max-height: min(480px, 70vh); overflow: auto; }
+.cloudUsagePopover, .cloudFoldersMenu { position: fixed; inset: auto; margin: 0; padding: 18px; width: 280px; max-height: calc(100dvh - 40px); overflow-y: auto; box-sizing: border-box; color: var(--text); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 10px 32px var(--shadow-color); font: 13px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; -webkit-app-region: no-drag; }
+.cloudUsagePopover .cloudUsageDetails, .cloudUsagePopover .cloudUsageUnavailable { margin-bottom: 0; }
+.cloudContextUsage { padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.cloudContextBar .cloudUsageTrigger { gap: 18px; padding: 4px 8px; border-radius: 9px; }
+.cloudUsageTrigger:hover { background: var(--control-hover); }
+.cloudMiniUsage { display: inline-flex; align-items: center; gap: 7px; text-align: left; }
+.cloudMiniUsage > span:last-child { display: grid; gap: 1px; min-width: 38px; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text); }
+.cloudMiniUsage small { color: var(--muted); font-size: 10px; }
+@media (prefers-reduced-motion: reduce) { .cloudRingValue { transition: none; } }
+.cloudFoldersMenu { width: 320px; padding: 5px; max-height: min(480px, 70vh); overflow: auto; }
 .cloudFoldersMenu button { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 9px; background: transparent; border: 0; border-radius: 7px; }
 .cloudFoldersMenu button:hover { background: var(--control-hover); }
 .cloudFoldersMenu button > svg { flex: 0 0 auto; }

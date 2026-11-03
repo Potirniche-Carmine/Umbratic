@@ -127,6 +127,7 @@ function publish(workspace: CloudWorkspace): void {
 }
 function clearContext(workspace: CloudWorkspace, reason: string): void {
   workspace.sessionId = undefined; workspace.account = undefined; workspace.lastActiveAt = undefined;
+  workspace.usage = undefined;
   workspace.compactions = 0; workspace.contextWindow = undefined; workspace.inputTokens = undefined;
   workspace.entries = []; workspace.approvals = [];
   if (reason) append(workspace, "context", reason);
@@ -177,7 +178,10 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
   if (images.length) workspace.entries.at(-1)!.images = images.map(image => image.image);
   workspace.state = "running";
   const sink: CloudRuntimeSink = {
-    session(id, account) { workspace.sessionId = id; workspace.account = account; publish(workspace); },
+    session(id, account) {
+      if (workspace.account !== account) workspace.usage = rememberUsage(workspace.provider, account);
+      workspace.sessionId = id; workspace.account = account; publish(workspace);
+    },
     text(id, text, additive) {
       if (!text || closing) return;
       const entryId = `${workspace.sessionId}:${id}`;

@@ -12,6 +12,8 @@ function fixture() {
   const secondRoot = path.join(directory, "second"); fs.mkdirSync(secondRoot);
   const calls = []; const events = []; const loginStops = [];
   const runtime = {
+    connection: undefined,
+    async inspect() { return runtime.connection; },
     run(settings, workspace, prompt, sink) {
       let resolve; let reject;
       const done = new Promise((yes, no) => { resolve = yes; reject = no; });
@@ -30,9 +32,24 @@ function fixture() {
       "./cloudClaude": { claudeCloudRuntime: runtime, stopClaudeLogin: () => loginStops.push("claude") },
     },
   });
-  return { service, calls, events, db, loginStops, close: () => { service.stopCloudService(); db.close(); fs.rmSync(directory, { recursive: true, force: true }); } };
+  return { service, calls, events, db, loginStops, runtime, close: () => { service.stopCloudService(); db.close(); fs.rmSync(directory, { recursive: true, force: true }); } };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test("cached quotas survive an empty fetch but do not cross provider or account boundaries", async () => {
+  const f = fixture();
+  try {
+    const usage = { fetchedAt: new Date().toISOString(), limits: [{ id: "weekly", label: "Weekly", usedPercent: 31 }] };
+    f.runtime.connection = { provider: "claude", state: "ready", models: [], account: "first", usage };
+    assert.equal((await f.service.inspectCloudProvider({ provider: "claude" })).usage.limits[0].usedPercent, 31);
+    f.runtime.connection = { ...f.runtime.connection, usage: { ...usage, limits: [] } };
+    assert.equal((await f.service.inspectCloudProvider({ provider: "claude" })).usage.limits[0].usedPercent, 31);
+    f.runtime.connection = { ...f.runtime.connection, account: "second", usage: undefined };
+    assert.equal((await f.service.inspectCloudProvider({ provider: "claude" })).usage, undefined);
+    f.runtime.connection = { ...f.runtime.connection, provider: "codex", account: "first" };
+    assert.equal((await f.service.inspectCloudProvider({ provider: "codex" })).usage, undefined);
+  } finally { f.close(); }
+});
 
 test("file previews only read bounded text inside the selected roots, including symlink resolution", () => {
   const f = fixture();

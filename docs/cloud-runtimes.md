@@ -106,3 +106,7 @@ Final verification passed `npm run test:all` with 788 desktop tests, the desktop
 Usage and context use color-coded radial meters. Server-provided Claude severity and headline selection are preserved; other readings use usage-pressure thresholds. Unknown readings are shown as a dash. The context heading omits “estimated”; the underlying Claude value is still its native context summary, not an independently measured count.
 
 Local Markdown file links open an in-app text preview. The main process resolves real paths against all selected workspace roots, rejects outside paths and symlink escapes, and caps previews at 256 KB. Settings uses the Umbratic mark, includes an X as well as the bottom-left close control, and omits executable and tool-visibility controls. Activity remains visible and individually expandable.
+
+The follow-up native app check selected Fable 5.1 from the live catalog and completed a read-only file tool turn. Its response link opened the new preview. After the turn, Claude returned five-hour and weekly subscription windows (49% left in the tighter window at the time of verification). Initial fresh-process quota reads still sometimes return null; the app does not manufacture a value in that case.
+
+The follow-up passed the root `npm run test:all` suite (793 desktop tests) and the desktop production build. UI verification covered the original broken Codex file-link response, links in both selected roots, Fable selection and tool use, both providers’ real usage rings, both appearances, and the Settings X.
