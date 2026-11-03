@@ -25,7 +25,7 @@ export function cloudTurns(entries: CloudEntry[], running: boolean): { instructi
       if (entry.kind === "answer" && entry !== answer) return [{ type: "reasoning", id: entry.id, text: entry.text, durationMs: null, finished: true } as ComposerActivitySegment];
       if (entry.kind !== "activity") return [];
       const tool = entry.tool;
-      return [{ type: "command", id: entry.id, run: { id: entry.id, command: tool?.label || entry.text, cwd: "", stdout: tool?.detail || "", stderr: "", exitCode: null,
+      return [{ type: "command", id: entry.id, run: { id: entry.id, command: tool?.detail?.split("\n")[0] || entry.text, nativeDisplay: { label: (tool?.label || entry.text) + (tool?.status === "stopped" ? " · stopped" : ""), detail: tool?.detail || entry.text }, cwd: "", stdout: "", stderr: "", exitCode: null,
         status: tool?.status === "running" ? "running" : tool?.status === "failed" ? "failed" : "passed", resultStatus: tool?.status, startedAt: entry.at } } as ComposerActivitySegment];
     });
     return { instruction: group.find(entry => entry.kind === "instruction"), answer,

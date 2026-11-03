@@ -19,3 +19,11 @@ test("old compaction-count resets are discarded while inactivity remains configu
   assert.equal(settings.idleResetHours, 3);
   assert.equal(cloud.contextResetReason({ sessionId: "native", state: "idle", compactions: 99, entries: [], lastActiveAt: new Date().toISOString() }, settings), undefined);
 });
+
+test("native activity labels do not masquerade as executed shell commands", () => {
+  const display = loadTypeScriptModule(new URL("../src/renderer/commandDisplay.ts", import.meta.url), { realm: "host" });
+  const run = { id: "tool", command: "cat brief.txt", nativeDisplay: { label: "Read project notes", detail: "cat brief.txt\n\nProject notes" }, cwd: "/workspace", stdout: "", stderr: "", exitCode: null, status: "passed" };
+  assert.equal(display.activityToolLabel(run).label, "Read project notes");
+  assert.equal(display.commandShellText(run), "cat brief.txt\n\nProject notes");
+  assert.equal(display.commandLiveOutputPreview({ ...run, status: "running" }), undefined);
+});
