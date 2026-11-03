@@ -78,12 +78,12 @@ test("the supervisor binds loopback, authenticates, and never inherits the app e
   assert.doesNotMatch(llamaServerSource, /shell:\s*true/);
 });
 
-test("the supervisor resolves only the packaged binary or an explicit override", () => {
+test("the supervisor resolves only prepared runtimes or an explicit override", () => {
   const start = llamaServerSource.indexOf("export function llamaServerBinaryPath");
   const resolver = llamaServerSource.slice(start, llamaServerSource.indexOf("\n}", start));
   assert.match(resolver, /\.resourcesPath/);
   assert.match(resolver, /UMBRATIC_LLAMA_SERVER/);
-  assert.match(resolver, /llama-server binary is missing/);
+  assert.match(resolver, /local model runtime is missing/);
   // Nothing found on PATH: an unreviewed runtime must never be used.
   assert.doesNotMatch(resolver, /\bPATH\b/);
 });
@@ -124,4 +124,15 @@ test("vision loads a paired projector and rejects a missing encoder before start
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("development can use the prepared speech runtime without accepting arbitrary search paths", () => {
+  const prepared = path.resolve(new URL("../src/main", import.meta.url).pathname, "../../.package/llama-server/llama-server");
+  const exists = new Set([prepared]);
+  const make = defaultApp => loadTypeScriptModule(new URL("../src/main/llamaServer.ts", import.meta.url), {
+    realm: "host", mocks: { "node:fs": { existsSync: value => exists.has(value) } },
+    globals: { process: { platform: "darwin", env: {}, defaultApp, resourcesPath: "/missing/resources" } },
+  });
+  assert.equal(make(true).llamaServerBinaryPath(), prepared);
+  assert.throws(() => make(false).llamaServerBinaryPath(), /local model runtime is missing/);
 });

@@ -5,7 +5,7 @@ import * as os from "node:os";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import type { AccountInfo, AgentDefinition, ModelInfo, Options, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk" with { "resolution-mode": "import" };
 import type { CloudConnection, CloudSettings } from "../shared/cloud";
-import { cloudEnvironment, cloudWorkflowInstructions, enabledCloudRoles, roleInstructions, validateCloudConnection } from "./cloudPolicy";
+import { cloudEnvironment, cloudWorkflowInstructions, cloudWorkspaceInstructions, enabledCloudRoles, roleInstructions, validateCloudConnection } from "./cloudPolicy";
 import type { CloudRuntime, CloudRuntimeSink } from "./cloudRuntimeTypes";
 import { CloudRuntimeMissing } from "./cloudInstall";
 
@@ -155,6 +155,7 @@ export const claudeCloudRuntime: CloudRuntime = {
       const config = settings.providers.claude;
       query = sdk.query({ prompt: gate.messages(), options: {
         ...options(settings, workspace.path), additionalDirectories: (workspace.paths || []).filter(root => root !== workspace.path), model: config.orchestrator.model,
+        systemPrompt: { type: "preset", preset: "claude_code", append: cloudWorkflowInstructions(settings, "claude") + "\n" + cloudWorkspaceInstructions(workspace.paths || [workspace.path]) },
         effort: config.orchestrator.effort === "none" || config.orchestrator.effort === "minimal" || config.orchestrator.effort === "ultra" ? undefined : config.orchestrator.effort,
         agents: agentDefinitions(settings), resume: workspace.sessionId, enableFileCheckpointing: true,
         canUseTool: async (tool, input, details) => {

@@ -36,6 +36,7 @@
     "fontkit": "2.0.4",
     "jszip": "3.10.1",
     "lucide-react": "1.28.0",
+    "mermaid": "12.2.0",
     "pdf-to-img": "7.0.1",
     "pdfjs-dist": "6.4.299",
     "react": "19.3.1",

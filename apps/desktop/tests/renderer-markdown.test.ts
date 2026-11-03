@@ -599,3 +599,10 @@ test("only the prose nothing follows is the turn's answer", () => {
   assert.deepEqual(answers.map((item) => item.final), [undefined, true, true]);
   assert.equal(answers[1].text, "This is a website project.");
 });
+
+test("Mermaid fences use the shared diagram renderer while ordinary code remains code", () => {
+  const { MarkdownContent } = loadRendererFile("markdownContent.tsx");
+  const html = renderToStaticMarkup(React.createElement(MarkdownContent, { content: "```mermaid\nflowchart LR\nA --> B\n```\n\n```js\nconst x = 1;\n```" }));
+  assert.match(html, /markdownDiagram/); assert.match(html, /Show diagram source/);
+  assert.match(html, /Rendering diagram/); assert.match(html, /const x = 1/);
+});

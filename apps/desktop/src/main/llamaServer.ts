@@ -58,7 +58,7 @@ const respawnBaseDelayMs = 1_000;
 const respawnMaxDelayMs = 30_000;
 
 /**
- * Resolves the packaged binary, then an explicit override.
+ * Resolves the packaged binary, an explicit override, or the prepared development runtime.
  *
  * There is no fallback to a runtime found on PATH: an Umbratic that quietly
  * used whatever `llama-server` happened to be installed would be running
@@ -71,7 +71,13 @@ export function llamaServerBinaryPath(): string {
   if (packaged && fs.existsSync(packaged)) return packaged;
   const override = process.env.UMBRATIC_LLAMA_SERVER?.trim();
   if (override && fs.existsSync(override)) return override;
-  throw new Error("llama-server binary is missing — run the packaging build or set UMBRATIC_LLAMA_SERVER");
+  // Electron's development executable has no packaged resources. Use only the
+  // repository's prepared, pinned runtime, never an unrelated executable.
+  if ((process as NodeJS.Process & { defaultApp?: boolean }).defaultApp) {
+    const prepared = path.resolve(__dirname, "../../.package/llama-server", executable);
+    if (fs.existsSync(prepared)) return prepared;
+  }
+  throw new Error("The local model runtime is missing. Reinstall Umbratic to restore it.");
 }
 
 /**

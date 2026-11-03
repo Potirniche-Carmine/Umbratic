@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { shell } from "electron";
 import { CloudRpc, type RpcMessage } from "./cloudTransport";
-import { cloudEnvironment, cloudWorkflowInstructions, validateCloudConnection } from "./cloudPolicy";
+import { cloudEnvironment, cloudWorkflowInstructions, cloudWorkspaceInstructions, validateCloudConnection } from "./cloudPolicy";
 import { isCloudEffort, type CloudConnection, type CloudSettings } from "../shared/cloud";
 import type { CloudRuntime } from "./cloudRuntimeTypes";
 import { CloudRuntimeMissing } from "./cloudInstall";
@@ -106,7 +106,7 @@ export const codexCloudRuntime: CloudRuntime = {
           ...(workspace.sessionId ? { threadId: workspace.sessionId, excludeTurns: true } : {}),
           cwd: workspace.path, model: config.orchestrator.model, modelProvider: "openai",
           sandbox: access.sandbox, approvalPolicy: access.approvalPolicy, approvalsReviewer: access.approvalsReviewer, serviceTier: config.serviceTier,
-          developerInstructions: cloudWorkflowInstructions(settings, "codex") + `\nWorkspace folders: ${JSON.stringify(workspace.paths || [workspace.path])}`,
+          developerInstructions: cloudWorkflowInstructions(settings, "codex") + "\n" + cloudWorkspaceInstructions(workspace.paths || [workspace.path]),
           config: { "sandbox_workspace_write.writable_roots": workspace.paths || [workspace.path], "features.memories": false, "agents.enabled": settings.subagents, "skills.include_instructions": false, "skills.bundled.enabled": false },
         });
         threadId = result.thread.id;

@@ -6,6 +6,7 @@ import type { ReviewFile } from "../../shared/reviewDiff";
 import { ReviewPanel } from "../review/ReviewPanel";
 import { ReviewFeedbackChip, ReviewFeedbackDialog } from "../review/ReviewFeedbackDialog";
 import { appendReviewFeedback, reviewCommentLineLabel, type ReviewCommentDraft } from "../review/reviewComments";
+import { ErrorToast } from "../errorToast";
 import { PromptTextarea } from "../PromptTextarea";
 import { promptEnterAction } from "../promptKeyboard";
 import { composerPromptForSend, insertPastedComposerText } from "../composerText";
@@ -76,6 +77,13 @@ export function CloudWorkspace({ api, settings, onSettings }: {
   const running = !!workspace && workspace.state !== "idle";
   const selection = settings.providers[provider].orchestrator;
   const selectionError = connection?.state === "ready" ? modelChoiceError(selection, connection.models) : undefined;
+  useEffect(() => { if (selectionError) setError(selectionError); }, [selectionError]);
+  const reportedError = useRef("");
+  const mountedAt = useRef(Date.now());
+  useEffect(() => {
+    const entry = [...(workspace?.entries || [])].reverse().find(entry => entry.kind === "error");
+    if (entry && entry.id !== reportedError.current && Date.parse(entry.at) >= mountedAt.current) { reportedError.current = entry.id; setError(entry.text); }
+  }, [workspace?.entries]);
   const selectedIds = settings.workspaceRepositoryIds || [];
   const folderKey = selectedIds.join("\0");
   const input = { provider, repositoryIds: selectedIds };
@@ -165,7 +173,6 @@ export function CloudWorkspace({ api, settings, onSettings }: {
           {workspace?.approvals.map(approval => <CloudApprovalCard key={approval.id} approval={approval} onRespond={(allow, answers) => api.respondCloudApproval({ key: workspace.key, id: approval.id, allow, answers })}/>)}
         </div>
         <div className="cloudDockArea">
-          {(error || dictation.status.error || selectionError) && <div className="cloudNotice" role="alert">{error || dictation.status.error || selectionError}<button onClick={() => { setError(""); dictation.dismissError(); if (selectionError) setSettingsOpen(true); }}>{selectionError ? "Settings" : "Dismiss"}</button></div>}
           <form className="cloudDock" onSubmit={event => { event.preventDefault(); void submit(); }} onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); void attach(Array.from(event.dataTransfer.files)); } }}>
             {(images.length > 0 || feedback.length > 0) && <div className="cloudAttachmentStrip"><AttachmentPreviewList files={images.map(cloudImageAttachment)} mode="composer" onOpen={file => setAttachmentPreview(images.find(image => `${image.id}${image.extension || ".png"}` === file.path))} onRemove={file => setImages(current => current.filter(image => `${image.id}${image.extension || ".png"}` !== file.path))}/>{feedback.length > 0 && <ReviewFeedbackChip count={feedback.length} onClick={() => setFeedbackOpen(true)}/>}</div>}
             <PromptTextarea ref={composer} aria-label="Give an instruction" placeholder="Ask anything, or give it something to do…" value={prompt} maxLength={100_000} onChange={event => setPrompt(event.target.value)} onPaste={event => {
@@ -205,6 +212,7 @@ export function CloudWorkspace({ api, settings, onSettings }: {
           onLoadDocumentReview={async () => ({ ok: false, code: "not_available", message: "Open this document in its native app to preview it." })}/>}</aside>}
     </main>
     <button className="cloudSettingsLauncher cloudIconButton" title="Settings" aria-label="Cloud settings" disabled={busy} onClick={() => setSettingsOpen(true)}><span className="topbarLogo" aria-hidden="true"/><span>Umbratic</span><Settings2 size={14} aria-hidden="true"/></button>
+    <ErrorToast message={error || dictation.status.error || null} onDismiss={() => { setError(""); dictation.dismissError(); }}/>
     {settingsOpen && <CloudSettingsPanel usage={latestCloudUsage([connection?.usage, workspace?.account === connection?.account ? workspace?.usage : undefined])} api={api} initialTab={voiceSettings ? "voice" : "connection"} settings={settings} controller={controller} onSave={onSettings} onClose={() => { setSettingsOpen(false); setVoiceSettings(false); }}/>}
     {resetOpen && workspace && <CloudResetDialog busy={pending} onCancel={() => setResetOpen(false)} onReset={() => void action(async () => { setWorkspace(await api.resetCloudContext({ key: workspace.key })); setFeedback([]); setImages([]); setPrompt(""); setResetOpen(false); follow.current = true; composer.current?.focus(); })}/>}
     {attachmentPreview && <CloudAttachmentPreview file={attachmentPreview} onClose={() => setAttachmentPreview(undefined)}/>}

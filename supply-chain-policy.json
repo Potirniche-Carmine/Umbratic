@@ -346,6 +346,33 @@
       "license": "Unlicense",
       "reviewedOn": "2026-11-02",
       "reason": "SDK transitive dependency; inspected LICENSE public-domain dedication with explicit permission to use, modify and distribute."
+    },
+    {
+      "package": "dompurify",
+      "version": "3.4.17",
+      "reviewedOn": "2026-11-02",
+      "reason": "Mermaid sanitizer, used unmodified under the Apache-2.0 option. Distributed LICENSE retained in the production dependency and diagram notices.",
+      "license": "(MPL-2.0 OR Apache-2.0)"
+    },
+    {
+      "package": "elkjs",
+      "version": "0.9.3",
+      "reviewedOn": "2026-11-02",
+      "reason": "Unmodified Mermaid layout dependency. EPL-2.0 license and upstream source location retained in diagram notices; no changes to ELK source.",
+      "license": "EPL-2.0"
+    },
+    {
+      "package": "khroma",
+      "version": "2.1.0",
+      "reviewedOn": "2026-11-02",
+      "reason": "Package metadata omits license. Inspected the distributed lowercase license file: MIT, copyright Fabio Spampinato and Andrew Maney. Notice retained in diagram notices."
+    },
+    {
+      "package": "robust-predicates",
+      "version": "3.0.3",
+      "reviewedOn": "2026-11-02",
+      "reason": "Mermaid geometry dependency. Inspected LICENSE public-domain dedication with explicit permission to use, modify and distribute. Notice retained in diagram notices.",
+      "license": "Unlicense"
     }
   ]
 }

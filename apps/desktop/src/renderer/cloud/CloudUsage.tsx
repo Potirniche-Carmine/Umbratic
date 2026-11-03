@@ -15,7 +15,7 @@ export function CloudUsageDetails({ usage }: { usage?: Usage }) {
   if (!usage?.limits.length) return null;
   return <div className="cloudUsageDetails">{usage.limits.map(limit => <div className="cloudUsageWindow" key={limit.id} aria-label={`${limit.label}: ${Math.round(100 - limit.usedPercent)}% left`}>
     <UsageRing value={100 - limit.usedPercent} used={limit.usedPercent} severity={limit.severity}/>
-    <div><strong>{limit.label}</strong><span>Remaining</span>
+    <div><strong>{limit.label}</strong>
       {limit.resetsAt && <small>Resets {new Date(limit.resetsAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}</small>}</div>
   </div>)}</div>;
 }

@@ -310,3 +310,6 @@
 .cloudApproval > pre { padding: 12px; background: var(--surface-2); border-radius: 8px; color: var(--text); }
 .cloudApproval details { font-size: 12px; color: var(--muted); }
 .cloudApproval details > summary { cursor: pointer; }
+.cloudFoldersMenu > .cloudAddFolder { width: 32px; height: 32px; padding: 0; margin: 4px 0 0 4px; display: grid; place-items: center; }
+.cloudShell > .toast { width: min(400px, calc(100vw - 36px)); border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-2); color: var(--text); font-size: 13px; box-shadow: 0 8px 28px var(--shadow-color); }
+.cloudShell > .toast > svg { color: var(--amber); }

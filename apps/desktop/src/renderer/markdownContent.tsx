@@ -12,6 +12,7 @@ import {
 import { copyPlainText } from "./copyPlainText";
 import { InlineLink, readMarkdownLink } from "./inlineLink";
 import type { ReviewFile } from "./rendererTypes";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 const markdownPreviewCharacterLimit = 60000;
 
@@ -232,13 +233,16 @@ function MarkdownBlockView({
   block,
   referenceOptions,
   trailingInline,
+  streaming = false,
 }: {
   block: MarkdownBlock;
   blockKey?: string;
   referenceOptions?: ReviewReferenceOptions;
   trailingInline?: React.ReactNode;
+  streaming?: boolean;
 }) {
   if (block.type === "code") {
+    if (block.language.trim().toLowerCase() === "mermaid") return <MermaidDiagram content={block.content} streaming={streaming}/>;
     return <MarkdownCodeBlock content={block.content} language={block.language} trailingInline={trailingInline} />;
   }
   if (block.type === "heading") {
@@ -362,6 +366,7 @@ export function MarkdownContent({
         ) : (
           <MarkdownBlockView
             key={index}
+            streaming={streaming}
             block={streaming ? stabilizedStreamingBlock(block) : block}
             referenceOptions={referenceOptions}
             trailingInline={caretInline ? caret : trailingInline}

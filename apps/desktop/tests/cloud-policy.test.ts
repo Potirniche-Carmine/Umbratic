@@ -150,3 +150,21 @@ test("auto review preserves Codex sandbox boundaries and Claude bypass is explic
   assert.deepEqual(claude.claudePermissionOptions("accept-edits"), { permissionMode: "acceptEdits", allowDangerouslySkipPermissions: false });
   assert.deepEqual(claude.claudePermissionOptions("bypass"), { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true });
 });
+
+test("multi-folder workspace instructions distinguish peer roots from the process cwd", () => {
+  const roots = ["/work/App", "/work/Notes"];
+  const instructions = policy.cloudWorkspaceInstructions(roots);
+  assert.ok(instructions.includes(JSON.stringify(roots)));
+  assert.match(instructions, /briefly inspect each selected folder/);
+  assert.match(instructions, /explicitly scoped to one folder/);
+  assert.doesNotMatch(policy.cloudWorkspaceInstructions([roots[0]]), /briefly inspect each selected folder/);
+});
+
+test("removed permission presets migrate to manual rather than bypass", () => {
+  for (const [provider, modes] of [["codex", ["read-only"]], ["claude", ["plan", "accept-edits"]]]) {
+    for (const mode of modes) {
+      const settings = cloud.defaultCloudSettings(); settings.providers[provider].approvalMode = mode;
+      assert.equal(cloud.validateCloudSettings(settings).providers[provider].approvalMode, "manual");
+    }
+  }
+});

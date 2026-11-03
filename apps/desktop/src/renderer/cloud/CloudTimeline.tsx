@@ -30,7 +30,7 @@ export function cloudTurns(entries: CloudEntry[], running: boolean): { instructi
     });
     return { instruction: group.find(entry => entry.kind === "instruction"), answer,
       activity: { type: "activity", id: `work-${group[0].id}`, segments, startedAt: group[0].at, endedAt: finished ? group.at(-1)!.at : undefined, finished },
-      notes: group.filter(entry => entry.kind === "error" || entry.kind === "context") };
+      notes: group.filter(entry => entry.kind === "context") };
   });
 }
 export function CloudTimeline({ workspace, onLocalFile, onReviewFile }: { workspace: CloudWorkspace; onLocalFile(path: string, line?: number): void; onReviewFile(path: string): void }) {

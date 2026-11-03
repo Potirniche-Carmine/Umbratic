@@ -4,7 +4,7 @@ import { loadTypeScriptModule } from "./load-ts-module.ts";
 
 const iconNames = [
   "AtSign", "BarChart3", "Brain", "Check", "ChevronDown", "ChevronRight", "CheckCircle2", "CircleDashed",
-  "Cloud", "Copy", "Ellipsis", "ExternalLink", "File", "FileText", "FolderOpen", "FolderPlus", "FolderX", "GitBranch", "Hand", "Loader2", "MessageSquareX",
+  "Cloud", "Code", "Copy", "Ellipsis", "ExternalLink", "File", "FileText", "FolderOpen", "FolderPlus", "FolderX", "GitBranch", "Hand", "Loader2", "MessageSquareX",
   "Monitor", "Moon", "PanelRight", "Paperclip", "Pencil", "Play", "Plus", "RefreshCw", "Send", "Settings",
   "ShieldCheck", "Sparkles", "SquarePen", "SquareTerminal", "Sun", "ThumbsDown", "ThumbsUp",
   "Trash2", "TriangleAlert", "Type", "Undo2", "User", "X",
