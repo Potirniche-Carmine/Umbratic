@@ -124,6 +124,14 @@ function agentDefinitions(settings: CloudSettings): Record<string, AgentDefiniti
 
 let login: ChildProcess | undefined;
 export const claudeCloudRuntime: CloudRuntime = {
+  async signOut(settings, cwd) {
+    stopClaudeLogin();
+    await new Promise<void>((resolve, reject) => {
+      execFile(claudeExecutable(settings.providers.claude.executable), ["--setting-sources", "", "auth", "logout"],
+        { cwd, env: cloudEnvironment(), timeout: 15_000, maxBuffer: 64 * 1024, windowsHide: true },
+        error => error ? reject(new Error("Claude Code could not disconnect. Try again.")) : resolve());
+    });
+  },
   async inspect(settings, cwd) {
     const sdk = await import("@anthropic-ai/claude-agent-sdk");
     const gate = new PromptGate();
@@ -180,6 +188,7 @@ export const claudeCloudRuntime: CloudRuntime = {
           consumeMessage(message, sink, connection.account || "Claude", stream);
           if (message.type === "result") {
             resultReceived = true;
+            if (!message.is_error) sink.complete?.();
             const [context, usage] = await Promise.all([
               optionalRuntimeRead(query.getContextUsage({ detail: "summary" })),
               optionalRuntimeRead(query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })),
@@ -202,7 +211,8 @@ export const claudeCloudRuntime: CloudRuntime = {
   },
 };
 
-export function consumeClaudeMessage(message: any, sink: CloudRuntimeSink, account: string, stream: { messageId: string }): void {
+type ClaudeStream = { messageId: string; tools?: Map<number, { id: string; name: string; input: string }> };
+export function consumeClaudeMessage(message: any, sink: CloudRuntimeSink, account: string, stream: ClaudeStream): void {
   // Child contexts have independent compaction budgets and transcripts.
   if (message.parent_tool_use_id) return;
   if (message.type === "system" && message.subtype === "init") sink.session(message.session_id, account);
@@ -211,16 +221,39 @@ export function consumeClaudeMessage(message: any, sink: CloudRuntimeSink, accou
   // duplicating it. Subagent output stays in the parent's native context.
   if (message.type === "stream_event") {
     const event = message.event;
-    if (event?.type === "message_start") stream.messageId = event.message?.id || "";
+    if (event?.type === "message_start") { stream.messageId = event.message?.id || ""; stream.tools = new Map(); }
+    if (event?.type === "content_block_start" && stream.messageId) {
+      const block = event.content_block;
+      if (block?.type === "text" && block.text) sink.text(stream.messageId, block.text, true);
+      if (block?.type === "thinking" && block.thinking) sink.thinking?.(`${stream.messageId}:${event.index}`, block.thinking, false);
+      if (block?.type === "tool_use") {
+        stream.tools ??= new Map();
+        stream.tools.set(event.index, { id: block.id, name: block.name, input: "" });
+        sink.activity(block.name, { id: block.id, label: block.name, kind: block.name.toLowerCase(), status: "running" });
+      }
+    }
     if (event?.type === "content_block_delta" && event.delta?.type === "text_delta" && stream.messageId) sink.text(stream.messageId, event.delta.text, true);
+    if (event?.type === "content_block_delta" && event.delta?.type === "thinking_delta" && stream.messageId && event.delta.thinking) sink.thinking?.(`${stream.messageId}:${event.index}`, event.delta.thinking, true);
+    if (event?.type === "content_block_delta" && event.delta?.type === "input_json_delta") {
+      const tool = stream.tools?.get(event.index);
+      if (tool) {
+        tool.input = (tool.input + event.delta.partial_json).slice(0, 12000);
+        sink.activity(tool.name, { id: tool.id, label: tool.name, kind: tool.name.toLowerCase(), detail: tool.input, status: "running" });
+      }
+    }
   }
   if (message.type === "assistant") {
     const content = message.message.content || [];
-    sink.text(message.message.id, content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n"), false);
-    for (const block of content) if (block.type === "tool_use") sink.activity(block.name, { id: block.id, label: block.input?.description || block.name, detail: typeof block.input?.command === "string" ? block.input.command : JSON.stringify(block.input, null, 2).slice(0, 12000), status: "running" });
+    const text = content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n");
+    if (text) sink.text(message.message.id, text, false);
+    for (const [index, block] of content.entries()) if (block.type === "thinking" && block.thinking) sink.thinking?.(`${message.message.id}:${index}`, block.thinking, false);
+    for (const block of content) if (block.type === "tool_use") sink.activity(block.name, { id: block.id, label: block.input?.description || block.name, kind: block.name.toLowerCase(), detail: typeof block.input?.command === "string" ? block.input.command : JSON.stringify(block.input, null, 2).slice(0, 12000), status: "running" });
   }
   if (message.type === "user" && Array.isArray(message.message?.content)) {
-    for (const block of message.message.content) if (block.type === "tool_result") sink.activity("Tool finished", { id: block.tool_use_id, label: "Tool finished", status: block.is_error ? "failed" : "completed" });
+    for (const block of message.message.content) if (block.type === "tool_result") {
+      const output = typeof block.content === "string" ? block.content : Array.isArray(block.content) ? block.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") : "";
+      sink.activity("Tool finished", { id: block.tool_use_id, label: "Tool finished", output: output.slice(-12000), status: block.is_error ? "failed" : "completed" });
+    }
   }
   if (message.type === "result") {
     const usage = Object.values(message.modelUsage || {}) as { contextWindow: number; inputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }[];

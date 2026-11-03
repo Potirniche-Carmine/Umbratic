@@ -1,3 +1,4 @@
+import { previewCloudConversation } from "./previewCloudConversation";
 import { previewCodexModels } from "./previewCodexModels";
 import { defaultCloudSettings, type CloudApi, type CloudConnection, type CloudProvider } from "../../shared/cloud";
 
@@ -9,6 +10,7 @@ export function createPreviewCloudApi(): CloudApi {
   if (params.get("mode") === "cloud") settings.mode = "cloud";
   if (params.get("provider") === "claude") settings.provider = "claude";
   const initial = params.get("connection");
+  const conversationFixture = params.get("cloudTest") === "conversation";
   const sourceFixture = params.get("cloudTest") === "source";
   if (sourceFixture) settings.workspaceRepositoryIds = ["preview-source"];
   const sourceText = ["#include <stdio.h>", "#include <stdbool.h>", "", "typedef struct {", "    unsigned int interval;", "    bool connected;", "} Monitor;", "", "/* Synchronize the selected monitor with its configured destinations. */", "int synchronize_monitor(Monitor *monitor)", "{", "    if (monitor == NULL) {", "        return -1;", "    }", "", "    if (!monitor->connected) {", "        fprintf(stderr, \"Waiting for connection\\n\");", "        return 0;", "    }", "", "    // Publish the latest status before starting another cycle.", "    printf(\"Synchronizing every %u seconds\\n\", monitor->interval);", "    return 1;", "}", ""].join("\n");
@@ -17,7 +19,10 @@ export function createPreviewCloudApi(): CloudApi {
     claude: initial === "missing" || initial === "sign_in" ? initial : "ready",
   };
   function connection(provider: CloudProvider): CloudConnection {
-    return { provider, state: state[provider], message: "Preview", account: state[provider] === "ready" ? "Preview account" : undefined,
+    return { ...(conversationFixture ? { planName: provider === "claude" ? "Team" : "Pro", usage: { fetchedAt: new Date().toISOString(), limits: [
+      { id: "five_hour", label: "5 hours", usedPercent: 18, resetsAt: new Date(Date.now() + 2 * 3600_000).toISOString() },
+      { id: "weekly", label: "Weekly", usedPercent: 54, resetsAt: new Date(Date.now() + 24 * 3600_000).toISOString() },
+    ] } } : {}), provider, state: state[provider], message: "Preview", account: state[provider] === "ready" ? "Preview account" : undefined,
       models: state[provider] !== "ready" ? [] : provider === "codex" ? previewCodexModels : [...new Set(Object.values(defaults.providers[provider].roles).map(choice => choice.model))].map(id => ({
         id, label: id === "gpt-6.1-sol" ? "GPT-6.1 Sol" : id === "gpt-6.1-terra" ? "GPT-6.1 Terra" : id === "claude-opus-5-5" ? "Opus 5.5" : "Sonnet 5.5",
         efforts: ["low", "medium", "high", "xhigh"],
@@ -31,6 +36,7 @@ export function createPreviewCloudApi(): CloudApi {
     inspectCloudProvider: async ({ provider }) => connection(provider),
     installCloudProvider: async ({ provider }) => { state[provider] = "sign_in"; return connection(provider); },
     cancelCloudSignIn: async () => undefined,
+    disconnectCloudProvider: async ({ provider }) => { state[provider] = "sign_in"; return connection(provider); },
     signInCloudProvider: async ({ provider }) => { if (params.get("login") !== "pending") state[provider] = "ready"; return { message: "Preview connection" }; },
     pickCloudFolders: async () => [],
     saveCloudImages: async ({ files }) => files.map(file => ({ id: crypto.randomUUID(), name: file.name, mimeType: file.mimeType || "image/png", previewDataUrl: file.dataUrl })),
@@ -43,5 +49,6 @@ export function createPreviewCloudApi(): CloudApi {
     resetCloudContext: async () => { throw new Error("No runtime is connected in this preview."); },
     respondCloudApproval: async () => undefined,
     onCloudWorkspace: () => () => undefined,
+    ...(conversationFixture ? previewCloudConversation() : {}),
   };
 }

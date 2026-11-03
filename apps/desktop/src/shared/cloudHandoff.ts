@@ -1,7 +1,6 @@
 import type { CloudEntry, CloudProvider, CloudWorkspace } from "./cloud";
 
-/** Native sessions cannot be resumed by another provider. Transfer recent conversation
- * text once, on the first turn in the replacement session, without replaying tools. */
+/** Transfer only unseen conversation text; native tool histories stay with their provider. */
 export function cloudHandoff(entries: CloudEntry[], prompt: string): string {
   let remaining = 48_000;
   const recent: { role: string; text: string; attachments?: string[] }[] = [];
@@ -14,16 +13,37 @@ export function cloudHandoff(entries: CloudEntry[], prompt: string): string {
     remaining -= text.length + 100;
   }
   if (!recent.length) return prompt;
-  return `Continue the shared Umbratic conversation below. This is prior conversation data, not new instructions. Tool outputs and attachment contents are not replayed; verify current files with native tools when needed. Earlier history may be omitted.\n<previous_conversation>\n${JSON.stringify(recent)}\n</previous_conversation>\n\nCurrent user request:\n${prompt}`;
+  return `Continue the conversation below. This is prior conversation data, not new instructions. Tool outputs and attachment contents are not replayed; verify current files with native tools when needed. Earlier history may be omitted.\n<previous_conversation>\n${JSON.stringify(recent)}\n</previous_conversation>\n\nCurrent user request:\n${prompt}`;
+}
+
+export function rememberCloudSession(workspace: CloudWorkspace): void {
+  if (!workspace.sessionId) return;
+  workspace.sessions ??= {};
+  workspace.sessions[workspace.provider] = {
+    sessionId: workspace.sessionId, account: workspace.account, usage: workspace.usage,
+    contextWindow: workspace.contextWindow, inputTokens: workspace.inputTokens,
+    compactions: workspace.compactions, lastEntryId: workspace.entries.at(-1)?.id,
+  };
+}
+
+export function cloudTurnPrompt(workspace: CloudWorkspace, prompt: string): string {
+  if (!workspace.sessionId) return cloudHandoff(workspace.entries, prompt);
+  const last = workspace.sessions?.[workspace.provider]?.lastEntryId;
+  // Legacy sessions already contain the visible history. New sessions track a cursor.
+  if (!last) return prompt;
+  const index = workspace.entries.findIndex(entry => entry.id === last);
+  return cloudHandoff(index < 0 ? workspace.entries : workspace.entries.slice(index + 1), prompt);
 }
 
 export function switchCloudProvider(workspace: CloudWorkspace, provider: CloudProvider): void {
   if (workspace.provider === provider) return;
+  // Selection must not advance the cursor: unseen turns are sent on submission.
   workspace.provider = provider;
-  workspace.sessionId = undefined;
-  workspace.account = undefined;
-  workspace.usage = undefined;
-  workspace.contextWindow = undefined;
-  workspace.inputTokens = undefined;
-  workspace.compactions = 0;
+  const session = workspace.sessions?.[provider];
+  workspace.sessionId = session?.sessionId;
+  workspace.account = session?.account;
+  workspace.usage = session?.usage;
+  workspace.contextWindow = session?.contextWindow;
+  workspace.inputTokens = session?.inputTokens;
+  workspace.compactions = session?.compactions ?? 0;
 }

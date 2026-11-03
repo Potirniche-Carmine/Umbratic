@@ -1,5 +1,6 @@
-import { cloudHandoff, switchCloudProvider } from "../shared/cloudHandoff";
+import { cloudTurnPrompt, rememberCloudSession, switchCloudProvider } from "../shared/cloudHandoff";
 import { resolveCloudImages } from "./cloudImages";
+import { deleteCloudHistory, forgetCloudProviderSession, forgetStoredCloudProvider } from "./cloudHistory";
 import { latestCloudUsage } from "../shared/cloudUsage";
 import { app } from "electron";
 import * as crypto from "node:crypto";
@@ -20,6 +21,8 @@ const runs = new Map<string, CloudRun>();
 const stopping = new Set<string>();
 const approvals = new Map<string, { key: string; resolve(value: ApprovalAnswer): void }>();
 const timers = new Map<string, NodeJS.Timeout>();
+const disconnecting = new Set<string>();
+const accountGeneration = new Map<string, number>();
 let closing = false;
 
 function readStored(key: string): unknown {
@@ -37,7 +40,7 @@ export function getCloudSettings(): CloudSettings {
   return defaultCloudSettings();
 }
 export function saveCloudSettings(input: CloudSettings): CloudSettings {
-  if (runs.size || cloudInstallInProgress()) throw new Error("Wait for the current work or installation to finish before changing settings.");
+  if (runs.size || cloudInstallInProgress() || disconnecting.size) throw new Error("Wait for the current work or installation to finish before changing settings.");
   const settings = validateCloudSettings(input);
   writeStored("cloud:settings", settings);
   return settings;
@@ -49,8 +52,12 @@ function scratchDirectory(): string {
 }
 export async function inspectCloudProvider(input: { provider: string }): Promise<CloudConnection> {
   if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
+  const generation = accountGeneration.get(input.provider);
+  const disconnected = (): CloudConnection => ({ provider: input.provider as CloudConnection["provider"], state: "sign_in", models: [], message: "Connect your account." });
+  if (disconnecting.has(input.provider)) return disconnected();
   try {
     const connection = await runtime(input.provider).inspect(getCloudSettings(), scratchDirectory());
+    if (generation !== accountGeneration.get(input.provider)) return disconnected();
     if (connection.state === "ready" && connection.account) connection.usage = rememberUsage(input.provider, connection.account, connection.usage);
     return connection;
   }
@@ -64,7 +71,7 @@ function rememberUsage(provider: string, account: string, usage?: CloudWorkspace
 }
 export async function installCloudProvider(input: { provider: string }): Promise<CloudConnection> {
   if (!isCloudProvider(input?.provider)) throw new Error("Choose Codex or Claude Code.");
-  if (runs.size || closing) throw new Error("Stop the current work before installing.");
+  if (runs.size || closing || disconnecting.size) throw new Error("Stop the current work before installing.");
   const settings = getCloudSettings();
   try { (input.provider === "codex" ? codexExecutable : claudeExecutable)(settings.providers[input.provider].executable); }
   catch (error) {
@@ -75,7 +82,7 @@ export async function installCloudProvider(input: { provider: string }): Promise
 }
 export async function signInCloudProvider(input: { provider: string }): Promise<{ message: string }> {
   if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
-  if (runs.size || cloudInstallInProgress()) throw new Error("Wait for the current work or installation to finish before connecting.");
+  if (runs.size || cloudInstallInProgress() || disconnecting.size) throw new Error("Wait for the current work or installation to finish before connecting.");
   return runtime(input.provider).signIn(getCloudSettings(), scratchDirectory());
 }
 export function cancelCloudSignIn(input: { provider: string }): void {
@@ -83,6 +90,20 @@ export function cancelCloudSignIn(input: { provider: string }): void {
   if (input.provider === "codex") stopCodexLogin(); else stopClaudeLogin();
 }
 function runtime(provider: string) { return provider === "codex" ? codexCloudRuntime : claudeCloudRuntime; }
+
+export async function disconnectCloudProvider(input: { provider: string }): Promise<CloudConnection> {
+  if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
+  if (runs.size || cloudInstallInProgress() || disconnecting.size || closing) throw new Error("Wait for the current work to finish before disconnecting.");
+  const provider = input.provider;
+  disconnecting.add(provider);
+  accountGeneration.set(provider, (accountGeneration.get(provider) || 0) + 1);
+  try {
+    await runtime(provider).signOut(getCloudSettings(), scratchDirectory());
+    forgetStoredCloudProvider(provider);
+    for (const workspace of workspaces.values()) { forgetCloudProviderSession(workspace, provider); flush(workspace); }
+    return { provider, state: "sign_in", models: [], message: "Connect your account." };
+  } finally { disconnecting.delete(provider); }
+}
 
 export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
   if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
@@ -114,6 +135,7 @@ export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
       workspace.lastActiveAt = previous.map(value => value!.lastActiveAt || "").sort().at(-1) || undefined;
     }
     if (stored && stored.state !== "idle") append(workspace, "context", "The previous run was interrupted when Umbratic closed. You can continue from its saved context.");
+    if (workspace.sessionId && !workspace.sessions?.[workspace.provider]) rememberCloudSession(workspace);
     workspaces.set(key, workspace);
   }
   if (workspace.provider !== input.provider) {
@@ -139,7 +161,9 @@ function publish(workspace: CloudWorkspace): void {
   if (closing || timers.has(workspace.key)) return;
   timers.set(workspace.key, setTimeout(() => flush(workspace), 80));
 }
-function clearContext(workspace: CloudWorkspace, reason: string): void {
+function clearContext(workspace: CloudWorkspace, reason: string, pendingImageIds: string[] = []): void {
+  deleteCloudHistory(workspace, workspaces.values(), pendingImageIds);
+  workspace.sessions = undefined;
   workspace.sessionId = undefined; workspace.account = undefined; workspace.lastActiveAt = undefined;
   workspace.usage = undefined;
   workspace.compactions = 0; workspace.contextWindow = undefined; workspace.inputTokens = undefined;
@@ -183,32 +207,38 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
   const images = resolveCloudImages(input.imageIds ?? []);
   const snapshot = getCloudWorkspace(input);
   const workspace = requiredWorkspace(snapshot.key);
-  if (runs.size || cloudInstallInProgress()) throw new Error("Finish or stop the current work or installation first.");
+  if (runs.size || cloudInstallInProgress() || disconnecting.size) throw new Error("Finish or stop the current work or installation first.");
   const settings = getCloudSettings();
   const reason = contextResetReason(workspace, settings);
-  if (reason) clearContext(workspace, reason);
-  const runtimePrompt = workspace.sessionId ? input.prompt.trim() : cloudHandoff(workspace.entries, input.prompt.trim());
+  if (reason) clearContext(workspace, reason, images.map(image => image.image.id));
+  const runtimePrompt = cloudTurnPrompt(workspace, input.prompt.trim());
   workspace.lastActiveAt = new Date().toISOString();
   append(workspace, "instruction", input.prompt.trim());
+  const instruction = workspace.entries.at(-1)!;
   if (images.length) workspace.entries.at(-1)!.images = images.map(image => image.image);
   workspace.state = "running";
+  function receiveText(id: string, text: string, additive: boolean, kind: "answer" | "thinking", phase?: import("../shared/cloud").CloudMessagePhase): void {
+    if (closing) return;
+    const entryId = `${workspace.sessionId}:${id}`;
+    const existing = workspace.entries.find(entry => entry.id === entryId);
+    if (existing) {
+      existing.text = (additive ? existing.text + text : text).slice(0, 1_000_000);
+      if (phase) existing.phase = phase;
+    } else if (text) workspace.entries.push({ id: entryId, kind, text: text.slice(0, 1_000_000), phase, at: new Date().toISOString() });
+    publish(workspace);
+  }
   const sink: CloudRuntimeSink = {
     session(id, account) {
       if (workspace.account !== account) workspace.usage = rememberUsage(workspace.provider, account);
       workspace.sessionId = id; workspace.account = account; publish(workspace);
     },
-    text(id, text, additive) {
-      if (!text || closing) return;
-      const entryId = `${workspace.sessionId}:${id}`;
-      const existing = workspace.entries.find(entry => entry.id === entryId);
-      if (existing) existing.text = (additive ? existing.text + text : text).slice(0, 1_000_000);
-      else workspace.entries.push({ id: entryId, kind: "answer", text: text.slice(0, 1_000_000), at: new Date().toISOString() });
-      publish(workspace);
-    },
+    text(id, text, additive, phase) { receiveText(id, text, additive, "answer", phase); },
+    thinking(id, text, additive) { receiveText(`thinking:${id}`, text, additive, "thinking"); },
+    complete() { instruction.completedAt ??= new Date().toISOString(); flush(workspace); },
     activity(text, tool) {
       const id = tool ? `${workspace.sessionId}:tool:${tool.id}` : undefined;
       const existing = id ? workspace.entries.find(entry => entry.id === id) : undefined;
-      if (existing) { existing.text = text === "Tool finished" ? existing.text : text; existing.tool = text === "Tool finished" ? { ...existing.tool!, status: tool!.status } : tool; }
+      if (existing) { existing.text = text === "Tool finished" ? existing.text : text; existing.tool = text === "Tool finished" ? { ...existing.tool!, status: tool!.status, ...(tool!.output !== undefined ? { output: tool!.output } : {}) } : { ...existing.tool, ...tool! }; }
       else if (tool) workspace.entries.push({ id: id!, kind: "activity", text, tool, at: new Date().toISOString() });
       else if (workspace.entries.at(-1)?.text !== text) append(workspace, "activity", text);
       publish(workspace);
@@ -225,8 +255,10 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
   };
   const run = runtime(input.provider).run(settings, structuredClone(workspace), runtimePrompt, sink, images);
   runs.set(workspace.key, run);
-  void run.done.catch(error => { if (!closing && !stopping.has(workspace.key)) append(workspace, "error", error instanceof Error ? error.message : "The runtime could not finish this work."); })
+  void run.done.then(() => rememberCloudSession(workspace))
+    .catch(error => { if (!closing && !stopping.has(workspace.key)) append(workspace, "error", error instanceof Error ? error.message : "The runtime could not finish this work."); })
     .finally(() => {
+      instruction.completedAt ??= new Date().toISOString();
       if (stopping.delete(workspace.key)) append(workspace, "activity", "Work stopped.");
       for (const entry of workspace.entries) if (entry.tool?.status === "running") entry.tool.status = "stopped";
       denyApprovals(workspace.key); runs.delete(workspace.key); workspace.state = "idle";

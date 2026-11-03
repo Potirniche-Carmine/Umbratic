@@ -15,6 +15,7 @@ import type { ReviewFile } from "./rendererTypes";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useSourceSyntax } from "./useSourceSyntax";
 import { SourceTokens } from "./SourceTokens";
+import { useStreamingText } from "./useStreamingText";
 
 const markdownPreviewCharacterLimit = 60000;
 
@@ -197,8 +198,9 @@ export function renderInlineMarkdown(text: string, options?: ReviewReferenceOpti
         }
         const file = localFileLink(link.url);
         if (file && options?.onLocalFileClick) {
-          pushFormatted(<button className="inlineFileLink" key={`file-${keyIndex}`} type="button" title={`${file.path}${file.line ? ` · Line ${file.line}` : ""}`}
-            onClick={() => options.onLocalFileClick?.(file.path, file.line)}>{link.label}{file.line && !/(?:\bline\s*\d|[:#]L?\d)/i.test(link.label) && <span className="inlineFileLine">:{file.line}</span>}</button>);
+          const label = file.line ? link.label.replace(new RegExp(`(?:[:#]L?${file.line}|\\s+line\\s+${file.line}|\\s*\\(${file.line}\\))$`, "i"), "") : link.label;
+          pushFormatted(<button className="inlineFileLink" key={`file-${keyIndex}`} type="button" title={`${file.path}${file.line ? ` · Line ${file.line}` : ""}`} aria-label={file.line ? `${label}, line ${file.line}` : undefined}
+            onClick={() => options.onLocalFileClick?.(file.path, file.line)}><span className="inlineFileName">{label}</span>{file.line && <span className="inlineFileLine">({file.line})</span>}</button>);
           index = link.end;
           continue;
         }
@@ -318,7 +320,8 @@ function MarkdownBlockView({
 // lets every block before the live tail skip re-rendering entirely.
 const MemoizedMarkdownBlockView = React.memo(
   MarkdownBlockView,
-  (previous, next) => previous.blockKey === next.blockKey && previous.referenceOptions === next.referenceOptions,
+  (previous, next) => previous.blockKey === next.blockKey && previous.referenceOptions === next.referenceOptions
+    && previous.streaming === next.streaming && previous.trailingInline === next.trailingInline,
 );
 
 export function MarkdownContent({
@@ -335,7 +338,8 @@ export function MarkdownContent({
   streaming?: boolean;
   caretClassName?: string;
 } & ReviewReferenceOptions) {
-  const blocks = useMemo(() => parseMarkdown(content), [content]);
+  const displayed = useStreamingText(content, streaming);
+  const blocks = useMemo(() => parseMarkdown(displayed), [displayed]);
   const blockKeys = useMemo(() => blocks.map((block) => JSON.stringify(block)), [blocks]);
   const referenceOptions = useMemo(() => ({ onReviewFileClick, reviewFiles, onLocalFileClick }), [onReviewFileClick, reviewFiles, onLocalFileClick]);
   // One component for streaming and settled rendering: the flip at the end of
@@ -350,32 +354,25 @@ export function MarkdownContent({
   const caret = streaming && caretClassName ? <span className={caretClassName} aria-hidden="true" /> : null;
   const lastBlock = blocks.at(-1);
   const caretInline = !!caret && !!lastBlock && lastBlock.type !== "rule";
-  // Everything but the last block goes through the memo. A settled message
-  // re-renders whenever anything in the app does, and in a long chat that is
-  // every message on every streamed token; the memo means React reconciles the
-  // paragraphs it already has only when their own text changes. The last block
-  // stays direct because it carries the caret or the caller's trailing node,
-  // which the memo deliberately does not compare.
+  // Use the same component type for the live tail and completed blocks. Swapping
+  // types at a paragraph boundary remounts the DOM and loses code-block state.
+  // Settled blocks skip reconciliation; the tail also compares its caret and
+  // streaming state so completion removes transient syntax in place.
   return (
     <div className="markdownContent">
-      {blocks.map((block, index) =>
-        index < blocks.length - 1 ? (
+      {blocks.map((block, index) => {
+        const tail = index === blocks.length - 1;
+        return (
           <MemoizedMarkdownBlockView
             key={index}
-            block={block}
+            block={tail && streaming ? stabilizedStreamingBlock(block) : block}
             blockKey={blockKeys[index]}
             referenceOptions={referenceOptions}
+            streaming={tail && streaming}
+            trailingInline={tail ? (caretInline ? caret : trailingInline) : undefined}
           />
-        ) : (
-          <MarkdownBlockView
-            key={index}
-            streaming={streaming}
-            block={streaming ? stabilizedStreamingBlock(block) : block}
-            referenceOptions={referenceOptions}
-            trailingInline={caretInline ? caret : trailingInline}
-          />
-        ),
-      )}
+        );
+      })}
       {caret && !caretInline ? caret : null}
     </div>
   );

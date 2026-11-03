@@ -35,9 +35,20 @@ export type CloudLimit = { id: string; label: string; usedPercent: number; reset
 export type CloudUsage = { limits: CloudLimit[]; fetchedAt: string };
 export type CloudImage = { id: string; name: string; mimeType: string; previewDataUrl: string; extension?: string; pending?: boolean };
 export type CloudImageInput = { name: string; dataUrl: string; mimeType?: string };
-export type CloudTool = { id: string; label: string; detail?: string; status: "running" | "completed" | "failed" | "stopped" };
-export type CloudEntry = { id: string; kind: "instruction" | "answer" | "activity" | "context" | "error"; text: string; at: string; tool?: CloudTool; images?: CloudImage[] };
+export type CloudTool = { id: string; label: string; kind?: string; detail?: string; output?: string; status: "running" | "completed" | "failed" | "stopped" };
+export type CloudMessagePhase = "commentary" | "partial_answer" | "final_answer";
+export type CloudEntry = { id: string; kind: "instruction" | "answer" | "thinking" | "activity" | "context" | "error"; text: string; at: string; completedAt?: string; phase?: CloudMessagePhase; tool?: CloudTool; images?: CloudImage[] };
 export type CloudApproval = { id: string; title: string; detail: string; questions?: { id: string; question: string; options: string[] }[] };
+export type CloudSession = {
+  sessionId?: string;
+  account?: string;
+  usage?: CloudUsage;
+  contextWindow?: number;
+  inputTokens?: number;
+  compactions: number;
+  /** Last shared entry already included in this provider's native session. */
+  lastEntryId?: string;
+};
 export type CloudWorkspace = {
   key: string;
   provider: CloudProvider;
@@ -53,6 +64,7 @@ export type CloudWorkspace = {
   approvals: CloudApproval[];
   contextWindow?: number;
   inputTokens?: number;
+  sessions?: Partial<Record<CloudProvider, CloudSession>>;
 };
 export type CloudWorkspaceInput = { provider: CloudProvider; repositoryId?: string; repositoryIds?: string[] };
 export type CloudApi = {
@@ -63,6 +75,7 @@ export type CloudApi = {
   saveCloudSettings(input: CloudSettings): Promise<CloudSettings>;
   inspectCloudProvider(input: { provider: CloudProvider }): Promise<CloudConnection>;
   signInCloudProvider(input: { provider: CloudProvider }): Promise<{ message: string }>;
+  disconnectCloudProvider(input: { provider: CloudProvider }): Promise<CloudConnection>;
   cancelCloudSignIn(input: { provider: CloudProvider }): Promise<void>;
   installCloudProvider(input: { provider: CloudProvider }): Promise<CloudConnection>;
   getCloudWorkspace(input: CloudWorkspaceInput): Promise<CloudWorkspace>;
@@ -137,7 +150,7 @@ export function validateCloudSettings(value: CloudSettings): CloudSettings {
 }
 export function modelChoiceError(choice: CloudModelChoice, models: CloudModel[]): string | undefined {
   const model = models.find(item => item.id === choice.model);
-  if (!model) return `${choice.model} is not available from this runtime. Choose another model in Settings.`;
+  if (!model) return `${choice.model} is not available from this runtime. Choose another model in the composer or expert settings.`;
   if (model.unavailableReason) return model.unavailableReason;
   if (model.efforts.length && !model.efforts.includes(choice.effort)) return `${model.label} does not report support for ${cloudEffortLabels[choice.effort]} effort.`;
   return undefined;

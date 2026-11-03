@@ -154,4 +154,16 @@ Verification: `npm run test:all` passed, including 808 desktop tests, native/wor
 
 The same syntax palette now applies to fenced AI code blocks and review diffs in both Private and Cloud. A shared worker serializes requests, drops superseded queued work, coalesces identical requests, and retains a bounded cache. Streaming text appears immediately; completed syntax tokens are reused only on lines whose text still matches. Unknown languages remain plain text. Review tokenization keeps before/after excerpts and separate hunks independent, then combines syntax spans with the existing changed-word marks without altering source text or review line selection.
 
+### Live activity and context deletion
+
+Cloud and Private working blocks stay open during a run. Tool rows show commands and file actions directly; four or more consecutive actions share a compact disclosure, with current actions still visible live and detailed output available on demand. At completion, progress folds into a reopenable “Worked for…” block above the answer. Codex message phases, readable summaries, and command-output deltas are retained using the [app-server event contract](https://learn.chatgpt.com/docs/app-server). Claude text, available thinking text, and tool inputs stream as partial events arrive; tool-result text appears when the SDK supplies it. Completion is published before quota refresh, with a stable completion timestamp.
+
+Umbratic keeps Cloud history locally in `state/umbratic.sqlite`, in `settings` records named `cloud:workspace:<hash>`. Attachment copies and previews live in `cloud/images`. On macOS these are under `~/Library/Application Support/Umbratic/`. Cloud inference continues through the official provider runtimes, without sending these transcripts to Veil.
+
+Manual and inactivity resets delete the folder set’s shared and legacy provider-separated records and unused attachment copies before saving fresh context. References from other workspaces and attachments for the incoming turn are preserved. The reset forgets both native session IDs. It does not delete provider-managed session files or provider-side history; the confirmation dialog states that distinction. No existing user history is deleted by installing this build.
+
+Run approvals and speed now sit inside the composer. A compact footer aligns Settings, quota/context meters, and reset. The Settings panel groups connected accounts and explains the context reset behavior.
+
 Shared-syntax verification: the root suite passed with 815 desktop tests plus native/workspace checks and the production build. Added coverage checks language aliases, cancellation, coalescing, failure recovery, exact text preservation, HTML escaping, and before/after hunk mapping. Visual checks covered AI code and review diffs in both modes, light/dark contrast, preserved changed-word marks, and the simplified file header. An isolated Electron window confirmed response and review highlighting from production-built local assets with the app's normal CSP.
+
+Connected accounts can be disconnected from General settings. Disconnect uses the official runtime’s sign-out operation, clears Umbratic’s cached account usage and resume references for that provider, and keeps the saved conversation. The other provider stays connected.

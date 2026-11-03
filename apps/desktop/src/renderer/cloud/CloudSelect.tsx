@@ -1,5 +1,5 @@
 import React, { Children, isValidElement, useEffect, useId, useRef, useState } from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 
 type Option = { value: string; label: string; disabled?: boolean };
 function optionsFrom(children: React.ReactNode): Option[] {
@@ -13,9 +13,9 @@ function optionsFrom(children: React.ReactNode): Option[] {
 }
 
 /** App-styled listbox in the browser top layer, including inside a settings dialog. */
-export function CloudSelect({ label, value, children, className = "", disabled, icons, onValueChange }: {
+export function CloudSelect({ label, value, children, className = "", disabled, icons, iconOnly = false, onValueChange }: {
   label: string; value: string | number; children: React.ReactNode; className?: string; disabled?: boolean;
-  icons?: Record<string, React.ReactNode>; onValueChange(value: string): void;
+  icons?: Record<string, React.ReactNode>; iconOnly?: boolean; onValueChange(value: string): void;
 }) {
   const id = useId();
   const button = useRef<HTMLButtonElement>(null);
@@ -34,6 +34,7 @@ export function CloudSelect({ label, value, children, className = "", disabled, 
     const below = window.innerHeight - rect.bottom - 12;
     const above = rect.top - 12;
     const goesUp = below < Math.min(element.scrollHeight, 320) && above > below;
+    element.dataset.side = goesUp ? "top" : "bottom";
     element.style.maxHeight = `${Math.max(32, Math.min(320, (goesUp ? above : below) - 6))}px`;
     const bounds = element.getBoundingClientRect();
     element.style.left = `${Math.max(12, Math.min(rect.right - bounds.width, window.innerWidth - bounds.width - 12))}px`;
@@ -70,7 +71,7 @@ export function CloudSelect({ label, value, children, className = "", disabled, 
     return () => { window.removeEventListener("resize", close); window.removeEventListener("scroll", onScroll, true); };
   }, [open]);
   return <span className={`cloudSelect ${className}`}>
-    <button type="button" ref={button} role="combobox" aria-label={label} aria-expanded={open} aria-controls={id}
+    <button type="button" ref={button} role="combobox" aria-label={iconOnly ? `${label}: ${options[selected]?.label || value}` : label} title={options[selected]?.label} aria-expanded={open} aria-controls={id}
       aria-haspopup="listbox" aria-activedescendant={open && active >= 0 ? `${id}-${active}` : undefined}
       disabled={disabled} className="cloudSelectTrigger" popoverTarget={id}
       onClick={event => { event.preventDefault(); if (open) close(); else show(); }}
@@ -103,7 +104,7 @@ export function CloudSelect({ label, value, children, className = "", disabled, 
           }
         }
       }}>
-      {icons?.[String(value)]}<span className="cloudSelectText">{options[selected]?.label || value}</span><ChevronsUpDown size={12} aria-hidden="true"/>
+      {icons?.[String(value)]}{!iconOnly && <span className="cloudSelectText">{options[selected]?.label || value}</span>}<ChevronDown size={14} strokeWidth={1.8} aria-hidden="true"/>
     </button>
     <div id={id} ref={menu} popover="auto" className="cloudSelectMenu" role="listbox" aria-label={label}
       onToggle={event => { const isOpen = event.newState === "open"; setOpen(isOpen); if (isOpen) position(); }}

@@ -504,7 +504,7 @@ button.attachmentPreview:focus-visible {
   /* Attachments, editor, rail. The first track is empty and zero-height until
      something is picked, which is what lets the box grow upward rather than
      reserving room for chips that are usually not there. */
-  grid-template-rows: auto minmax(56px, auto) 36px;
+  grid-template-rows: auto minmax(56px, auto) auto;
   width: 100%;
   max-width: 100%;
   min-height: 92px;
@@ -554,16 +554,6 @@ button.attachmentPreview:focus-visible {
   overflow-wrap: anywhere;
   word-break: break-word;
   pointer-events: none;
-}
-
-/*
- * The live transcript, drawn in the highlight layer under the textarea. Muted
- * and italic so it reads as provisional — it is not in the prompt yet, and
- * only the final text ever is.
- */
-.promptDictationGhost {
-  color: var(--faint);
-  font-style: italic;
 }
 
 .promptMentionToken {
@@ -646,8 +636,7 @@ button.attachmentPreview:focus-visible {
  * rules the same controls use elsewhere, whatever order the sheets load in.
  */
 .promptActionRail .permissionControl .permissionTrigger,
-.promptActionRail .modelControl .modelTrigger,
-.promptActionRail .dictationControl {
+.promptActionRail .modelControl .modelTrigger {
   height: 26px;
   border: 0;
   border-radius: 7px;
@@ -708,65 +697,6 @@ button.attachmentPreview:focus-visible {
   background: var(--control-hover);
 }
 
-/* The microphone keeps its split-control seam, which is what says the chevron
-   belongs to the button beside it — but it loses the capsule that made the
-   pair a pill. */
-.promptActionRail .dictationControl .dictationButton {
-  width: 26px;
-  height: 26px;
-  border-radius: 7px 0 0 7px;
-}
-
-.promptActionRail .dictationControl .dictationDeviceTrigger {
-  height: 26px;
-  border-radius: 0 7px 7px 0;
-}
-
-.promptActionRail .dictationControl .dictationDeviceTrigger::before {
-  top: 8px;
-  bottom: 8px;
-}
-
-/* The same full tint as its neighbours: one hover weight for the whole row. */
-.promptActionRail .dictationControl .dictationButton:hover:not(:disabled),
-.promptActionRail .dictationControl .dictationDeviceTrigger:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--control-hover);
-}
-
-/*
- * Recording lights the whole control, and still pulses: a live microphone has
- * to be unmistakable. Without a border to colour, the fill and the ring carry
- * it.
- *
- * One fill, on the control. The halves must not tint themselves on top of it —
- * two translucent reds stacked on the left half and one on the right made the
- * capsule read as two mismatched blocks with a seam down the middle, which is
- * the opposite of what a split control should say about itself.
- */
-.promptActionRail .dictationControl.isRecording {
-  border-color: transparent;
-  background: color-mix(in srgb, var(--red) 15%, transparent);
-}
-
-.promptActionRail .dictationControl.isRecording .dictationButton,
-.promptActionRail .dictationControl.isRecording .dictationDeviceTrigger {
-  background: transparent;
-}
-
-/* Hover still answers the half that is under the pointer, a shade deeper than
-   the fill it sits on rather than a different colour on top of it. */
-.promptActionRail .dictationControl.isRecording .dictationButton:hover:not(:disabled),
-.promptActionRail .dictationControl.isRecording .dictationDeviceTrigger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--red) 14%, transparent);
-}
-
-/* The seam is a division inside one object, so it is drawn in the control's
-   own colour rather than the neutral hairline the idle state uses. */
-.promptActionRail .dictationControl.isRecording .dictationDeviceTrigger::before {
-  background: color-mix(in srgb, var(--red) 34%, transparent);
-}
-
 /*
  * Press feedback belongs on the press, not the release. Every control in the
  * strip acknowledges the pointer on the way down.
@@ -781,8 +711,7 @@ button.attachmentPreview:focus-visible {
    there, and only there. */
 @media (prefers-contrast: more) {
   .promptActionRail .permissionControl .permissionTrigger,
-  .promptActionRail .modelControl .modelTrigger,
-  .promptActionRail .dictationControl {
+  .promptActionRail .modelControl .modelTrigger {
     border: 1px solid var(--line-strong);
     color: var(--text);
   }

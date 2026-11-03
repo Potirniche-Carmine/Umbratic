@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CloudApi, CloudConnection, CloudProvider } from "../../shared/cloud";
 
+export type CloudConnectionController = ReturnType<typeof useCloudConnection>;
+
 export function useCloudConnection(api: CloudApi, provider: CloudProvider, executable: string) {
   const scope = `${provider}\0${executable}`;
   const [result, setResult] = useState<{ scope: string; connection: CloudConnection } | null>(null);
   const connection = result?.scope === scope ? result.connection : null;
   const [checking, setChecking] = useState(false);
-  const [working, setWorking] = useState<"" | "install" | "connect">("");
+  const [working, setWorking] = useState<"" | "install" | "connect" | "disconnect">("");
+  const disconnecting = useRef(false);
   const [message, setMessage] = useState("");
   const generation = useRef(0);
   const inspection = useRef(0);
@@ -31,11 +34,12 @@ export function useCloudConnection(api: CloudApi, provider: CloudProvider, execu
     }
   }, [api, provider, scope]);
   const refresh = useCallback(async () => {
+    if (disconnecting.current) return;
     setChecking(true);
     try { await inspect(generation.current); } catch { /* The connection carries the error. */ }
   }, [inspect]);
   useEffect(() => {
-    generation.current++; authentication.current = 0;
+    generation.current++; authentication.current = 0; disconnecting.current = false;
     setResult(null); setMessage(""); setWorking("");
     void refresh();
     const onFocus = () => { if (authentication.current) void refresh(); };
@@ -54,6 +58,7 @@ export function useCloudConnection(api: CloudApi, provider: CloudProvider, execu
     catch (error) { if (current === generation.current) setMessage(error instanceof Error ? error.message : String(error)); }
   }
   async function connect() {
+    if (disconnecting.current) return;
     const current = generation.current; const id = ++attempt.current;
     authentication.current = Date.now() + 5 * 60_000;
     setWorking("connect"); setMessage("");
@@ -79,6 +84,7 @@ export function useCloudConnection(api: CloudApi, provider: CloudProvider, execu
     }
   }
   async function install() {
+    if (disconnecting.current) return;
     const current = generation.current;
     setWorking("install"); setMessage("");
     try {
@@ -86,5 +92,17 @@ export function useCloudConnection(api: CloudApi, provider: CloudProvider, execu
       if (current === generation.current) { setResult({ scope, connection: result }); setWorking(""); }
     } catch (error) { if (current === generation.current) { setWorking(""); setMessage(error instanceof Error ? error.message : String(error)); } }
   }
-  return { connection, checking: checking || !connection, working, message, refresh, connect, install, cancel };
+  async function disconnect() {
+    if (disconnecting.current) return;
+    disconnecting.current = true;
+    const current = generation.current; const id = ++attempt.current;
+    inspection.current++; authentication.current = 0; clearTimeout(timer.current);
+    setChecking(false); setWorking("disconnect"); setMessage("");
+    try {
+      const result = await api.disconnectCloudProvider({ provider });
+      if (current === generation.current && id === attempt.current) setResult({ scope, connection: result });
+    } catch (error) { if (current === generation.current && id === attempt.current) setMessage(error instanceof Error ? error.message : String(error)); }
+    finally { if (current === generation.current && id === attempt.current) { disconnecting.current = false; setWorking(""); } }
+  }
+  return { connection, checking: checking || !connection, working, message, refresh, connect, install, cancel, disconnect };
 }

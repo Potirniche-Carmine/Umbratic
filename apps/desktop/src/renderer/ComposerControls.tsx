@@ -170,9 +170,7 @@ export function DictationControl({
             onClick={toggleDeviceMenu}
             onKeyDown={(event) => { if (event.key === "Escape") setMenuAt(null); }}
           >
-            <svg width="8" height="5" viewBox="0 0 8 5" aria-hidden="true">
-              <path fill="currentColor" d="M0.8 0.6h6.4L4 4.4z" />
-            </svg>
+            <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true"/>
           </button>
         </Tooltip>
         {menuAt ? createPortal(

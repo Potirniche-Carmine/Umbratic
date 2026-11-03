@@ -1,3 +1,4 @@
+import { codexStreamConsumer } from "./cloudCodexStream";
 import { codexUsage, optionalRuntimeRead, planLabel } from "./cloudUsage";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -65,6 +66,11 @@ async function inspect(rpc: CloudRpc): Promise<CloudConnection> {
 let login: CloudRpc | undefined;
 let loginGeneration = 0;
 export const codexCloudRuntime: CloudRuntime = {
+  async signOut(settings, cwd) {
+    stopCodexLogin();
+    const rpc = await connect(settings, cwd);
+    try { await rpc.request("account/logout", {}); } finally { rpc.close(); }
+  },
   async inspect(settings, cwd) {
     const rpc = await connect(settings, cwd);
     try { return await inspect(rpc); } finally { rpc.close(); }
@@ -112,6 +118,7 @@ export const codexCloudRuntime: CloudRuntime = {
         threadId = result.thread.id;
         sink.session(threadId, connection.account || "ChatGPT");
         if (stopped) return;
+        const consumeStream = codexStreamConsumer(sink);
         const completion = new Promise<void>((resolve, reject) => {
           finish = resolve;
           rpc!.onClose = reject;
@@ -122,20 +129,12 @@ export const codexCloudRuntime: CloudRuntime = {
             const params = message.params || {};
             if (params.threadId && params.threadId !== threadId) return;
             if (message.method === "turn/started") turnId = params.turn?.id || turnId;
-            if (message.method === "item/agentMessage/delta") sink.text(params.itemId, params.delta, true);
-            if (message.method === "item/started" && params.item?.type !== "agentMessage" && params.item?.type !== "userMessage") {
-              if (params.item?.type !== "reasoning") sink.activity(itemLabel(params.item), toolItem(params.item, "running"));
-            }
-            if (message.method === "item/completed") {
-              if (params.item?.type === "agentMessage") sink.text(params.item.id, params.item.text || "", false);
-              if (params.item?.type === "contextCompaction") sink.compact();
-              else if (params.item && !["agentMessage", "userMessage", "reasoning"].includes(params.item.type)) sink.activity(itemLabel(params.item), toolItem(params.item, params.item.status === "failed" || (typeof params.item.exitCode === "number" && params.item.exitCode !== 0) ? "failed" : "completed"));
-            }
+            consumeStream(message);
             if (message.method === "account/rateLimits/updated") sink.limits?.(codexUsage(params));
             if (message.method === "thread/tokenUsage/updated") sink.usage(params.tokenUsage?.modelContextWindow, params.tokenUsage?.last?.inputTokens);
             if (message.method === "turn/completed") {
               if (params.turn?.status === "failed") reject(new Error(params.turn.error?.message || "Codex could not complete this turn."));
-              else resolve();
+              else { sink.complete?.(); resolve(); }
             }
           };
         });
@@ -165,21 +164,6 @@ export function codexAccess(mode: string, roots: string[]) {
   return { sandbox: mode === "full-access" ? "danger-full-access" : mode === "read-only" ? "read-only" : "workspace-write",
     approvalPolicy: mode === "full-access" ? "never" : "on-request", approvalsReviewer: mode === "auto" ? "auto_review" : "user",
     sandboxPolicy: mode === "full-access" ? { type: "dangerFullAccess" } : mode === "read-only" ? { type: "readOnly" } : { type: "workspaceWrite", writableRoots: roots, networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false } };
-}
-
-function itemLabel(item: Record<string, any>): string {
-  if (item.type === "commandExecution") return "Run command";
-  if (item.type === "fileChange") return "Edit files";
-  if (item.type === "contextCompaction") return "Compact context";
-  if (item.type === "webSearch") return "Search the web";
-  if (item.type === "collabAgentToolCall") return "Delegate task";
-  if (item.type === "mcpToolCall" || item.type === "dynamicToolCall") return item.tool || "Use tool";
-  return "Work";
-}
-function toolItem(item: Record<string, any>, status: "running" | "completed" | "failed") {
-  const detail = item.command || item.query || (item.changes || []).map((change: { path: string }) => change.path).join("\n") || item.tool || "";
-  const output = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput.slice(-12000) : "";
-  return { id: String(item.id), label: itemLabel(item), detail: [detail, output].filter(Boolean).join("\n\n"), status };
 }
 
 async function answerRequest(rpc: CloudRpc, message: RpcMessage, sink: Parameters<CloudRuntime["run"]>[3]): Promise<void> {

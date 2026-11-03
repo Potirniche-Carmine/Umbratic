@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import type { CloudEntry, CloudImage, CloudWorkspace } from "../../shared/cloud";
+import type { CloudImage, CloudWorkspace } from "../../shared/cloud";
 import type { ChatAttachment } from "../../shared/desktopApi";
-import type { ComposerTimelineItem, ComposerActivitySegment } from "../rendererTypes";
+import { cloudTurns } from "./cloudTurns";
+export { cloudTurns } from "./cloudTurns";
 import { WorkingBlock } from "../workingBlock";
 import { MarkdownContent } from "../markdownContent";
 import { AttachmentPreviewList } from "../attachmentPreview";
@@ -9,30 +10,6 @@ import { ReviewFeedbackChip, ReviewFeedbackDialog } from "../review/ReviewFeedba
 import { visibleReviewPrompt, type ReviewFeedbackReference } from "../review/reviewComments";
 
 export const cloudImageAttachment = (image: CloudImage): ChatAttachment => ({ path: `${image.id}${image.extension || ".png"}`, name: image.name, kind: "file", previewDataUrl: image.previewDataUrl });
-type Activity = Extract<ComposerTimelineItem, { type: "activity" }>;
-export function cloudTurns(entries: CloudEntry[], running: boolean): { instruction?: CloudEntry; activity: Activity; answer?: CloudEntry; notes: CloudEntry[] }[] {
-  const groups: CloudEntry[][] = [];
-  for (const entry of entries) {
-    if (entry.kind === "instruction" || !groups.length) groups.push([]);
-    groups.at(-1)!.push(entry);
-  }
-  return groups.map((group, index) => {
-    const last = [...group].reverse().find(entry => entry.kind === "answer");
-    const afterLast = last ? group.slice(group.indexOf(last) + 1).some(entry => entry.kind === "activity" && entry.tool?.status === "running") : false;
-    const answer = afterLast ? undefined : last;
-    const finished = !running || index !== groups.length - 1;
-    const segments: ComposerActivitySegment[] = group.flatMap(entry => {
-      if (entry.kind === "answer" && entry !== answer) return [{ type: "reasoning", id: entry.id, text: entry.text, durationMs: null, finished: true } as ComposerActivitySegment];
-      if (entry.kind !== "activity") return [];
-      const tool = entry.tool;
-      return [{ type: "command", id: entry.id, run: { id: entry.id, command: tool?.detail?.split("\n")[0] || entry.text, nativeDisplay: { label: (tool?.label || entry.text) + (tool?.status === "stopped" ? " · stopped" : ""), detail: tool?.detail || entry.text }, cwd: "", stdout: "", stderr: "", exitCode: null,
-        status: tool?.status === "running" ? "running" : tool?.status === "failed" ? "failed" : "passed", resultStatus: tool?.status, startedAt: entry.at } } as ComposerActivitySegment];
-    });
-    return { instruction: group.find(entry => entry.kind === "instruction"), answer,
-      activity: { type: "activity", id: `work-${group[0].id}`, segments, startedAt: group[0].at, endedAt: finished ? group.at(-1)!.at : undefined, finished },
-      notes: group.filter(entry => entry.kind === "context") };
-  });
-}
 export function CloudTimeline({ workspace, onLocalFile, onReviewFile }: { workspace: CloudWorkspace; onLocalFile(path: string, line?: number): void; onReviewFile(path: string): void }) {
   const [preview, setPreview] = useState<ReviewFeedbackReference[] | null>(null);
   const [expanded, setExpanded] = useState(new Set<string>());
@@ -42,7 +19,7 @@ export function CloudTimeline({ workspace, onLocalFile, onReviewFile }: { worksp
   useEffect(() => { if (workspace.state === "idle") return; const timer = setInterval(() => setClock(Date.now()), 1000); return () => clearInterval(timer); }, [workspace.state]);
   return <><div className="cloudWorkStream">{cloudTurns(workspace.entries, workspace.state !== "idle").map(turn => <React.Fragment key={turn.activity.id}>
     {turn.instruction && <article className="cloudEntry cloudEntry-instruction"><p>{visibleReviewPrompt(turn.instruction.text).text}</p>{visibleReviewPrompt(turn.instruction.text).feedback.length > 0 && <ReviewFeedbackChip count={visibleReviewPrompt(turn.instruction.text).feedback.length} onClick={() => setPreview(visibleReviewPrompt(turn.instruction!.text).feedback)}/>}<AttachmentPreviewList mode="message" files={(turn.instruction.images || []).map(cloudImageAttachment)}/></article>}
-    {(turn.activity.segments.length > 0 || !turn.activity.finished) && <WorkingBlock item={turn.activity} clock={clock} expanded={expanded.has(turn.activity.id)} expandedToolIds={tools} skills={[]} followScrollRef={follow} setExpanded={setExpanded} setExpandedTools={setTools} setBodyRef={() => undefined} onPointerDown={() => undefined} onScroll={() => undefined} onTouchMove={() => undefined} onWheel={() => undefined}/>}
+    {(turn.activity.segments.length > 0 || !turn.activity.finished) && <WorkingBlock expandWhileRunning item={turn.activity} clock={clock} expanded={expanded.has(turn.activity.id)} expandedToolIds={tools} skills={[]} followScrollRef={follow} setExpanded={setExpanded} setExpandedTools={setTools} setBodyRef={() => undefined} onPointerDown={() => undefined} onScroll={() => undefined} onTouchMove={() => undefined} onWheel={() => undefined}/>}
     {turn.answer && <article className="cloudEntry cloudEntry-answer"><MarkdownContent onLocalFileClick={onLocalFile} content={turn.answer.text} streaming={!turn.activity.finished}/></article>}
     {turn.notes.map(entry => <p key={entry.id} className={`cloudEntry cloudEntry-${entry.kind}`}>{entry.text}</p>)}
   </React.Fragment>)}</div>{preview && <ReviewFeedbackDialog comments={preview.map((comment, index) => ({ ...comment, id: String(index) }))} onClose={() => setPreview(null)} onOpenFile={onReviewFile}/>}</>;

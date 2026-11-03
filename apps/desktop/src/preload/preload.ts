@@ -58,6 +58,7 @@ const umbraticApi = {
   inspectCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:inspect-cloud-provider", input),
   cancelCloudSignIn: (input: { provider: CloudProvider }) => invoke("umbratic:cancel-cloud-sign-in", input),
   signInCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:sign-in-cloud-provider", input),
+  disconnectCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:disconnect-cloud-provider", input),
   installCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:install-cloud-provider", input),
   pickCloudFolders: () => invoke("umbratic:pick-cloud-folders"),
   readCloudFile: (input: { key: string; path: string }) => invoke("umbratic:read-cloud-file", input),

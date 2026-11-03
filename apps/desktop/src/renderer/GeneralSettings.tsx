@@ -2,7 +2,6 @@ import { Columns2, Rows3 } from "lucide-react";
 import { CloudSelect } from "./cloud/CloudSelect";
 
 import { setReviewLayout, setReviewWrap, useReviewLayout, useReviewWrap } from "./review/reviewPreferences";
-import { setAutoExpandWorkingBlocks, useAutoExpandWorkingBlocks } from "./workingBlockPreferences";
 
 function ToggleRow({
   title,
@@ -67,7 +66,6 @@ export function GeneralSettingsPanel({
   // diff behind the dialog before it is closed.
   const reviewLayout = useReviewLayout();
   const reviewWrap = useReviewWrap();
-  const autoExpandWorkingBlocks = useAutoExpandWorkingBlocks();
 
   return (
     <div className="settingsPanel">
@@ -77,12 +75,6 @@ export function GeneralSettingsPanel({
 
       {onCloud && <div className="settingsGroup"><div className="generalSettingRow"><strong>Mode</strong><CloudSelect label="Mode" value="private" disabled={modeDisabled} onValueChange={selectedValue => { if (selectedValue === "cloud") onCloud(); }}><option value="private">Private</option><option value="cloud">Cloud</option></CloudSelect></div></div>}
       <div className="settingsGroup">
-        <ToggleRow
-          title="Auto-expand working blocks"
-          description="Open working blocks as they stream in"
-          on={autoExpandWorkingBlocks}
-          onToggle={setAutoExpandWorkingBlocks}
-        />
         <ToggleRow
           title="Show model thinking"
           description="Stream the model's reasoning inside the working block as it happens"

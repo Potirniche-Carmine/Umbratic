@@ -1,8 +1,10 @@
-import type { CloudApproval, CloudConnection, CloudSettings, CloudWorkspace, CloudTool, CloudUsage } from "../shared/cloud";
+import type { CloudApproval, CloudConnection, CloudSettings, CloudWorkspace, CloudTool, CloudUsage, CloudMessagePhase } from "../shared/cloud";
 export type ApprovalAnswer = { allow: boolean; answers?: Record<string, string> };
 export type CloudRuntimeSink = {
   session(id: string, account: string): void;
-  text(id: string, text: string, append: boolean): void;
+  text(id: string, text: string, append: boolean, phase?: CloudMessagePhase): void;
+  thinking?(id: string, text: string, append: boolean): void;
+  complete?(): void;
   activity(text: string, tool?: CloudTool): void;
   limits?(usage: CloudUsage): void;
   compact(): void;
@@ -13,5 +15,6 @@ export type CloudRun = { done: Promise<void>; stop(): Promise<void> };
 export type CloudRuntime = {
   inspect(settings: CloudSettings, cwd: string): Promise<CloudConnection>;
   signIn(settings: CloudSettings, cwd: string): Promise<{ message: string }>;
+  signOut(settings: CloudSettings, cwd: string): Promise<void>;
   run(settings: CloudSettings, workspace: CloudWorkspace, prompt: string, sink: CloudRuntimeSink, images?: { path: string; mimeType: string }[]): CloudRun;
 };

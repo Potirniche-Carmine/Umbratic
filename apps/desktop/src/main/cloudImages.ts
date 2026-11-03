@@ -63,3 +63,14 @@ export function resolveCloudImages(ids: string[]): { path: string; mimeType: str
     return { path: filename, mimeType: image.mimeType, image };
   });
 }
+
+export function deleteCloudImages(ids: string[]): void {
+  const selected = new Set(ids.filter(id => /^[a-f0-9-]{36}$/.test(id)));
+  if (!selected.size) return;
+  const root = directory();
+  // Match only opaque IDs and simple extensions; never follow metadata paths.
+  for (const file of fs.readdirSync(root)) {
+    const match = /^([a-f0-9-]{36})\.[a-z0-9]{1,8}$/.exec(file);
+    if (match && selected.has(match[1])) fs.rmSync(path.join(root, file), { force: true });
+  }
+}

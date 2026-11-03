@@ -78,3 +78,31 @@ test("a cancelled sign-in can be retried without reviving the previous poll", as
   await f.render().connect(); await tick(); assert.equal(f.timers.size, 1);
   assert.equal(f.render().working, "connect");
 });
+
+test("disconnect ignores an older refresh and prevents another inspection until logout settles", async t => {
+  const refresh = deferred(); const logout = deferred(); let reads = 0;
+  const f = harness({
+    inspectCloudProvider: async () => ++reads === 1 ? { provider: "claude", state: "ready", models: [] } : refresh.promise,
+    disconnectCloudProvider: () => logout.promise,
+  }); t.after(f.cleanup);
+  f.render(); await tick();
+  const pendingRefresh = f.render().refresh();
+  const pendingLogout = f.render().disconnect();
+  await f.render().refresh(); assert.equal(reads, 2);
+  refresh.resolve({ provider: "claude", state: "ready", models: [{ id: "stale" }] }); await pendingRefresh;
+  assert.equal(f.render().working, "disconnect");
+  logout.resolve({ provider: "claude", state: "sign_in", models: [] }); await pendingLogout;
+  assert.equal(f.render().connection.state, "sign_in"); assert.equal(f.render().working, "");
+});
+
+test("failed logout retains the account and can be retried", async t => {
+  let fail = true;
+  const f = harness({
+    inspectCloudProvider: async () => ({ provider: "claude", state: "ready", models: [] }),
+    disconnectCloudProvider: async () => { if (fail) throw new Error("Try again"); return { provider: "claude", state: "sign_in", models: [] }; },
+  }); t.after(f.cleanup);
+  f.render(); await tick(); await f.render().disconnect();
+  assert.equal(f.render().connection.state, "ready"); assert.equal(f.render().message, "Try again");
+  fail = false; await f.render().disconnect();
+  assert.equal(f.render().connection.state, "sign_in"); assert.equal(f.render().message, "");
+});

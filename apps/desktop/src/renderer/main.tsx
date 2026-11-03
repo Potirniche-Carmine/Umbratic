@@ -428,7 +428,11 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
       promptCaretRef.current = next.caret;
       return next.prompt;
     });
-    textareaRef.current?.focus();
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      const caret = promptCaretRef.current;
+      if (caret !== null) textareaRef.current?.setSelectionRange(caret, caret);
+    });
   });
   // What the server advertises, or — locally — a downloaded dictation model. Not whether one is loaded: the mic press loads it.
   const dictationAvailable = backend?.veilFeatures.includes("speech.transcribe") === true || backend?.localDictationReady === true;
@@ -3880,20 +3884,10 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
                 <div className="promptHighlight" aria-hidden="true">
                   <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
                     {renderPromptHighlights(prompt, attachedFiles, skills)}
-                    {/* The words being spoken, muted, in the box they are going
-                        into. They are drawn behind the textarea rather than
-                        written into it: a partial is replaced whole on every
-                        update, and rewriting the value would move a caret the
-                        user may have placed. Only the final text is inserted. */}
-                    {dictation.status.preview ? (
-                      <span className="promptDictationGhost">
-                        {prompt && !prompt.endsWith(" ") ? " " : ""}
-                        {dictation.status.preview}
-                      </span>
-                    ) : null}
+
                   </div>
                 </div>
-                <PromptTextarea
+                <PromptTextarea dictation={dictation.status} previewCaret={promptCaretRef.current}
                   ref={textareaRef}
                   value={prompt}
                   onChange={handlePromptChange}
@@ -3905,11 +3899,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
                   onScroll={(event) => setPromptScrollTop(event.currentTarget.scrollTop)}
                   disabled={busy || !!closedChatNotice}
                   placeholder={
-                    // The ghost transcript occupies the same line, so the
-                    // placeholder stands down rather than printing under it.
-                    dictation.status.preview
-                      ? ""
-                      : closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
+                    closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
                   }
                 />
               </div>

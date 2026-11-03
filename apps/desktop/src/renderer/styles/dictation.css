@@ -1,8 +1,7 @@
 
 /*
- * Dictation sits in the action rail beside send, and reads as secondary to it:
- * send is a filled circle because it commits the prompt, so the microphone is
- * an outline that does not compete with it.
+ * Dictation uses one glass capsule in both composers. The surface and recording
+ * tint belong to the parent, so both halves meet at a straight seam.
  *
  * The microphone and its device chevron are one object, not two. They are a
  * split control — press the left to speak, the right to choose what it listens
@@ -15,10 +14,16 @@
   position: relative;
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  border: 1px solid var(--line);
+  align-items: stretch;
+  height: 34px;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid var(--menu-edge);
   border-radius: 999px;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
+  background: linear-gradient(160deg, var(--glass-highlight), transparent 65%), var(--button-glass);
+  backdrop-filter: blur(18px) saturate(160%);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), 0 2px 5px color-mix(in srgb, var(--shadow-color) 30%, transparent);
+  transition: border-color 160ms ease, background-color 160ms ease;
 }
 
 .dictationControl:hover {
@@ -30,8 +35,9 @@
 .dictationButton {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 100%;
+  padding: 0;
   border: 0;
   border-radius: 999px 0 0 999px;
   background: transparent;
@@ -61,16 +67,16 @@
 /*
  * Recording is the one state that has to be unmistakable from across a desk:
  * a live microphone the user has forgotten about is a privacy problem, not a
- * cosmetic one. Colour alone would not carry that, so the ring pulses too — and
- * it is the whole capsule that lights, because the whole capsule is the control.
+ * cosmetic one. The recording tint lights the whole capsule; the live level
+ * bars and stop affordance provide feedback in addition to color.
  */
 .dictationControl.isRecording {
-  border-color: var(--red);
-  animation: dictationPulse 1.6s ease-in-out infinite;
+  border-color: color-mix(in srgb, var(--red) 65%, var(--menu-edge));
+  background: linear-gradient(160deg, var(--glass-highlight), transparent 65%), color-mix(in srgb, var(--red) 12%, var(--button-glass));
 }
 
 .dictationControl.isRecording .dictationButton {
-  background: color-mix(in srgb, var(--red) 14%, transparent);
+  background: transparent;
   color: var(--red);
 }
 
@@ -80,16 +86,6 @@
 
 .dictationControl.isRecording .dictationDeviceTrigger::before {
   background: color-mix(in srgb, var(--red) 38%, transparent);
-}
-
-@keyframes dictationPulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--red) 42%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 5px color-mix(in srgb, var(--red) 0%, transparent);
-  }
 }
 
 /* Not set up yet: present, pressable, and visibly quieter than a live control. */
@@ -111,15 +107,15 @@
   position: relative;
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
+  align-items: stretch;
 }
 
 .dictationDeviceTrigger {
   position: relative;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 30px;
+  width: 22px;
+  height: 100%;
   padding: 0 2px 0 0;
   border: 0;
   border-radius: 0 999px 999px 0;
@@ -436,3 +432,21 @@
     backdrop-filter: none;
   }
 }
+
+.dictationControl:focus-within { border-color: var(--blue); }
+.dictationControl .dictationButton:active,
+.dictationControl .dictationDeviceTrigger:active,
+.promptActionRail .dictationControl button:active:not(:disabled) { transform: none; }
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .dictationControl { backdrop-filter: none; background: var(--surface-2); border-color: var(--line-strong); }
+  .dictationControl.isRecording { background: color-mix(in srgb, var(--red) 12%, var(--surface-2)); border-color: var(--red); }
+}
+
+.promptSpeechSurface { position: relative; min-width: 0; font: inherit; }
+.promptSpeechSurface .isSpeechPreview { color: transparent !important; -webkit-text-fill-color: transparent; caret-color: transparent; }
+.promptSpeechPreview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; color: var(--text); }
+.promptSpeechInterim { color: color-mix(in srgb, var(--muted) 80%, var(--bg)); }
+.promptEditor:has(.promptSpeechSurface) > .promptHighlight { visibility: hidden; }
+.cloudDock .promptSpeechPreview { padding: 0 3px 12px; font-size: 15px; line-height: 1.6; }
+
+.composer .promptSpeechPreview { padding: 9px 14px 11px; scrollbar-gutter: stable; word-break: break-word; }

@@ -55,3 +55,16 @@ test("an empty per-model map does not hide the primary account windows", () => {
   const result = usage.codexUsage({ rateLimitsByLimitId: {}, rateLimits: { primary: { usedPercent: 22, windowDurationMins: 300 }, secondary: { usedPercent: 45, windowDurationMins: 10080 } } });
   assert.deepEqual(result.limits.map(limit => limit.label), ["5 hours", "Weekly"]);
 });
+
+test("quota labels and accessible meters use the provider's used percentage", async () => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { loadRendererFile } = await import("./helpers/load-renderer.ts");
+  const { CloudUsageDetails, CloudUsageIndicator } = loadRendererFile("cloud/CloudUsage.tsx");
+  const reading = { fetchedAt: new Date().toISOString(), limits: [{ id: "weekly", label: "Weekly", usedPercent: 54 }] };
+  const detail = renderToStaticMarkup(React.createElement(CloudUsageDetails, { usage: reading }));
+  assert.match(detail, /54% used/); assert.match(detail, /aria-valuenow="54"/); assert.doesNotMatch(detail, /46%/);
+  const compact = renderToStaticMarkup(React.createElement(CloudUsageIndicator, { usage: reading, workspace: { contextWindow: 100_000, inputTokens: 3_000 } }));
+  assert.match(compact, /54%<small>Weekly/); assert.match(compact, /3%<small>Context/); assert.doesNotMatch(compact, /Usage left/);
+  assert.match(compact, /54% of the usage limit used, 3% context used/);
+});

@@ -12,8 +12,8 @@ test("workspace file links render their labels while unsafe URL schemes remain i
     content: "Read [greeting.ts](/private/tmp/App/greeting.ts:12) and [notes](</private/tmp/My Notes/brief.txt>). [unsafe](javascript:alert(1))",
     onLocalFileClick: () => undefined,
   }));
-  assert.match(html, /class="inlineFileLink"[^>]*>greeting.ts<span class="inlineFileLine">:12<\/span><\/button>/);
-  assert.match(html, /title="\/private\/tmp\/My Notes\/brief.txt"[^>]*>notes<\/button>/);
+  assert.match(html, /class="inlineFileLink"[^>]*><span class="inlineFileName">greeting.ts<\/span><span class="inlineFileLine">\(12\)<\/span><\/button>/);
+  assert.match(html, /title="\/private\/tmp\/My Notes\/brief.txt"[^>]*><span class="inlineFileName">notes<\/span><\/button>/);
   assert.doesNotMatch(html, /href="javascript:/);
   assert.match(html, /\[unsafe\]\(javascript:alert\(1\)\)/);
 });
@@ -147,10 +147,9 @@ test("feedback dialog and prompt controls do not allow horizontal growth", () =>
   assert.match(actionRailRule, /background:\s*transparent/);
   assert.doesNotMatch(actionRailRule, /backdrop-filter/);
   assert.doesNotMatch(actionRailRule, /linear-gradient/);
-  // And the controls in it are borderless, so nothing inside the box outlines
-  // itself against the box's own outline.
+  // Model and permission controls retain their compact borderless layout.
   const railControlsRule = composerCss.match(
-    /\.promptActionRail \.permissionControl \.permissionTrigger,\r?\n\.promptActionRail \.modelControl \.modelTrigger,\r?\n\.promptActionRail \.dictationControl \{[^}]+\}/s,
+    /\.promptActionRail \.permissionControl \.permissionTrigger,\r?\n\.promptActionRail \.modelControl \.modelTrigger \{[^}]+\}/s,
   )?.[0] ?? "";
   assert.match(railControlsRule, /border:\s*0/);
   assert.match(railControlsRule, /background:\s*transparent/);
