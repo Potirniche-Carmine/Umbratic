@@ -16,10 +16,18 @@ export function codexUsage(input: any): CloudUsage {
   return { limits, fetchedAt: new Date().toISOString() };
 }
 export function claudeUsage(input: any): CloudUsage {
-  const value = input?.rate_limits_available ? input.rate_limits : undefined;
+  const value = input?.rate_limits_available === false ? undefined : input?.rate_limits;
+  // /usage carries the server's ordered rows, including model and surface
+  // scopes. Prefer these over the older control-response window names.
+  if (Array.isArray(value?.limits)) return { fetchedAt: new Date().toISOString(), limits: value.limits.flatMap((row: any, index: number) => {
+    const scope = row.scope?.model?.display_name || row.scope?.surface?.display_name;
+    const label = row.kind === "session" ? "5 hours" : row.group === "weekly" ? "Weekly" : String(row.group || row.kind || "Usage").replace(/_/g, " ");
+    return limit(`${row.kind}:${scope || index}`, scope ? `${scope} · ${label.toLowerCase()}` : label, row.percent, row.resets_at)
+      .map(item => ({ ...item, severity: typeof row.severity === "string" ? row.severity : undefined, active: row.is_active === true }));
+  }) };
   const windows: [string, string][] = [["five_hour", "5 hours"], ["seven_day", "Weekly"], ["seven_day_opus", "Opus · weekly"], ["seven_day_sonnet", "Sonnet · weekly"], ["seven_day_oauth_apps", "Connected apps · weekly"]];
   const limits = windows.flatMap(([key, label]) => limit(key, label, value?.[key]?.utilization, value?.[key]?.resets_at));
-  for (const [index, model] of (value?.seven_day_model_scoped || []).entries()) limits.push(...limit(`model-${index}`, `${model.display_name} · weekly`, model.utilization, model.resets_at));
+  for (const [index, model] of (value?.model_scoped || value?.seven_day_model_scoped || []).entries()) limits.push(...limit(`model-${index}`, `${model.display_name} · weekly`, model.utilization, model.resets_at));
   return { limits, fetchedAt: new Date().toISOString() };
 }
 export function planLabel(value?: string): string | undefined {

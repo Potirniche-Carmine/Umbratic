@@ -20,6 +20,29 @@ test("old compaction-count resets are discarded while inactivity remains configu
   assert.equal(cloud.contextResetReason({ sessionId: "native", state: "idle", compactions: 99, entries: [], lastActiveAt: new Date().toISOString() }, settings), undefined);
 });
 
+test("Claude usage reports keep server model scopes, active meter and severity", () => {
+  const value = usage.claudeUsage({ rate_limits: { limits: [
+    { kind: "session", group: "session", percent: 28, resets_at: null, severity: "normal", is_active: false },
+    { kind: "weekly_scoped", group: "weekly", percent: 92, resets_at: null, scope: { model: { display_name: "Fable" } }, severity: "critical", is_active: true },
+  ] } });
+  assert.equal(value.limits[0].usedPercent, 28);
+  assert.equal(value.limits[1].label, "Fable · weekly");
+  assert.equal(value.limits[1].severity, "critical");
+  assert.equal(value.limits[1].active, true);
+  const control = usage.claudeUsage({ rate_limits_available: true, rate_limits: { model_scoped: [{ display_name: "Fable", utilization: 31, resets_at: null }] } });
+  assert.equal(control.limits[0].usedPercent, 31);
+});
+
+test("temporary empty usage retains a recent reading but never an expired quota", () => {
+  const { latestCloudUsage } = loadTypeScriptModule(new URL("../src/shared/cloudUsage.ts", import.meta.url), { realm: "host" });
+  const now = Date.now();
+  const good = { fetchedAt: new Date(now - 1000).toISOString(), limits: [{ id: "weekly", label: "Weekly", usedPercent: 38, resetsAt: new Date(now + 60_000).toISOString() }] };
+  const empty = { fetchedAt: new Date(now).toISOString(), limits: [] };
+  assert.deepEqual(latestCloudUsage([empty, good], now), good);
+  assert.equal(latestCloudUsage([good], now + 60_001), undefined);
+  assert.equal(latestCloudUsage([{ ...good, fetchedAt: new Date(now - 16 * 60_000).toISOString() }], now), undefined);
+});
+
 test("native activity labels do not masquerade as executed shell commands", () => {
   const display = loadTypeScriptModule(new URL("../src/renderer/commandDisplay.ts", import.meta.url), { realm: "host" });
   const run = { id: "tool", command: "cat brief.txt", nativeDisplay: { label: "Read project notes", detail: "cat brief.txt\n\nProject notes" }, cwd: "/workspace", stdout: "", stderr: "", exitCode: null, status: "passed" };

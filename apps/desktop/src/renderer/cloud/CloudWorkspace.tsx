@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, ImagePlus, PanelRight, RotateCcw, Settings2, Square } from "lucide-react";
+import { ArrowUp, ImagePlus, PanelRight, RotateCcw, Square } from "lucide-react";
 import type { DesktopApi, RepositoryInfo } from "../../shared/desktopApi";
 import { modelChoiceError, type CloudImage, type CloudSettings, type CloudWorkspace as Workspace } from "../../shared/cloud";
 import type { ReviewFile } from "../../shared/reviewDiff";
@@ -11,6 +11,8 @@ import { promptEnterAction } from "../promptKeyboard";
 import { composerPromptForSend, insertPastedComposerText } from "../composerText";
 import { fileToPastedAttachment } from "../pastedAttachments";
 import { AttachmentPreviewList } from "../attachmentPreview";
+import { CloudFilePreview } from "./CloudFilePreview";
+import { latestCloudUsage } from "../../shared/cloudUsage";
 import { CloudModelPicker } from "./CloudModelPicker";
 import { CloudSettingsPanel } from "./CloudSettingsPanel";
 import { CloudApprovalCard } from "./CloudApprovalCard";
@@ -26,6 +28,7 @@ export function CloudWorkspace({ api, settings, onSettings }: {
 }) {
   const [projects, setProjects] = useState<RepositoryInfo[]>([]);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [filePreview, setFilePreview] = useState<{ path: string; line?: number }>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [prompt, setPrompt] = useState(""); const [error, setError] = useState("");
   const [images, setImages] = useState<CloudImage[]>([]);
@@ -130,7 +133,7 @@ export function CloudWorkspace({ api, settings, onSettings }: {
     <main className={`cloudMain ${reviewOpen ? "withReview" : ""}`}>
       <div className={`cloudWorkColumn ${!workspace?.entries.length ? "isEmpty" : ""}`}>
         <div className="cloudCanvas" ref={scroller} onScroll={event => { const element = event.currentTarget; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100; }}>
-          {!workspace?.entries.length ? <section className="cloudWelcome"><h1>What are we working on?</h1></section> : <CloudTimeline workspace={workspace} showActivity={settings.showToolActivity} onReviewFile={openReviewFile}/>}
+          {!workspace?.entries.length ? <section className="cloudWelcome"><h1>What are we working on?</h1></section> : <CloudTimeline workspace={workspace} onLocalFile={(path, line) => setFilePreview({ path, line })} onReviewFile={openReviewFile}/>}
           {workspace?.approvals.map(approval => <CloudApprovalCard key={approval.id} approval={approval} onRespond={(allow, answers) => api.respondCloudApproval({ key: workspace.key, id: approval.id, allow, answers })}/>)}
         </div>
         <div className="cloudDockArea">
@@ -160,7 +163,7 @@ export function CloudWorkspace({ api, settings, onSettings }: {
             </div>
           </form>
           <div className="cloudContextBar"><span role="status">{workspace?.state === "waiting" ? "Waiting for you" : attaching ? "Attaching…" : working === "connect" ? "Connecting…" : ""}</span>
-            {connection?.state === "ready" && <CloudUsageIndicator workspace={workspace} usage={connection.usage}/>}
+            {connection?.state === "ready" && <CloudUsageIndicator workspace={workspace} usage={latestCloudUsage([connection.usage, workspace?.account === connection.account ? workspace?.usage : undefined])}/>}
             {!!workspace?.entries.length && <button disabled={busy} onClick={() => void action(async () => { setWorkspace(await api.resetCloudContext({ key: workspace.key })); setFeedback([]); setImages([]); setPrompt(""); follow.current = true; composer.current?.focus(); })} title="Reset context"><RotateCcw size={13}/><span>Reset context</span></button>}
           </div>
         </div>
@@ -172,8 +175,9 @@ export function CloudWorkspace({ api, settings, onSettings }: {
           onAddFeedback={comments => { setFeedback(current => [...current, ...comments.map(comment => ({ ...comment, filePath: gitRepositories.length > 1 ? `${reviewRepository!.rootPath}/${comment.filePath}` : comment.filePath }))]); composer.current?.focus(); }}
           onLoadDocumentReview={async () => ({ ok: false, code: "not_available", message: "Open this document in its native app to preview it." })}/>}</aside>}
     </main>
-    <button className="cloudSettingsLauncher cloudIconButton" title="Settings" aria-label="Cloud settings" disabled={busy} onClick={() => setSettingsOpen(true)}><Settings2 size={19}/></button>
-    {settingsOpen && <CloudSettingsPanel settings={settings} controller={controller} onSave={onSettings} onClose={() => setSettingsOpen(false)}/>}
+    <button className="cloudSettingsLauncher cloudIconButton" title="Settings" aria-label="Cloud settings" disabled={busy} onClick={() => setSettingsOpen(true)}><span className="topbarLogo" aria-hidden="true"/></button>
+    {settingsOpen && <CloudSettingsPanel usage={latestCloudUsage([connection?.usage, workspace?.account === connection?.account ? workspace?.usage : undefined])} settings={settings} controller={controller} onSave={onSettings} onClose={() => setSettingsOpen(false)}/>}
+    {filePreview && workspace && <CloudFilePreview api={api} workspaceKey={workspace.key} {...filePreview} onClose={() => setFilePreview(undefined)}/>}
     {feedbackOpen && <ReviewFeedbackDialog comments={feedback.map(comment => ({ ...comment, lineLabel: reviewCommentLineLabel(comment) }))} onClose={() => setFeedbackOpen(false)} onRemove={id => setFeedback(current => current.filter(comment => comment.id !== id))} onRemoveAll={() => setFeedback([])} onOpenFile={openReviewFile}/>}
   </div>;
 }

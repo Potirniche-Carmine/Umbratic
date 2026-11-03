@@ -86,7 +86,8 @@ test("Claude requires native subscription authentication, not a cached plan labe
   assert.equal(connected.state, "ready"); assert.equal(connected.models.length, 2);
   assert.equal(connected.models[0].id, "claude-opus-5-5");
   assert.equal(connected.models[0].label, "Opus 5.5");
-  assert.match(connected.models[1].unavailableReason, /subscription-only/);
+  assert.equal(connected.models[1].label, "Fable 5.1");
+  assert.equal(connected.models[1].unavailableReason, undefined);
 });
 
 test("workflow settings enable only the requested roles and use the saved models", () => {
@@ -114,16 +115,13 @@ test("Claude streams text, replaces final blocks, and excludes subagent text", (
 });
 
 
-test("tool activity defaults on, persists off, and old reviewer settings migrate away", () => {
+test("obsolete activity visibility and reviewer settings migrate away", () => {
   const settings = cloud.defaultCloudSettings();
-  assert.equal(settings.showToolActivity, true);
-  assert.equal(cloud.validateCloudSettings({ ...settings, showToolActivity: false }).showToolActivity, false);
-  delete settings.showToolActivity;
+  assert.equal(cloud.validateCloudSettings({ ...settings, showToolActivity: false }).showToolActivity, undefined);
   settings.review = true;
   settings.providers.codex.roles.review = { model: "old-reviewer", effort: "high" };
   const migrated = cloud.validateCloudSettings(settings);
-  assert.equal(migrated.showToolActivity, true);
+  assert.equal(migrated.showToolActivity, undefined);
   assert.equal(migrated.review, undefined);
   assert.equal(migrated.providers.codex.roles.review, undefined);
-  assert.throws(() => cloud.validateCloudSettings({ ...migrated, showToolActivity: null }));
 });

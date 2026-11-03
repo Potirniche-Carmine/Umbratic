@@ -21,9 +21,9 @@
 .cloudShell button, .cloudSettings button, .cloudRootError button { cursor: pointer; font: inherit; color: inherit; }
 .cloudShell button:disabled, .cloudSettings button:disabled { cursor: default; opacity: .4; }
 .cloudShell :focus-visible, .cloudSettings :focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
-.cloudTopbar { display: flex; align-items: center; gap: 12px; min-height: 54px; flex: 0 0 54px; padding: 0 18px 0 24px; -webkit-app-region: drag; background: var(--bg); }
+.cloudTopbar { display: flex; align-items: center; gap: 12px; min-height: 48px; flex: 0 0 48px; padding: 0 16px; -webkit-app-region: drag; background: var(--bg); }
 .macChrome .cloudTopbar { padding-left: 78px; }
-.cloudTopbar button, .cloudTopbar select { -webkit-app-region: no-drag; }
+.cloudTopbar button, .cloudTopbar select, .cloudTopbar [popover] { -webkit-app-region: no-drag; }
 .cloudBrand { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; letter-spacing: -.2px; }
 .cloudBrand .topbarLogo { width: 17px; height: 19px; }
 .cloudTopbarSpacer { flex: 1; }
@@ -32,7 +32,7 @@
 .cloudIconButton:active, .cloudAction:active, .cloudSend:active { transform: scale(.97); }
 .cloudMain { display: flex; flex: 1; min-height: 0; }
 .cloudWorkColumn { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; }
-.cloudFolderPicker { display: flex; align-items: center; gap: 2px; color: var(--muted); min-width: 0; }
+.cloudFolderPicker { display: flex; align-items: center; gap: 6px; color: var(--muted); min-width: 0; }
 .cloudFolderPicker .cloudSelect { max-width: 240px; }
 .cloudFolderPicker .cloudSelectTrigger { border: 0; background: transparent; font-size: 12px; }
 .cloudWorkspaceActions { display: flex; gap: 4px; }
@@ -90,7 +90,7 @@
 .cloudSettingsSidebar nav button:hover { background: var(--control-hover); }
 .cloudSettingsSidebar nav button[aria-current="page"] { color: var(--text); background: var(--surface-3); }
 .cloudSettingsMain { min-width: 0; display: flex; flex-direction: column; flex: 1; }
-.cloudSettingsMain > header { padding: 27px 28px 18px; }
+.cloudSettingsMain > header { display: flex; align-items: center; justify-content: space-between; padding: 20px 20px 18px 28px; min-height: 32px; }
 .cloudSettings h3 { margin: 0; font-size: 17px; font-weight: 600; text-transform: none; color: var(--text); letter-spacing: -.35px; }
 .cloudSettingsContent { padding: 0 28px 18px; overflow-y: auto; flex: 1; min-width: 0; }
 .cloudSettingGroup { padding: 0 14px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--surface) 65%, transparent); margin-bottom: 20px; }
@@ -107,11 +107,6 @@
 .cloudConnected { color: var(--green); flex-shrink: 0; }
 .cloudExpertList .cloudModelPicker { margin: 0; padding: 13px 0; }
 .cloudExpertList .cloudModelPicker + .cloudModelPicker { border-top: 1px solid var(--line); }
-.cloudAdvanced { margin-top: 23px; font-size: 12px; color: var(--muted); }
-.cloudAdvanced summary { cursor: pointer; }
-.cloudAdvanced label { display: grid; gap: 8px; margin-top: 14px; }
-.cloudAdvanced input { width: 100%; box-sizing: border-box; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; color: var(--text); font: inherit; }
-.cloudAdvanced button { margin-top: 10px; }
 .cloudFootnote { font-size: 11px; color: var(--muted); margin: -6px 2px 0; line-height: 1.5; }
 .cloudSettingsMessage { font-size: 12px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; margin: 18px 0 0; }
 .cloudSettingsMessage[role="alert"] { color: var(--red); }
@@ -179,22 +174,27 @@
 .cloudSettingsClose { margin-top: auto; display: flex; align-items: center; gap: 9px; min-height: 42px; width: 100%; padding: 10px; background: transparent; border: 0; border-radius: 8px; color: var(--muted) !important; text-align: left; font-size: 13px !important; }
 .cloudSettingsClose:hover { background: var(--control-hover); color: var(--text) !important; }
 .cloudPlanBadge { border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; font-size: 10px; color: var(--muted); white-space: nowrap; }
-.cloudUsageDetails { display: grid; gap: 16px; margin: 12px 0 20px; }
-.cloudUsageWindow { min-width: 0; }
-.cloudUsageWindow > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; margin-bottom: 5px; }
-.cloudUsageWindow strong { font-weight: 500; white-space: nowrap; }
-.cloudUsageWindow small, .cloudUsageUpdated, .cloudUsageUnavailable { color: var(--muted); font-size: 11px; }
-.cloudUsageWindow small { display: block; margin-top: 5px; }
-.cloudUsageDetails meter, .cloudContextUsage meter { display: block; appearance: none; width: 100%; height: 5px; border: 0; background: var(--surface-3); border-radius: 3px; }
-.cloudUsageDetails meter::-webkit-meter-bar, .cloudContextUsage meter::-webkit-meter-bar { background: var(--surface-3); border: 0; border-radius: 3px; height: 5px; }
-.cloudUsageDetails meter::-webkit-meter-optimum-value, .cloudContextUsage meter::-webkit-meter-optimum-value { background: var(--muted); border-radius: 3px; }
-.cloudUsagePopover, .cloudFoldersMenu { position: fixed; inset: auto; margin: 0; padding: 18px; width: 280px; box-sizing: border-box; color: var(--text); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 10px 32px var(--shadow-color); font: 13px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; -webkit-app-region: no-drag; }
-.cloudUsagePopover .cloudUsageDetails { margin-bottom: 0; }
-.cloudContextUsage { display: grid; gap: 7px; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
-.cloudContextUsage strong { font-size: 13px; font-weight: 500; }
-.cloudContextUsage span { color: var(--muted); font-size: 12px; }
-.cloudUsageTrigger { gap: 7px !important; }
-.cloudFoldersMenu { width: 320px; padding: 5px; max-height: min(480px, 70vh); overflow: auto; }
+/* Quota is remaining; context is used. Color follows pressure in both. */
+.cloudUsageDetails { display: grid; gap: 18px; margin: 18px 0 22px; }
+.cloudUsageWindow { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.cloudUsageWindow > div { display: grid; gap: 3px; min-width: 0; }
+.cloudUsageWindow strong { font-size: 12px; font-weight: 500; color: var(--text); }
+.cloudUsageWindow > div > span { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cloudUsageWindow small { font-size: 11px; color: var(--muted); line-height: 1.5; }
+.cloudUsageUnavailable { margin: 18px 0; }
+.cloudUsageRing { position: relative; display: inline-grid; place-items: center; flex: 0 0 48px; width: 48px; height: 48px; color: var(--muted); }
+.cloudUsageRing svg { width: 100%; height: 100%; overflow: visible; transform: rotate(-90deg); }
+.cloudUsageRing circle { fill: none; stroke-width: 3; }
+.cloudRingTrack { stroke: var(--line-strong); opacity: .65; }
+.cloudRingValue { stroke: currentColor; stroke-linecap: round; transition: stroke-dasharray 220ms ease-out; }
+.cloudUsageRing > span { position: absolute; color: var(--text); font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.cloudUsageRing > span > small { font-size: 9px; margin-left: 1px; }
+.cloudUsageRing.is-normal { color: var(--green); }
+.cloudUsageRing.is-warning { color: var(--amber); }
+.cloudUsageRing.is-critical { color: var(--red); }
+.cloudUsageRing.isCompact { flex-basis: 24px; width: 24px; height: 24px; }
+.cloudUsageRing.isCompact circle { stroke-width: 4; }
+.cloudUsagePopover, .cloudFoldersMenu { width: 320px; padding: 5px; max-height: min(480px, 70vh); overflow: auto; }
 .cloudFoldersMenu button { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 9px; background: transparent; border: 0; border-radius: 7px; }
 .cloudFoldersMenu button:hover { background: var(--control-hover); }
 .cloudFoldersMenu button > svg { flex: 0 0 auto; }
@@ -214,3 +214,22 @@
 .sharedReviewFeedback button { font: inherit; color: inherit; cursor: pointer; }
 @media (max-width: 900px) { .cloudContextBar { padding-bottom: 22px; } .cloudSettingsLauncher { bottom: 8px; left: 8px; } }
 @media (max-width: 580px) { .cloudSettingsClose { margin-top: 8px; min-height: 36px; } }
+
+.cloudTopbar > .cloudIconButton { color: var(--muted); }
+.cloudTopbar > .cloudIconButton[aria-pressed="true"] { color: var(--text); background: var(--control-hover); }
+.cloudWorkspaceName { display: flex; align-items: center; gap: 10px; }
+.cloudWorkspaceName .cloudFolderSeparator { color: var(--muted); font-size: 10px; }
+.cloudSettingsLauncher .topbarLogo { width: 20px; height: 22px; }
+.inlineFileLink { display: inline; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--text); font: inherit; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; cursor: pointer; }
+.inlineFileLink:hover { text-decoration-color: currentColor; }
+.cloudFilePreview { width: min(900px, calc(100vw - 48px)); max-height: calc(100dvh - 64px); padding: 0; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px var(--shadow-color); }
+.cloudFilePreview::backdrop { background: rgba(0,0,0,.25); backdrop-filter: blur(5px); }
+.cloudFilePreview[open] { display: flex; flex-direction: column; }
+.cloudFilePreview header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.cloudFilePreview header span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloudFilePreview p { padding: 8px 24px 24px; font-size: 13px; color: var(--muted); }
+.cloudFilePreview pre { overflow: auto; margin: 0; padding: 16px 0; font: 12px/1.8 ui-monospace, monospace; }
+.cloudFilePreview pre > span { display: flex; min-width: max-content; padding-right: 24px; }
+.cloudFilePreview pre small { width: 52px; text-align: right; padding-right: 20px; flex-shrink: 0; color: var(--muted); font: inherit; user-select: none; }
+.cloudFilePreview code { font: inherit; }
+.cloudFilePreview .isCurrentLine { background: var(--control-hover); }

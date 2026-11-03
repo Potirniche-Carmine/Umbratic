@@ -1,6 +1,6 @@
 import { saveCloudImages } from "./cloudImages";
 import { pickCloudFolders } from "./repositoryOps";
-import { getCloudSettings, saveCloudSettings, inspectCloudProvider, cancelCloudSignIn, signInCloudProvider, installCloudProvider, getCloudWorkspace, startCloudTurn, stopCloudTurn, resetCloudContext, respondCloudApproval, stopCloudService } from "./cloudService";
+import { readCloudFile, getCloudSettings, saveCloudSettings, inspectCloudProvider, cancelCloudSignIn, signInCloudProvider, installCloudProvider, getCloudWorkspace, startCloudTurn, stopCloudTurn, resetCloudContext, respondCloudApproval, stopCloudService } from "./cloudService";
 import { readGeneratedImage } from "./generatedImage";
 import { imageRuntimeBinary } from "./localImage";
 import { readImageModelSetting, writeImageModelSetting } from "./settingsStorage";
@@ -368,6 +368,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     signInCloudProvider: async (input) => signInCloudProvider(input),
     installCloudProvider: async (input) => installCloudProvider(input),
     pickCloudFolders: async () => pickCloudFolders(),
+    readCloudFile: async (input) => readCloudFile(input),
     saveCloudImages: async (input) => saveCloudImages(input),
     getCloudWorkspace: async (input) => getCloudWorkspace(input),
     startCloudTurn: async (input) => startCloudTurn(input),

@@ -61,11 +61,8 @@ export function claudeConnection(account: AccountInfo, models: ModelInfo[], vers
   const unique = new Map<string, CloudConnection["models"][number]>();
   for (const model of models) {
     const id = model.resolvedModel || model.value;
-    // Fable has separate usage billing. Only offer the subscription model
-    // families; the runtime still enforces the user's entitlement and limits.
-    const subscriptionModel = /^claude-(opus|sonnet|haiku)-/.test(id);
-    unique.set(id, { id, label: claudeModelLabel(id, model.displayName), efforts: model.supportedEffortLevels || [],
-      ...(!subscriptionModel ? { unavailableReason: "This model is not verified for subscription-only billing." } : {}) });
+    // Availability belongs to the signed-in runtime, not a family allowlist.
+    unique.set(id, { id, label: claudeModelLabel(id, model.displayName), efforts: model.supportedEffortLevels || [] });
   }
   return { ...common, state: "ready", models: [...unique.values()], accountEmail: account.email || auth.email, planName: planLabel(account.subscriptionType), account: `${account.email || auth.email || "Claude"} · ${account.subscriptionType}`,
     message: "Connected through the official Claude Code runtime." };
@@ -90,6 +87,25 @@ async function inspect(query: Query, settings: CloudSettings, cwd: string): Prom
   return connection;
 }
 
+async function readUsageReport(query: Query, gate: PromptGate) {
+  gate.send("/usage");
+  // /usage is a runtime command: no inference and no changes to the user's
+  // conversation. Newer CLIs expose all account meters on this message.
+  for await (const message of query) {
+    if (message.type === "assistant" && message.usage_report) return claudeUsage(message.usage_report);
+    if (message.type === "result") break;
+  }
+  return undefined;
+}
+
+async function standaloneUsage(settings: CloudSettings, cwd: string) {
+  const sdk = await import("@anthropic-ai/claude-agent-sdk");
+  const gate = new PromptGate();
+  const query = sdk.query({ prompt: gate.messages(), options: { ...options(settings, cwd), persistSession: false } });
+  try { return await optionalRuntimeRead(readUsageReport(query, gate)); }
+  finally { gate.close(); query.close(); }
+}
+
 function agentDefinitions(settings: CloudSettings): Record<string, AgentDefinition> {
   return Object.fromEntries(enabledCloudRoles(settings).map(role => {
     const choice = settings.providers.claude.roles[role];
@@ -106,8 +122,15 @@ export const claudeCloudRuntime: CloudRuntime = {
   async inspect(settings, cwd) {
     const sdk = await import("@anthropic-ai/claude-agent-sdk");
     const gate = new PromptGate();
-    const query = sdk.query({ prompt: gate.messages(), options: options(settings, cwd) });
-    try { return await inspect(query, settings, cwd); } finally { gate.close(); query.close(); }
+    const query = sdk.query({ prompt: gate.messages(), options: { ...options(settings, cwd), persistSession: false } });
+    try {
+      const connection = await inspect(query, settings, cwd);
+      if (connection.state === "ready") {
+        const report = await optionalRuntimeRead(readUsageReport(query, gate));
+        if (report?.limits.length) connection.usage = report;
+      }
+      return connection;
+    } finally { gate.close(); query.close(); }
   },
   async signIn(settings, cwd) {
     login?.kill();
@@ -149,17 +172,19 @@ export const claudeCloudRuntime: CloudRuntime = {
         const stream = { messageId: "" };
         for await (const message of query) {
           consumeMessage(message, sink, connection.account || "Claude", stream);
-          if (message.type === "user" && Array.isArray(message.message?.content)) {
-    for (const block of message.message.content) if (block.type === "tool_result") sink.activity("Tool finished", { id: block.tool_use_id, label: "Tool finished", status: block.is_error ? "failed" : "completed" });
-  }
-  if (message.type === "result") {
+          if (message.type === "result") {
             resultReceived = true;
             const [context, usage] = await Promise.all([
               optionalRuntimeRead(query.getContextUsage({ detail: "summary" })),
               optionalRuntimeRead(query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })),
             ]);
             if (context) sink.usage(context.rawMaxTokens, context.totalTokens);
-            if (usage) sink.limits?.(claudeUsage(usage));
+            const limits = usage && claudeUsage(usage);
+            if (limits?.limits.length) sink.limits?.(limits);
+            else if (!stopped) {
+              const report = await standaloneUsage(settings, workspace.path);
+              if (report?.limits.length) sink.limits?.(report);
+            }
             if (message.is_error) throw new Error("errors" in message ? message.errors.join("\n") : "Claude could not complete this turn.");
             break;
           }

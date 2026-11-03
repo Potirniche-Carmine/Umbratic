@@ -22,6 +22,7 @@ export function createPreviewCloudApi(): CloudApi {
     };
   }
   return {
+    readCloudFile: async () => { throw new Error("Open the desktop app to preview workspace files."); },
     getCloudSettings: async () => settings,
     saveCloudSettings: async value => { settings = value; return settings; },
     inspectCloudProvider: async ({ provider }) => connection(provider),

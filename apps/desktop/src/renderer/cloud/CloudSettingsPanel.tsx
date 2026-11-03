@@ -1,7 +1,7 @@
 import { CloudUsageDetails } from "./CloudUsage";
 import React, { useEffect, useRef, useState } from "react";
 import { Check, Monitor, RefreshCw, RotateCcw, Users, X } from "lucide-react";
-import { cloudRoleLabels, type CloudProvider, type CloudRole, type CloudSettings } from "../../shared/cloud";
+import { cloudRoleLabels, type CloudProvider, type CloudRole, type CloudSettings, type CloudUsage } from "../../shared/cloud";
 import { readAppearanceSettings, writeAppearanceSettings } from "../appearanceStorage";
 import type { AppearanceTheme } from "../rendererTypes";
 import { CloudModelPicker } from "./CloudModelPicker";
@@ -10,15 +10,14 @@ import { CloudSelect } from "./CloudSelect";
 import type { useCloudConnection } from "./useCloudConnection";
 
 type ConnectionController = ReturnType<typeof useCloudConnection>;
-export function CloudSettingsPanel({ settings, controller, onSave, onClose }: {
-  settings: CloudSettings; controller: ConnectionController;
+export function CloudSettingsPanel({ settings, controller, usage, onSave, onClose }: {
+  usage?: CloudUsage; settings: CloudSettings; controller: ConnectionController;
   onSave(value: CloudSettings): Promise<void>; onClose(): void;
 }) {
   const [tab, setTab] = useState<"connection" | "experts" | "context">("connection");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState(() => readAppearanceSettings().theme);
-  const [executable, setExecutable] = useState(settings.providers[settings.provider].executable);
   const dialog = useRef<HTMLDialogElement>(null);
   const { connection, checking, working, message, refresh, connect, install, cancel } = controller;
   const provider = settings.provider;
@@ -27,7 +26,6 @@ export function CloudSettingsPanel({ settings, controller, onSave, onClose }: {
   const models = connection?.provider === provider ? connection.models : [];
   const locked = saving || working === "install";
   useEffect(() => { const element = dialog.current; element?.showModal(); return () => element?.close(); }, []);
-  useEffect(() => setExecutable(config.executable), [provider, config.executable]);
   async function save(next: CloudSettings) {
     setSaving(true); setError("");
     try { await onSave(next); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -51,13 +49,12 @@ export function CloudSettingsPanel({ settings, controller, onSave, onClose }: {
       <button className="cloudSettingsClose" onClick={onClose} disabled={saving || working === "install"}><X size={17}/> Close settings</button>
     </div>
     <div className="cloudSettingsMain">
-      <header><h3>{tab === "connection" ? "General" : tab === "experts" ? "Experts" : "Context"}</h3></header>
+      <header><h3>{tab === "connection" ? "General" : tab === "experts" ? "Experts" : "Context"}</h3><button className="cloudIconButton" aria-label="Close settings" disabled={locked} onClick={onClose}><X size={18}/></button></header>
       <section className="cloudSettingsContent">
         {tab === "connection" && <>
           <div className="cloudSettingGroup">
             <div className="cloudSettingRow"><span>Mode</span><CloudSelect label="Mode" value={settings.mode} disabled={locked} onValueChange={selectedValue => void save({ ...settings, mode: selectedValue as "cloud" | "private" })}><option value="cloud">Cloud</option><option value="private">Private</option></CloudSelect></div>
             <div className="cloudSettingRow"><span>Appearance</span><CloudSelect label="Appearance" value={theme} onValueChange={selectedValue => { const value = selectedValue as AppearanceTheme; setTheme(value); writeAppearanceSettings({ ...readAppearanceSettings(), theme: value }); }}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></CloudSelect></div>
-            {toggle("Tool activity", settings.showToolActivity, showToolActivity => void save({ ...settings, showToolActivity }))}
           </div>
           <div className="cloudSettingGroup">
             <div className="cloudSettingRow"><span>Provider</span><CloudSelect label="Cloud provider" icons={cloudProviderIcons} value={provider} disabled={locked} onValueChange={selectedValue => void save({ ...settings, provider: selectedValue as CloudProvider })}><option value="codex">ChatGPT</option><option value="claude">Claude Code</option></CloudSelect></div>
@@ -71,9 +68,8 @@ export function CloudSettingsPanel({ settings, controller, onSave, onClose }: {
               <button className="cloudIconButton" disabled={locked || checking} aria-label="Refresh connection" onClick={() => void refresh()}><RefreshCw size={15}/></button>
             </div>
           </div>
-          {connection?.state === "ready" && <CloudUsageDetails usage={connection.usage}/>}
+          {connection?.state === "ready" && <CloudUsageDetails usage={usage}/>}
           <CloudModelPicker label="Main orchestrator" value={config.orchestrator} models={models} disabled={locked} onChange={orchestrator => updateProvider({ orchestrator })}/>
-          <details className="cloudAdvanced"><summary>Advanced</summary><label>Executable<input value={executable} disabled={locked} placeholder="Automatic" onChange={event => setExecutable(event.target.value)}/></label><button className="cloudAction" disabled={locked || executable === config.executable} onClick={() => updateProvider({ executable })}>Apply</button></details>
         </>}
         {tab === "experts" && <>
           <div className="cloudSettingGroup">

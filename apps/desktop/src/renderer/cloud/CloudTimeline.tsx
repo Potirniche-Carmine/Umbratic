@@ -33,7 +33,7 @@ export function cloudTurns(entries: CloudEntry[], running: boolean): { instructi
       notes: group.filter(entry => entry.kind === "error" || entry.kind === "context") };
   });
 }
-export function CloudTimeline({ workspace, showActivity, onReviewFile }: { workspace: CloudWorkspace; showActivity: boolean; onReviewFile(path: string): void }) {
+export function CloudTimeline({ workspace, onLocalFile, onReviewFile }: { workspace: CloudWorkspace; onLocalFile(path: string, line?: number): void; onReviewFile(path: string): void }) {
   const [preview, setPreview] = useState<ReviewFeedbackReference[] | null>(null);
   const [expanded, setExpanded] = useState(new Set<string>());
   const [tools, setTools] = useState(new Set<string>());
@@ -42,9 +42,8 @@ export function CloudTimeline({ workspace, showActivity, onReviewFile }: { works
   useEffect(() => { if (workspace.state === "idle") return; const timer = setInterval(() => setClock(Date.now()), 1000); return () => clearInterval(timer); }, [workspace.state]);
   return <><div className="cloudWorkStream">{cloudTurns(workspace.entries, workspace.state !== "idle").map(turn => <React.Fragment key={turn.activity.id}>
     {turn.instruction && <article className="cloudEntry cloudEntry-instruction"><p>{visibleReviewPrompt(turn.instruction.text).text}</p>{visibleReviewPrompt(turn.instruction.text).feedback.length > 0 && <ReviewFeedbackChip count={visibleReviewPrompt(turn.instruction.text).feedback.length} onClick={() => setPreview(visibleReviewPrompt(turn.instruction!.text).feedback)}/>}<AttachmentPreviewList mode="message" files={(turn.instruction.images || []).map(cloudImageAttachment)}/></article>}
-    {showActivity && (turn.activity.segments.length > 0 || !turn.activity.finished) && <WorkingBlock item={turn.activity} clock={clock} expanded={expanded.has(turn.activity.id)} expandedToolIds={tools} skills={[]} followScrollRef={follow} setExpanded={setExpanded} setExpandedTools={setTools} setBodyRef={() => undefined} onPointerDown={() => undefined} onScroll={() => undefined} onTouchMove={() => undefined} onWheel={() => undefined}/>}
-    {!showActivity && turn.activity.segments.filter(segment => segment.type === "reasoning").map(segment => segment.type === "reasoning" && <article key={segment.id} className="cloudEntry cloudEntry-answer"><MarkdownContent content={segment.text} streaming={false}/></article>)}
-    {turn.answer && <article className="cloudEntry cloudEntry-answer"><MarkdownContent content={turn.answer.text} streaming={!turn.activity.finished}/></article>}
+    {(turn.activity.segments.length > 0 || !turn.activity.finished) && <WorkingBlock item={turn.activity} clock={clock} expanded={expanded.has(turn.activity.id)} expandedToolIds={tools} skills={[]} followScrollRef={follow} setExpanded={setExpanded} setExpandedTools={setTools} setBodyRef={() => undefined} onPointerDown={() => undefined} onScroll={() => undefined} onTouchMove={() => undefined} onWheel={() => undefined}/>}
+    {turn.answer && <article className="cloudEntry cloudEntry-answer"><MarkdownContent onLocalFileClick={onLocalFile} content={turn.answer.text} streaming={!turn.activity.finished}/></article>}
     {turn.notes.map(entry => <p key={entry.id} className={`cloudEntry cloudEntry-${entry.kind}`}>{entry.text}</p>)}
   </React.Fragment>)}</div>{preview && <ReviewFeedbackDialog comments={preview.map((comment, index) => ({ ...comment, id: String(index) }))} onClose={() => setPreview(null)} onOpenFile={onReviewFile}/>}</>;
 }

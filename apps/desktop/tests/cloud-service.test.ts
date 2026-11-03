@@ -34,6 +34,25 @@ function fixture() {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test("file previews only read bounded text inside the selected roots, including symlink resolution", () => {
+  const f = fixture();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-outside-"));
+  try {
+    const workspace = f.service.getCloudWorkspace({ provider: "codex", repositoryId: "project" });
+    fs.writeFileSync(path.join(workspace.path, "hello.ts"), "export const greeting = 'Hello';");
+    assert.match(f.service.readCloudFile({ key: workspace.key, path: "hello.ts" }).text, /Hello/);
+    fs.writeFileSync(path.join(outside, "private.txt"), "outside");
+    fs.symlinkSync(path.join(outside, "private.txt"), path.join(workspace.path, "escape.txt"));
+    assert.throws(() => f.service.readCloudFile({ key: workspace.key, path: "escape.txt" }), /outside/);
+    assert.throws(() => f.service.readCloudFile({ key: workspace.key, path: path.join(outside, "private.txt") }), /outside/);
+    fs.writeFileSync(path.join(workspace.path, "large.txt"), "x".repeat(256 * 1024 + 1));
+    fs.writeFileSync(path.join(workspace.path, "binary.bin"), Buffer.from([0, 1, 2]));
+    assert.throws(() => f.service.readCloudFile({ key: workspace.key, path: "large.txt" }), /256 KB/);
+    assert.throws(() => f.service.readCloudFile({ key: workspace.key, path: "binary.bin" }), /text/);
+    assert.throws(() => f.service.readCloudFile({ key: "other", path: "hello.ts" }), /again/);
+  } finally { f.close(); fs.rmSync(outside, { recursive: true, force: true }); }
+});
+
 test("native sessions are isolated by provider and reset without replaying visible history", async () => {
   const f = fixture();
   try {

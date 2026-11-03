@@ -1,4 +1,5 @@
 import { resolveCloudImages } from "./cloudImages";
+import { latestCloudUsage } from "../shared/cloudUsage";
 import { app } from "electron";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -47,8 +48,18 @@ function scratchDirectory(): string {
 }
 export async function inspectCloudProvider(input: { provider: string }): Promise<CloudConnection> {
   if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
-  try { return await runtime(input.provider).inspect(getCloudSettings(), scratchDirectory()); }
+  try {
+    const connection = await runtime(input.provider).inspect(getCloudSettings(), scratchDirectory());
+    if (connection.state === "ready" && connection.account) connection.usage = rememberUsage(input.provider, connection.account, connection.usage);
+    return connection;
+  }
   catch (error) { return { provider: input.provider, state: error instanceof CloudRuntimeMissing ? "missing" : "unavailable", models: [], message: error instanceof Error ? error.message : "Could not connect." }; }
+}
+function rememberUsage(provider: string, account: string, usage?: CloudWorkspace["usage"]) {
+  const key = `cloud:usage:${provider}:${crypto.createHash("sha256").update(account).digest("hex")}`;
+  const latest = latestCloudUsage([usage, readStored(key) as CloudWorkspace["usage"]]);
+  if (latest) writeStored(key, latest);
+  return latest;
 }
 export async function installCloudProvider(input: { provider: string }): Promise<CloudConnection> {
   if (!isCloudProvider(input?.provider)) throw new Error("Choose Codex or Claude Code.");
@@ -125,6 +136,24 @@ function requiredWorkspace(key: string): CloudWorkspace {
   if (!workspace) throw new Error("Open this Cloud workspace again.");
   return workspace;
 }
+export function readCloudFile(input: { key: string; path: string }): { path: string; text: string } {
+  const workspace = requiredWorkspace(input?.key);
+  if (typeof input.path !== "string" || !input.path || input.path.includes("\0")) throw new Error("Choose a workspace file.");
+  const target = fs.realpathSync(path.resolve(workspace.path, input.path));
+  if (!(workspace.paths || [workspace.path]).some(root => {
+    const relative = path.relative(fs.realpathSync(root), target);
+    return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  })) throw new Error("This file is outside the selected workspace folders.");
+  const fd = fs.openSync(target, "r");
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > 256 * 1024) throw new Error("Preview supports text files up to 256 KB.");
+    const buffer = Buffer.alloc(256 * 1024 + 1);
+    const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    if (bytes > 256 * 1024 || buffer.subarray(0, bytes).includes(0)) throw new Error("This file cannot be previewed as text.");
+    return { path: target, text: new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytes)) };
+  } finally { fs.closeSync(fd); }
+}
 export function resetCloudContext(input: { key: string }): CloudWorkspace {
   const workspace = requiredWorkspace(input?.key);
   if (runs.has(workspace.key)) throw new Error("Stop the current work before clearing context.");
@@ -165,7 +194,7 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
       else if (workspace.entries.at(-1)?.text !== text) append(workspace, "activity", text);
       publish(workspace);
     },
-    limits(usage) { workspace.usage = usage; publish(workspace); },
+    limits(usage) { workspace.usage = workspace.account ? rememberUsage(workspace.provider, workspace.account, usage) : latestCloudUsage([usage, workspace.usage]); publish(workspace); },
     compact() { workspace.compactions++; append(workspace, "context", "The runtime compacted this context."); publish(workspace); },
     usage(contextWindow, inputTokens) { workspace.contextWindow = contextWindow; workspace.inputTokens = inputTokens; publish(workspace); },
     approval(request) {

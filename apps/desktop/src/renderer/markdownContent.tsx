@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { safeExternalUrl } from "../shared/externalLink";
+import { localFileLink } from "../shared/localFileLink";
 import {
   isEscapedMarkdownAt,
   markdownPreview,
@@ -15,6 +16,7 @@ import type { ReviewFile } from "./rendererTypes";
 const markdownPreviewCharacterLimit = 60000;
 
 type ReviewReferenceOptions = {
+  onLocalFileClick?: (path: string, line?: number) => void;
   reviewFiles?: ReviewFile[];
   onReviewFileClick?: (filePath: string) => void;
 };
@@ -189,6 +191,13 @@ export function renderInlineMarkdown(text: string, options?: ReviewReferenceOpti
           index = link.end;
           continue;
         }
+        const file = localFileLink(link.url);
+        if (file && options?.onLocalFileClick) {
+          pushFormatted(<button className="inlineFileLink" key={`file-${keyIndex}`} type="button" title={file.path}
+            onClick={() => options.onLocalFileClick?.(file.path, file.line)}>{link.label}</button>);
+          index = link.end;
+          continue;
+        }
         // An unsafe or unparseable URL is left exactly as written. Rendering
         // just the label would hide where a hostile link points.
         plain += text.slice(index, link.end + 1);
@@ -307,6 +316,7 @@ const MemoizedMarkdownBlockView = React.memo(
 
 export function MarkdownContent({
   content,
+  onLocalFileClick,
   onReviewFileClick,
   reviewFiles,
   trailingInline,
@@ -320,7 +330,7 @@ export function MarkdownContent({
 } & ReviewReferenceOptions) {
   const blocks = useMemo(() => parseMarkdown(content), [content]);
   const blockKeys = useMemo(() => blocks.map((block) => JSON.stringify(block)), [blocks]);
-  const referenceOptions = useMemo(() => ({ onReviewFileClick, reviewFiles }), [onReviewFileClick, reviewFiles]);
+  const referenceOptions = useMemo(() => ({ onReviewFileClick, reviewFiles, onLocalFileClick }), [onReviewFileClick, reviewFiles, onLocalFileClick]);
   // One component for streaming and settled rendering: the flip at the end of
   // a stream is then an ordinary re-render — the caret leaves, the tail block
   // stops being stabilized — instead of a remount that rebuilds every

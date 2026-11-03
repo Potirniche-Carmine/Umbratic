@@ -60,6 +60,7 @@ const umbraticApi = {
   signInCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:sign-in-cloud-provider", input),
   installCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:install-cloud-provider", input),
   pickCloudFolders: () => invoke("umbratic:pick-cloud-folders"),
+  readCloudFile: (input: { key: string; path: string }) => invoke("umbratic:read-cloud-file", input),
   saveCloudImages: (input: { files: import("../shared/cloud").CloudImageInput[] }) => invoke("umbratic:save-cloud-images", input),
   getCloudWorkspace: (input: CloudWorkspaceInput) => invoke("umbratic:get-cloud-workspace", input),
   startCloudTurn: (input: CloudWorkspaceInput & { prompt: string; imageIds?: string[] }) => invoke("umbratic:start-cloud-turn", input),

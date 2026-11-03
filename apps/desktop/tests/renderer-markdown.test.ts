@@ -6,6 +6,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { loadRenderer, loadRendererFile } from "./helpers/load-renderer.ts";
 
+test("workspace file links render their labels while unsafe URL schemes remain inert", () => {
+  const { MarkdownContent } = loadRendererFile("markdownContent.tsx");
+  const html = renderToStaticMarkup(React.createElement(MarkdownContent, {
+    content: "Read [greeting.ts](/private/tmp/App/greeting.ts:12) and [notes](</private/tmp/My Notes/brief.txt>). [unsafe](javascript:alert(1))",
+    onLocalFileClick: () => undefined,
+  }));
+  assert.match(html, /class="inlineFileLink"[^>]*>greeting.ts<\/button>/);
+  assert.match(html, /title="\/private\/tmp\/My Notes\/brief.txt"[^>]*>notes<\/button>/);
+  assert.doesNotMatch(html, /href="javascript:/);
+  assert.match(html, /\[unsafe\]\(javascript:alert\(1\)\)/);
+});
+
 test("MarkdownContent renders real markdown while escaping raw HTML and scripts", () => {
   const { MarkdownContent } = loadRendererFile("markdownContent.tsx");
   const content = [

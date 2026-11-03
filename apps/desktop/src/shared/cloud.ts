@@ -15,7 +15,6 @@ export type CloudSettings = {
   provider: CloudProvider;
   providers: Record<CloudProvider, CloudProviderSettings>;
   subagents: boolean;
-  showToolActivity: boolean;
   idleResetHours: number;
 };
 export type CloudConnection = {
@@ -29,7 +28,7 @@ export type CloudConnection = {
   version?: string;
   models: CloudModel[];
 };
-export type CloudLimit = { id: string; label: string; usedPercent: number; resetsAt?: string };
+export type CloudLimit = { id: string; label: string; usedPercent: number; resetsAt?: string; severity?: string; active?: boolean };
 export type CloudUsage = { limits: CloudLimit[]; fetchedAt: string };
 export type CloudImage = { id: string; name: string; mimeType: string; previewDataUrl: string };
 export type CloudImageInput = { name: string; dataUrl: string; mimeType?: string };
@@ -54,6 +53,7 @@ export type CloudWorkspace = {
 };
 export type CloudWorkspaceInput = { provider: CloudProvider; repositoryId?: string; repositoryIds?: string[] };
 export type CloudApi = {
+  readCloudFile(input: { key: string; path: string }): Promise<{ path: string; text: string }>;
   pickCloudFolders(): Promise<import("./desktopApiTypes").RepositoryInfo[]>;
   saveCloudImages(input: { files: CloudImageInput[] }): Promise<CloudImage[]>;
   getCloudSettings(): Promise<CloudSettings>;
@@ -79,7 +79,7 @@ export function defaultCloudSettings(): CloudSettings {
   const sol = (effort: CloudEffort): CloudModelChoice => ({ model: "gpt-6.1-sol", effort });
   const opus = (effort: CloudEffort): CloudModelChoice => ({ model: "claude-opus-5-5", effort });
   return {
-    mode: "private", provider: "codex", subagents: true, showToolActivity: true, idleResetHours: 3, workspaceRepositoryIds: [],
+    mode: "private", provider: "codex", subagents: true, idleResetHours: 3, workspaceRepositoryIds: [],
     providers: {
       codex: { executable: "", orchestrator: sol("medium"), roles: {
         routine: sol("medium"), architecture: sol("xhigh"),
@@ -100,8 +100,6 @@ export function validateCloudSettings(value: CloudSettings): CloudSettings {
   if (!value || !["private", "cloud"].includes(value.mode) || !isCloudProvider(value.provider)) throw new Error("Invalid workspace mode.");
   if (typeof value.subagents !== "boolean") throw new Error("Invalid workflow setting.");
   // Migrate the first 0.0.3 preview without losing provider or role choices.
-  const showToolActivity = Object.hasOwn(value, "showToolActivity") ? value.showToolActivity : true;
-  if (typeof showToolActivity !== "boolean") throw new Error("Invalid tool activity setting.");
   const legacy = value as CloudSettings & { dailyReset?: boolean };
   const idleResetHours = Object.hasOwn(value, "idleResetHours") ? value.idleResetHours : legacy.dailyReset === false ? 0 : 3;
   if (!Number.isInteger(idleResetHours) || idleResetHours < 0 || idleResetHours > 24) throw new Error("Choose an inactivity period of 1 to 24 hours, or Never.");
@@ -114,7 +112,8 @@ export function validateCloudSettings(value: CloudSettings): CloudSettings {
   }
   const workspaceRepositoryIds = value.workspaceRepositoryIds ?? [];
   if (!Array.isArray(workspaceRepositoryIds) || workspaceRepositoryIds.length > 16 || workspaceRepositoryIds.some(id => typeof id !== "string" || id.length > 200)) throw new Error("Choose up to 16 workspace folders.");
-  const result = structuredClone({ ...value, idleResetHours, showToolActivity, workspaceRepositoryIds }) as CloudSettings & { dailyReset?: boolean; review?: boolean; resetAfterCompactions?: number; contextPolicyVersion?: number };
+  const result = structuredClone({ ...value, idleResetHours, workspaceRepositoryIds }) as CloudSettings & { showToolActivity?: boolean; dailyReset?: boolean; review?: boolean; resetAfterCompactions?: number; contextPolicyVersion?: number };
+  delete result.showToolActivity;
   delete result.dailyReset;
   delete result.review;
   delete result.resetAfterCompactions;
