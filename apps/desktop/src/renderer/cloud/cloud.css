@@ -301,3 +301,12 @@
 .cloudResetDialog h2 { font-size: 18px; font-weight: 600; letter-spacing: -.2px; text-transform: none; color: var(--text); margin: 16px 0 8px; }
 .cloudResetDialog p { font-size: 13px; line-height: 1.6; color: var(--muted); margin-bottom: 24px; }
 .cloudResetDialog > div { display: flex; justify-content: flex-end; gap: 8px; }
+.cloudEntry .messageAttachmentList { margin-top: 10px; justify-content: flex-end; }
+.cloudEntry .attachmentPreview.imageAttachment { width: 90px; height: 72px; border-radius: 9px; }
+.cloudEntry .attachmentPreview.imageAttachment img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+.cloudApproval > header { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
+.cloudApproval > header > svg { color: var(--muted); flex-shrink: 0; }
+.cloudApproval h3 { margin: 0; color: var(--text); letter-spacing: 0; }
+.cloudApproval > pre { padding: 12px; background: var(--surface-2); border-radius: 8px; color: var(--text); }
+.cloudApproval details { font-size: 12px; color: var(--muted); }
+.cloudApproval details > summary { cursor: pointer; }
