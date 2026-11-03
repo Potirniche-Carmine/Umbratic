@@ -26,3 +26,11 @@ test("multiple grammars and plain text preserve source including unsafe markup",
     assert.equal(highlighted.lines.map(line => line.map(token => token.content).join("")).join("\n"), code);
   }
 });
+
+test("code fences resolve explicit languages, aliases and unknown labels without guessing", async () => {
+  for (const [language, expected] of [["c++", "C++"], ["python", "Python"], ["ts title=example", "TypeScript"], ["c#", "C#"], ["shell", "Shell"], ["not-a-language", "Plain text"], ["", "Plain text"]]) {
+    const output = await highlightSource("", "return 1;", language);
+    assert.equal(output.language, expected);
+    assert.equal(output.lines[0].map(token => token.content).join(""), "return 1;");
+  }
+});

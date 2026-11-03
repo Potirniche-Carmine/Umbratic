@@ -13,6 +13,8 @@ import { copyPlainText } from "./copyPlainText";
 import { InlineLink, readMarkdownLink } from "./inlineLink";
 import type { ReviewFile } from "./rendererTypes";
 import { MermaidDiagram } from "./MermaidDiagram";
+import { useSourceSyntax } from "./useSourceSyntax";
+import { SourceTokens } from "./SourceTokens";
 
 const markdownPreviewCharacterLimit = 60000;
 
@@ -110,6 +112,7 @@ function MarkdownCodeBlock({
   const [copied, setCopied] = useState(false);
   const label = codeBlockLabel(language, content);
   const isCommand = label === "command" || /^(bash|sh|zsh|shell|console|terminal|powershell|ps1|pwsh|cmd|bat)$/i.test(label);
+  const syntax = useSourceSyntax([{ language: language || (isCommand ? label : ""), text: content }])?.[0];
   async function copyBlock() {
     await copyPlainText(content);
     setCopied(true);
@@ -125,7 +128,7 @@ function MarkdownCodeBlock({
         </button>
       </figcaption>
       <pre className="markdownCode">
-        <code>{content}{trailingInline ?? null}</code>
+        <code>{content.split(/(\r?\n)/).map((part, index) => index % 2 ? part : <SourceTokens key={index} text={part} tokens={syntax?.lines[index / 2]}/>)}{trailingInline ?? null}</code>
       </pre>
     </figure>
   );

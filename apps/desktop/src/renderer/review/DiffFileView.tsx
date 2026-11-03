@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import type { DiffCell, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
 import { alignHunk, emptyCell, hiddenLinesBeforeHunk } from "../../shared/reviewDiff";
 import { DiffRow, type ReviewLineSelection } from "./DiffRow";
+import { useSourceSyntax } from "../useSourceSyntax";
+import { diffSyntaxKey, diffSyntaxSections, mapDiffSyntax } from "./diffSyntax";
 
 const diffRenderChunkSize = 80;
 // First paint mounts a bounded number of chunks; the rest stream in during
@@ -48,6 +50,9 @@ export function DiffFileView({
   selection: ReviewLineSelection | null;
   onSelect(event: React.MouseEvent | React.KeyboardEvent, cell: DiffCell, row: SideBySideRow): void;
 }) {
+  const syntaxSections = useMemo(() => diffSyntaxSections(file), [file]);
+  const highlights = useSourceSyntax(syntaxSections.map(section => section.document));
+  const syntax = useMemo(() => mapDiffSyntax(syntaxSections, highlights), [syntaxSections, highlights]);
   const aligned = useMemo(
     () => file.hunks.map((hunk) => ({ hunk, rows: alignHunk(hunk) })),
     [file],
@@ -113,7 +118,8 @@ export function DiffFileView({
                     key={`${hunk.id}-chunk-${index}`}
                   >
                     {chunk.map((entry) => (
-                      <DiffRow key={entry.key} row={entry.row} selection={selection} commenting={commenting} onSelect={onSelect} />
+                      <DiffRow key={entry.key} row={entry.row} selection={selection} commenting={commenting} onSelect={onSelect}
+                        leftTokens={syntax.get(diffSyntaxKey(hunk.id, entry.row.left))} rightTokens={syntax.get(diffSyntaxKey(hunk.id, entry.row.right))} />
                     ))}
                   </div>
                 ) : (

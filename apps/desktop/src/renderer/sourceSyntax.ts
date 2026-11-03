@@ -4,8 +4,7 @@ import { bundledLanguages, bundledLanguagesInfo } from "shiki/langs";
 import dark from "@shikijs/themes/github-dark-default";
 import light from "@shikijs/themes/github-light";
 
-export type SourceToken = { content: string; dark?: string; light?: string; italic?: boolean; bold?: boolean };
-export type SourceHighlight = { language: string; lines: SourceToken[][] };
+import type { SourceHighlight } from "./syntaxTypes";
 const extensions: Record<string, string> = {
   h: "c", cc: "cpp", cxx: "cpp", hpp: "cpp", hxx: "cpp", m: "objective-c", mm: "objective-cpp",
   py: "python", pyw: "python", rb: "ruby", rs: "rust", cs: "csharp", fs: "fsharp", fsx: "fsharp",
@@ -32,13 +31,16 @@ export function sourceLanguage(path: string, text = ""): string {
 }
 
 let highlighter: ReturnType<typeof createHighlighterCore> | undefined;
-export async function highlightSource(path: string, text: string): Promise<SourceHighlight> {
-  const lang = sourceLanguage(path, text);
+export async function highlightSource(path: string, text: string, language?: string): Promise<SourceHighlight> {
+  const hint = language?.trim().toLowerCase().split(/\s+/)[0] || "text";
+  const aliases: Record<string, string> = { "c++": "cpp", "c#": "csharp", "f#": "fsharp", shell: "shellscript", console: "shellsession", terminal: "shellsession", command: "shellscript", pwsh: "powershell", ps1: "powershell", cmd: "bat" };
+  const explicit = aliases[hint] || hint;
+  const lang = language === undefined ? sourceLanguage(path, text) : Object.hasOwn(bundledLanguages, explicit) ? explicit : "text";
   if (lang === "text") return { language: "Plain text", lines: text.split(/\r?\n/).map(content => [{ content }]) };
   const engine = await (highlighter ??= createHighlighterCore({ themes: [dark, light], langs: [], engine: createJavaScriptRegexEngine({ forgiving: true }) }));
   await engine.loadLanguage(bundledLanguages[lang as keyof typeof bundledLanguages]);
   const tokens = engine.codeToTokensWithThemes(text, { lang, themes: { dark: "github-dark-default", light: "github-light" } });
-  const language = bundledLanguagesInfo.find(item => item.id === lang || item.aliases?.includes(lang))?.name || lang;
-  return { language, lines: tokens.map(line => line.map(token => ({ content: token.content, dark: token.variants.dark.color, light: token.variants.light.color,
+  const languageName = bundledLanguagesInfo.find(item => item.id === lang || item.aliases?.includes(lang))?.name || lang;
+  return { language: languageName, lines: tokens.map(line => line.map(token => ({ content: token.content, dark: token.variants.dark.color, light: token.variants.light.color,
     italic: !!((token.variants.dark.fontStyle || 0) & 1), bold: !!((token.variants.dark.fontStyle || 0) & 2) }))) };
 }

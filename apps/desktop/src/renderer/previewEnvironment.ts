@@ -105,7 +105,9 @@ let previewLocalMtp = true;
 
   const previewApi: DesktopApi = {
     ...createPreviewCloudApi(),
-  listProjects: async () => readPreviewProjects(),
+  listProjects: async () => new URLSearchParams(window.location.search).get("cloudTest") === "source"
+    ? [{ id: "preview-source", name: "Monitor", rootPath: "/preview", kind: "git", originalBranch: "main", baseCommit: "preview", dirty: true, statusSummary: "Preview" }, ...readPreviewProjects()]
+    : readPreviewProjects(),
   listChats: async () => readPreviewChats(),
   createChat: async (input) => {
     const now = new Date().toISOString();

@@ -10,6 +10,7 @@ export function createPreviewCloudApi(): CloudApi {
   if (params.get("provider") === "claude") settings.provider = "claude";
   const initial = params.get("connection");
   const sourceFixture = params.get("cloudTest") === "source";
+  if (sourceFixture) settings.workspaceRepositoryIds = ["preview-source"];
   const sourceText = ["#include <stdio.h>", "#include <stdbool.h>", "", "typedef struct {", "    unsigned int interval;", "    bool connected;", "} Monitor;", "", "/* Synchronize the selected monitor with its configured destinations. */", "int synchronize_monitor(Monitor *monitor)", "{", "    if (monitor == NULL) {", "        return -1;", "    }", "", "    if (!monitor->connected) {", "        fprintf(stderr, \"Waiting for connection\\n\");", "        return 0;", "    }", "", "    // Publish the latest status before starting another cycle.", "    printf(\"Synchronizing every %u seconds\\n\", monitor->interval);", "    return 1;", "}", ""].join("\n");
   const state: Record<CloudProvider, CloudConnection["state"]> = {
     codex: initial === "missing" || initial === "sign_in" ? initial : "ready",
@@ -35,7 +36,7 @@ export function createPreviewCloudApi(): CloudApi {
     saveCloudImages: async ({ files }) => files.map(file => ({ id: crypto.randomUUID(), name: file.name, mimeType: file.mimeType || "image/png", previewDataUrl: file.dataUrl })),
     getCloudWorkspace: async ({ provider }) => ({ key: `preview-${provider}`, provider, path: "/preview", state: "idle", compactions: 0, entries: sourceFixture ? [
       { id: "source-prompt", kind: "instruction", at: new Date().toISOString(), text: "Show me how the monitor synchronizes data." },
-      { id: "source-answer", kind: "answer", at: new Date().toISOString(), text: "The monitor reads configuration, then publishes status and audit records.\n\n```mermaid\nflowchart LR\n C[Config databases] -->|Settings and control commands| M[Local monitor database]\n M -->|Status and sync progress| C\n M -->|Alerts and scan results| A[Audit databases]\n M -->|Standards data| S[Standard databases]\n```\n\nThe connection check is in [monitor.c](/preview/core/monitor.c:16). See [main.c](/preview/main.c) for the complete file." },
+      { id: "source-answer", kind: "answer", at: new Date().toISOString(), text: "The monitor reads configuration, then publishes status and audit records.\n\n```mermaid\nflowchart LR\n C[Config databases] -->|Settings and control commands| M[Local monitor database]\n M -->|Status and sync progress| C\n M -->|Alerts and scan results| A[Audit databases]\n M -->|Standards data| S[Standard databases]\n```\n\nThe connection check is in [monitor.c](/preview/core/monitor.c:16). See [main.c](/preview/main.c) for the complete file.\n\n```c\n" + sourceText + "```" },
     ] : [], approvals: [] }),
     startCloudTurn: async () => { throw new Error("This is a design preview. Open the desktop app to start work."); },
     stopCloudTurn: async () => undefined,

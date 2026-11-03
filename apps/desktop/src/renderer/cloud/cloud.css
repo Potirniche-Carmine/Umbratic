@@ -250,9 +250,6 @@
 .cloudFilePreview header { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); background: var(--surface); font-size: 13px; }
 .cloudFileIdentity { flex: 1; min-width: 0; display: grid; gap: 3px; }
 .cloudFileIdentity strong { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cloudFileIdentity span { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cloudFileLocation { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; background: var(--control-bg); color: var(--text); font: inherit; font-size: 12px; }
-.cloudFileLocation:hover { background: var(--control-hover); }
 .cloudFilePreview p { padding: 8px 24px 24px; font-size: 13px; color: var(--muted); }
 .cloudFilePreview pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 20px 0; font: 14px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 4; }
 .cloudFilePreview .sourceLine { position: relative; display: flex; min-width: max-content; padding-right: 28px; }
@@ -260,8 +257,6 @@
 .cloudFilePreview code { padding-left: 18px; font: inherit; }
 .cloudFilePreview .isCurrentLine { background: color-mix(in srgb, var(--blue) 10%, var(--code-bg)); }
 .cloudFilePreview .isCurrentLine .sourceLineNumber { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, var(--code-bg)); box-shadow: inset 3px 0 var(--blue); }
-.sourceToken { color: var(--syntax-dark, inherit); }
-:root[data-theme="light"] .sourceToken { color: var(--syntax-light, inherit); }
 .cloudFilePreview footer { display: flex; justify-content: space-between; flex-shrink: 0; padding: 8px 18px; border-top: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 11px; }
 .inlineFileLine { color: var(--muted); font-size: .9em; font-variant-numeric: tabular-nums; }
 

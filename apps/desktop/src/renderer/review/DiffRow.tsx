@@ -1,5 +1,7 @@
 import React from "react";
 import type { DiffCell, DiffSide, SideBySideRow } from "../../shared/reviewDiff";
+import { SourceTokens } from "../SourceTokens";
+import type { SourceToken } from "../syntaxTypes";
 
 export type ReviewLineSelection = {
   hunkId: string;
@@ -7,7 +9,7 @@ export type ReviewLineSelection = {
   lines: number[];
 };
 
-function DiffCode({ cell }: { cell: DiffCell }) {
+function DiffCode({ cell, tokens }: { cell: DiffCell; tokens?: SourceToken[] }) {
   if (cell.origin === "empty") return <code aria-hidden="true"> </code>;
   // Spans only reach here when the alignment was worth showing, so a changed
   // span is marked on that basis alone. The extra "does anything survive?"
@@ -15,23 +17,21 @@ function DiffCode({ cell }: { cell: DiffCell }) {
   // silently downgraded whole rows to no highlighting at all.
   return (
     <code>
-      {cell.spans?.length
-        ? cell.spans.map((span, index) => (
-            <mark className={span.changed && span.text.trim() ? "intraLineChange" : "intraLineSame"} key={index}>{span.text}</mark>
-          ))
-        : cell.content || " "}
+      <SourceTokens text={cell.content || " "} tokens={tokens} changes={cell.spans}/>
     </code>
   );
 }
 
 function DiffCellView({
   cell,
+  tokens,
   selectable,
   selected,
   commenting,
   onSelect,
 }: {
   cell: DiffCell;
+  tokens?: SourceToken[];
   selectable: boolean;
   selected: boolean;
   commenting: boolean;
@@ -63,18 +63,22 @@ function DiffCellView({
           <span>{cell.line}</span>
         </button>
       ) : <span className="reviewLineGutter isEmpty" />}
-      <DiffCode cell={cell} />
+      <DiffCode cell={cell} tokens={tokens} />
     </div>
   );
 }
 
 function DiffRowComponent({
   row,
+  leftTokens,
+  rightTokens,
   selection,
   commenting,
   onSelect,
 }: {
   row: SideBySideRow;
+  leftTokens?: SourceToken[];
+  rightTokens?: SourceToken[];
   selection: ReviewLineSelection | null;
   commenting: boolean;
   onSelect(event: React.MouseEvent | React.KeyboardEvent, cell: DiffCell, row: SideBySideRow): void;
@@ -88,8 +92,8 @@ function DiffRowComponent({
   const canSelect = (cell: DiffCell) => cell.line !== null && cell.origin !== "empty";
   return (
     <div className={`reviewDiffRow kind-${row.kind}`} data-row-id={row.id}>
-      <DiffCellView cell={row.left} selectable={canSelect(row.left)} selected={isSelected(row.left)} commenting={commenting} onSelect={(event, cell) => onSelect(event, cell, row)} />
-      <DiffCellView cell={row.right} selectable={canSelect(row.right)} selected={isSelected(row.right)} commenting={commenting} onSelect={(event, cell) => onSelect(event, cell, row)} />
+      <DiffCellView cell={row.left} tokens={leftTokens} selectable={canSelect(row.left)} selected={isSelected(row.left)} commenting={commenting} onSelect={(event, cell) => onSelect(event, cell, row)} />
+      <DiffCellView cell={row.right} tokens={rightTokens} selectable={canSelect(row.right)} selected={isSelected(row.right)} commenting={commenting} onSelect={(event, cell) => onSelect(event, cell, row)} />
     </div>
   );
 }
@@ -104,6 +108,8 @@ function cellIsSelected(selection: ReviewLineSelection | null, row: SideBySideRo
 
 export const DiffRow = React.memo(DiffRowComponent, (previous, next) => (
   previous.row === next.row
+  && previous.leftTokens === next.leftTokens
+  && previous.rightTokens === next.rightTokens
   && previous.commenting === next.commenting
   && previous.onSelect === next.onSelect
   && cellIsSelected(previous.selection, previous.row, previous.row.left) === cellIsSelected(next.selection, next.row, next.row.left)
