@@ -34,8 +34,8 @@ import { CloudUsageIndicator } from "./CloudUsage";
 import type { CloudConnectionController } from "./useCloudConnection";
 import type { SettingsTab } from "../SettingsNav";
 
-export function CloudWorkspace({ api, settings, onSettings, active, navigation, onActivity, controllers, settingsVisible, onOpenSettings }: {
-  controllers: Record<CloudProvider, CloudConnectionController>; settingsVisible: boolean; onOpenSettings(tab: SettingsTab): void;
+export function CloudWorkspace({ api, settings, onSettings, active, navigation, onActivity, controllers, settingsVisible, cloudBusy, onOpenSettings }: {
+  controllers: Record<CloudProvider, CloudConnectionController>; settingsVisible: boolean; cloudBusy: boolean; onOpenSettings(tab: SettingsTab): void;
   api: DesktopApi; settings: CloudSettings; onSettings(settings: CloudSettings): Promise<void>;
 } & WorkspaceSurfaceProps) {
   const [indexingPaths, setIndexingPaths] = useState<Set<string>>(new Set());
@@ -84,7 +84,7 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
   const { codex, claude } = controllers;
   const controller = controllers[provider];
   const { connection, checking, working } = controller;
-  const busy = chat.loading || pending || attaching || [codex, claude].some(controller => ["install", "disconnect"].includes(controller.working)) || dictation.status.state !== "idle" || !!workspace && workspace.state !== "idle";
+  const busy = cloudBusy || chat.loading || pending || attaching || [codex, claude].some(controller => ["install", "disconnect"].includes(controller.working)) || dictation.status.state !== "idle" || !!workspace && workspace.state !== "idle";
   const running = !!workspace && workspace.state !== "idle";
   const selection = settings.providers[provider].orchestrator;
   const selectionError = connection?.state === "ready" ? modelChoiceError(selection, connection.models) : undefined;
@@ -95,7 +95,7 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
     const entry = [...(workspace?.entries || [])].reverse().find(entry => entry.kind === "error");
     if (entry && entry.id !== reportedError.current && Date.parse(entry.at) >= mountedAt.current) { reportedError.current = entry.id; setError(entry.text); }
   }, [workspace?.entries]);
-  const selectedIds = workspace ? projects.filter(project => (workspace.paths || [workspace.path]).includes(project.rootPath)).map(project => project.id) : settings.workspaceRepositoryIds || [];
+  const selectedIds = workspace?.repositoryIds ?? (workspace ? projects.filter(project => (workspace.paths || [workspace.path]).includes(project.rootPath)).map(project => project.id) : settings.workspaceRepositoryIds || []);
   const input = { provider, key: workspace?.key };
   const repositories = projects.filter(project => selectedIds.includes(project.id)).sort((a, b) => a.rootPath < b.rootPath ? -1 : a.rootPath > b.rootPath ? 1 : 0);
   const gitRepositories = repositories.filter(project => project.kind === "git");
@@ -179,7 +179,7 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
     onOpenSettings(tab === "voice" ? "voice" : tab === "keyboard" ? "keyboard" : "providers");
   }
   useCloudShortcuts({
-    "chat.new": () => { if (!pending && !attaching && dictation.status.state === "idle") void chat.open({ provider, repositoryIds: selectedIds }, true); },
+    "chat.new": () => { if (!chat.loading && !pending && !attaching && dictation.status.state === "idle") void chat.open({ provider, repositoryIds: selectedIds }, true); },
     "chat.delete": () => { const row = chat.chats.find(row => row.key === workspace?.key); if (row && !busy) setDeleteChat(row); },
     "app.settings": () => openSettings(),
     "app.shortcuts": () => openSettings("keyboard"),
@@ -201,7 +201,7 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
       </div>
     </aside>
     <header className="cloudTopbar">
-      <CloudFolders projects={projects} selectedIds={selectedIds} disabled={busy || !!workspace?.entries.length} onChange={ids => void chat.open({ provider, repositoryIds: ids }, true)} onAdd={() => void chooseFolders()}/>
+      <div className="workspaceHeaderIdentity"><strong>{chat.chats.find(row => row.key === workspace?.key)?.title || "New chat"}</strong><CloudFolders projects={projects} selectedIds={selectedIds} disabled={busy || !!workspace?.entries.length} onChange={ids => void chat.open({ provider, repositoryIds: ids }, true)} onAdd={() => void chooseFolders()}/></div>
       {repositories.some(project => indexingPaths.has(project.rootPath)) && <span className="workspaceIndexing" role="status"><span className="workspaceIndexingSpinner" aria-hidden="true"/>Indexing workspace…</span>}
       <div className="cloudTopbarSpacer"/>
       {gitRepositories.length > 0 && <ShortcutTooltip id="review.toggle" label={reviewOpen ? "Hide review" : "Open review"} placement="bottom"><button className="cloudIconButton" aria-label={reviewOpen ? "Hide review" : "Open review"} aria-pressed={reviewOpen} onClick={() => setReviewOpen(!reviewOpen)}><PanelRight size={18}/></button></ShortcutTooltip>}
@@ -240,7 +240,7 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
             </div>
           </form>
           <div className="cloudContextBar">
-            <span className="workspaceSessionHint">{workspaceProviderLabels[provider]} · {running ? "Working" : connection?.state === "ready" ? "Ready" : "Connect to start"}</span>
+            <span className="workspaceSessionHint">{workspaceProviderLabels[provider]} · {running ? "Working" : cloudBusy ? "Another chat is working" : connection?.state === "ready" ? "Ready" : "Connect to start"}</span>
             <span className="cloudComposerStatus" role="status">{workspace?.state === "waiting" ? "Waiting for you" : working === "connect" ? "Connecting…" : ""}</span>
             <div className="cloudContextMetrics">
             {connection?.state === "ready" && <CloudUsageIndicator workspace={workspace} usage={latestCloudUsage([connection.usage, workspace?.account === connection.account ? workspace?.usage : undefined])}/>}

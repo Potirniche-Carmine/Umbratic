@@ -7,7 +7,7 @@ const emptyDraft = (): Draft => ({ prompt: "", images: [], feedback: [] });
 export function cloudChatSummary(workspace: CloudWorkspace): CloudChatRecord {
   return { key: workspace.key, provider: workspace.provider, state: workspace.state,
     title: workspace.entries.find(entry => entry.kind === "instruction")?.text.trim().replace(/\s+/g, " ").slice(0, 100) || "New chat",
-    paths: workspace.paths || [workspace.path], updatedAt: workspace.lastActiveAt || workspace.entries.at(-1)?.at || "" };
+    paths: workspace.paths || [workspace.path], repositoryIds: workspace.repositoryIds, updatedAt: workspace.lastActiveAt || workspace.entries.at(-1)?.at || "" };
 }
 
 /** Each provider owns its own selection and every conversation owns its draft. */
@@ -23,7 +23,7 @@ export function useCloudChats(api: CloudApi, provider: CloudProvider, defaultIds
   const initialIds = useRef(defaultIds);
   const storageKey = `umbratic.active-chat.${provider}`;
   function updateList(next: CloudWorkspace) {
-    if (!next.chatId && !next.entries.length) return;
+    if (!next.chatId && !next.entries.length) { setChats(existing => existing.filter(chat => chat.key !== next.key)); return; }
     const row = cloudChatSummary(next);
     setChats(existing => [row, ...existing.filter(chat => chat.key !== row.key)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
   }
@@ -55,7 +55,7 @@ export function useCloudChats(api: CloudApi, provider: CloudProvider, defaultIds
       let key: string | null = null;
       try { key = localStorage.getItem(storageKey); } catch { /* Use the most recent chat. */ }
       const selected = rows.find(row => row.key === key) || rows[0];
-      await open(selected ? { provider, key: selected.key } : { provider, repositoryIds: initialIds.current });
+      await open(selected ? { provider, key: selected.key } : { provider, repositoryIds: initialIds.current }, !selected);
     }).catch(cause => { if (!cancelled) { error.current(String(cause)); setLoading(false); } });
     return () => { cancelled = true; generation.current++; unsubscribe(); };
   }, [api, provider, open, storageKey]);
@@ -65,7 +65,7 @@ export function useCloudChats(api: CloudApi, provider: CloudProvider, defaultIds
     const remaining = chats.filter(chat => chat.key !== key); setChats(remaining);
     if (current.current.workspace?.key === key) {
       current.current = { workspace: null, draft: emptyDraft() }; setWorkspace(null); setDraft(emptyDraft());
-      await open(remaining[0] ? { provider, key: remaining[0].key } : { provider, repositoryIds: initialIds.current });
+      await open(remaining[0] ? { provider, key: remaining[0].key } : { provider, repositoryIds: initialIds.current }, !remaining.length);
     }
   }
   function field<K extends keyof Draft>(key: K) {

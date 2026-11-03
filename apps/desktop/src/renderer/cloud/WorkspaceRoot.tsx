@@ -66,7 +66,7 @@ export function WorkspaceRoot({ api, renderPrivate }: { api: DesktopApi; renderP
       {renderPrivate({ active: provider === "local", navigation, onActivity: state => reportActivity("local", state), settingsRequest, providerSettings, onSettingsVisibility: setSettingsVisible })}
     </div>
     {(["codex", "claude"] as const).filter(id => visited.has(id)).map(id => <div key={id} className="workspaceSurface" hidden={provider !== id} inert={provider !== id}>
-      <CloudWorkspace api={api} settings={{ ...settings, provider: id }} onSettings={save} controllers={controllers} settingsVisible={settingsVisible} onOpenSettings={openSettings} active={provider === id} navigation={navigation} onActivity={state => reportActivity(id, state)}/>
+      <CloudWorkspace api={api} settings={{ ...settings, provider: id }} onSettings={save} controllers={controllers} settingsVisible={settingsVisible} cloudBusy={activity.codex !== "idle" || activity.claude !== "idle"} onOpenSettings={openSettings} active={provider === id} navigation={navigation} onActivity={state => reportActivity(id, state)}/>
     </div>)}
     {error && <div className="cloudRootError" role="alert">{error}<button onClick={() => setError("")}>Dismiss</button></div>}
   </div>;

@@ -12,7 +12,7 @@ export function CloudChatArchive({ chats, projects, activeKey, disabled, loading
   const groups = useMemo(() => {
     const result = new Map<string, { name: string; ids: string[]; chats: CloudChatRecord[] }>();
     for (const chat of chats) {
-      const folders = projects.filter(project => chat.paths.includes(project.rootPath));
+      const folders = projects.filter(project => chat.repositoryIds?.includes(project.id) || chat.paths.includes(project.rootPath));
       const key = folders.map(project => project.id).sort().join("/");
       const name = folders.length ? folders.map(project => project.name).join(" + ") : "Chats";
       if (query && !`${chat.title} ${name}`.toLowerCase().includes(query.toLowerCase())) continue;

@@ -196,3 +196,10 @@
   .unifiedSettingsScrim .settingsNavItem { justify-content: center; }
 }
 @media (prefers-reduced-transparency: reduce) { .unifiedSettingsScrim { backdrop-filter: none; background: rgba(0, 0, 0, .65); } }
+
+.workspaceHeaderIdentity { display: flex; flex-direction: column; justify-content: center; min-width: 0; gap: 2px; }
+.workspaceHeaderIdentity > strong { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: min(50vw, 600px); }
+.unifiedCloudShell .workspaceHeaderIdentity .cloudFolderPicker { max-width: 100%; gap: 5px; }
+.workspaceHeaderIdentity .cloudWorkspaceName { font-size: 11px; color: var(--muted); font-weight: 400; }
+.workspaceHeaderIdentity .cloudIconButton { width: 18px; height: 20px; }
+.workspaceHeaderIdentity .cloudIconButton svg { width: 13px; height: 13px; }

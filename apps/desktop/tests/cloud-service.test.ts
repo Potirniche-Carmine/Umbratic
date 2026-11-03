@@ -190,6 +190,8 @@ test("multi-folder identity is independent of selection order and rejects unregi
     const first = f.service.getCloudWorkspace({ provider: "codex", repositoryIds: ["project", "second"] });
     const reordered = f.service.getCloudWorkspace({ provider: "codex", repositoryIds: ["second", "project", "second"] });
     assert.equal(first.key, reordered.key); assert.equal(first.paths.length, 2);
+    assert.deepEqual(first.repositoryIds, ["project", "second"]);
+    assert.deepEqual(f.service.getCloudWorkspace({ provider: "codex", key: first.key }).repositoryIds, ["project", "second"]);
     assert.notEqual(first.key, f.service.getCloudWorkspace({ provider: "codex", repositoryId: "project" }).key);
     assert.throws(() => f.service.getCloudWorkspace({ provider: "codex", repositoryIds: ["project", "/private"] }), /Open the workspace/);
   } finally { f.close(); }

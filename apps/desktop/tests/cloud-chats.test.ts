@@ -6,7 +6,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const workspace = (key, provider = "codex") => ({ key, chatId: key, provider, path: "/project", paths: ["/project"], state: "idle", entries: [], approvals: [], compactions: 0 });
 function fixture(provider = "codex", overrides = {}) {
   const values = []; const deps = []; const cleanups = []; let cursor = 0; let effects = [];
-  const listeners = new Set(); const errors = []; const storage = new Map();
+  const listeners = new Set(); const errors = []; const storage = new Map(); let created = 0;
   const same = (a, b) => a && a.length === b.length && b.every((value, i) => Object.is(value, a[i]));
   const hooks = {
     useState(initial) { const i = cursor++; if (!(i in values)) values[i] = typeof initial === "function" ? initial() : initial; return [values[i], next => { values[i] = typeof next === "function" ? next(values[i]) : next; }]; },
@@ -17,7 +17,7 @@ function fixture(provider = "codex", overrides = {}) {
   const api = {
     listCloudChats: async () => [],
     getCloudWorkspace: async input => workspace(input.key || "first", input.provider),
-    createCloudChat: async input => workspace("new", input.provider),
+    createCloudChat: async input => workspace(created++ ? `new-${created}` : "first", input.provider),
     deleteCloudChat: async () => undefined,
     onCloudWorkspace: listener => { listeners.add(listener); return () => listeners.delete(listener); }, ...overrides,
   };
@@ -71,4 +71,25 @@ test("failed selection keeps the current chat and draft available", async t => {
   await f.render().open({ provider: "codex", key: "missing" });
   assert.equal(f.render().workspace.key, "first"); assert.equal(f.render().prompt, "Keep this"); assert.equal(f.render().loading, false);
   assert.deepEqual(f.errors, ["Open the folder again"]);
+});
+
+test("an initial unsent draft stays reachable after creating and deleting another chat", async t => {
+  const f = fixture(); t.after(f.cleanup); f.render(); await tick();
+  let chat = f.render(); assert.equal(chat.chats[0].key, "first");
+  chat.setPrompt("Keep my initial draft"); f.render();
+  await f.render().open({ provider: "codex" }, true);
+  chat = f.render(); const added = chat.workspace.key;
+  assert.equal(chat.chats.length, 2); assert.equal(chat.prompt, "");
+  await chat.remove(added);
+  chat = f.render(); assert.equal(chat.workspace.key, "first"); assert.equal(chat.prompt, "Keep my initial draft");
+  await chat.remove("first");
+  chat = f.render(); assert.equal(chat.chats.length, 1); assert.notEqual(chat.workspace.key, "first"); assert.equal(chat.prompt, "");
+});
+
+test("resetting an unnamed legacy chat removes its stale archive title", async t => {
+  const f = fixture(); t.after(f.cleanup); f.render(); await tick(); f.render();
+  f.publish({ ...workspace("legacy"), chatId: undefined, entries: [{ kind: "instruction", text: "Old title" }] });
+  assert.equal(f.render().chats.some(chat => chat.key === "legacy"), true);
+  f.publish({ ...workspace("legacy"), chatId: undefined });
+  assert.equal(f.render().chats.some(chat => chat.key === "legacy"), false);
 });

@@ -108,11 +108,10 @@ export async function disconnectCloudProvider(input: { provider: string }): Prom
 
 export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
   if (!isCloudProvider(input?.provider)) throw new Error("Choose a Cloud provider.");
-  const storedWorkspaces = storedCloudWorkspaces();
   if (input.key !== undefined) {
     if (typeof input.key !== "string" || !/^[a-f0-9]{64}$/.test(input.key)) throw new Error("Open this chat again.");
-    const saved = workspaces.get(input.key) || storedWorkspaces.find(value => value.key === input.key);
-    if (!saved || saved.provider !== input.provider) throw new Error("This chat belongs to a different provider or is no longer available.");
+    const saved = workspaces.get(input.key) || readStored(`cloud:workspace:${input.key}`) as CloudWorkspace | undefined;
+    if (!saved || saved.key !== input.key || saved.provider !== input.provider || !Array.isArray(saved.entries)) throw new Error("This chat belongs to a different provider or is no longer available.");
     const projects = readProjects();
     const scratch = fs.realpathSync(scratchDirectory());
     const roots = saved.paths || [saved.path];
@@ -141,10 +140,11 @@ export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
   const key = cloudWorkspaceKey(input.provider, paths, input.chatId);
   let workspace = workspaces.get(key);
   if (!workspace) {
-    const stored = storedWorkspaces.find(value => value.key === key && value.provider === input.provider && value.path === directory);
+    const record = readStored(`cloud:workspace:${key}`) as CloudWorkspace | undefined;
+    const stored = record?.key === key && record.provider === input.provider && record.path === directory && Array.isArray(record.entries) ? record : undefined;
     workspace = stored
-      ? { ...stored, paths, state: "idle", approvals: [] }
-      : { key, chatId: input.chatId, provider: input.provider, path: directory, paths, compactions: 0, state: "idle", entries: [], approvals: [] };
+      ? { ...stored, paths, repositoryIds: [...new Set(ids)], state: "idle", approvals: [] }
+      : { key, chatId: input.chatId, repositoryIds: [...new Set(ids)], provider: input.provider, path: directory, paths, compactions: 0, state: "idle", entries: [], approvals: [] };
     if (stored && stored.state !== "idle") append(workspace, "context", "The previous run was interrupted when Umbratic closed. You can continue from its saved context.");
     if (workspace.sessionId && !workspace.sessions?.[workspace.provider]) rememberCloudSession(workspace);
     workspaces.set(key, workspace);

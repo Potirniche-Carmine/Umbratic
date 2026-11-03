@@ -20,7 +20,7 @@ export function CloudFolders({ projects, selectedIds, disabled, onChange, onAdd 
       element.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - 292))}px`; element.style.top = `${rect.bottom + 8}px`; element.showPopover();
       if (event.detail === 0) element.querySelector<HTMLButtonElement>("[role=checkbox]")?.focus();
     }}><Folder size={18} strokeWidth={1.6}/></button></Tooltip>
-    <span className="cloudWorkspaceName" title={selected.map(project => project.rootPath).join("\n")}>{selected.length ? selected.slice(0, 2).map((project, index) => <React.Fragment key={project.id}>{index > 0 && <span className="cloudFolderSeparator" aria-hidden="true">·</span>}{project.name}</React.Fragment>) : "Workspace"}{selected.length > 2 && <span>+{selected.length - 2}</span>}</span>
+    <span className="cloudWorkspaceName" title={selected.map(project => project.rootPath).join("\n")}>{selected.length ? selected.slice(0, 2).map((project, index) => <React.Fragment key={project.id}>{index > 0 && <span className="cloudFolderSeparator" aria-hidden="true">·</span>}{project.name}</React.Fragment>) : "No folder selected"}{selected.length > 2 && <span>+{selected.length - 2}</span>}</span>
     <div ref={menu} popover="auto" role="dialog" aria-label="Workspace folders" className="cloudFoldersMenu" onToggle={event => setOpen(event.newState === "open")} onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); menu.current?.hidePopover(); trigger.current?.focus(); return; }
       if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;

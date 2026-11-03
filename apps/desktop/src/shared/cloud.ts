@@ -53,6 +53,7 @@ export type CloudWorkspace = {
   key: string;
   /** Stable conversation identity within a provider and folder set. */
   chatId?: string;
+  repositoryIds?: string[];
   provider: CloudProvider;
   path: string;
   paths?: string[];
@@ -74,6 +75,7 @@ export type CloudWorkspaceInput = { provider: CloudProvider; repositoryId?: stri
 export type CloudChatRecord = Pick<CloudWorkspace, "key" | "provider" | "state"> & {
   title: string;
   paths: string[];
+  repositoryIds?: string[];
   updatedAt: string;
 };
 export type CloudApi = {
