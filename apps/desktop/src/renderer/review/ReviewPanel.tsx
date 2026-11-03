@@ -1,3 +1,4 @@
+import { ShortcutTooltip } from "../Tooltip";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Columns2, ExternalLink, FileText, MessageSquarePlus, PanelRight, Rows3, Undo2, WrapText } from "lucide-react";
 import { isArtifactPath } from "../../shared/artifactReview";
@@ -376,7 +377,7 @@ export function ReviewPanel({
               {scopeOpen ? <div className="reviewScopeMenu" role="menu"><button type="button" role="menuitemradio" aria-checked={selectedScope === "task"} className={selectedScope === "task" ? "isSelected" : ""} onClick={() => chooseScope("task")}><span><strong>Turn changes</strong><small>Changes made in this model turn</small></span>{selectedScope === "task" ? <Check size={14} /> : null}</button><button type="button" role="menuitemradio" aria-checked={selectedScope === "worktree"} className={selectedScope === "worktree" ? "isSelected" : ""} onClick={() => chooseScope("worktree")}><span><strong>Whole diff</strong><small>All uncommitted changes against HEAD</small></span>{selectedScope === "worktree" ? <Check size={14} /> : null}</button></div> : null}
             </div>
           ) : null}
-          {chrome && <button className="reviewIconButton" type="button" onClick={onClose} title="Hide review" aria-label="Hide review"><PanelRight size={16} /></button>}
+          {chrome && <ShortcutTooltip id="review.toggle" label="Hide review"><button className="reviewIconButton" type="button" onClick={onClose} aria-label="Hide review"><PanelRight size={16} /></button></ShortcutTooltip>}
         </div>
       </header>
       {files.length && selectedFile ? (

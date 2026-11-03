@@ -11,6 +11,8 @@
  * caption that can be hovered can be hovered off the thing it captions.
  */
 .umbraticTooltip {
+  inset: auto;
+  margin: 0;
   z-index: 120;
   display: flex;
   align-items: center;

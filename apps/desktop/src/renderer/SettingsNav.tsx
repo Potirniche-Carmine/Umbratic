@@ -1,3 +1,4 @@
+import { ShortcutTooltip } from "./Tooltip";
 import { BarChart3, Brain, Info, Image, Keyboard, Mic, Server, Settings2, Sparkles, Type, User } from "lucide-react";
 
 /** The sections of the settings dialog, in the order they are shown. */
@@ -27,8 +28,8 @@ export function SettingsNav({
 }) {
   return (
     <nav className="settingsNav" aria-label="Settings sections">
-      {sections.map((section) => (
-        <button
+      {sections.map((section) => {
+        const button = <button
           key={section.id}
           type="button"
           className={`settingsNavItem ${active === section.id ? "isActive" : ""}`}
@@ -37,8 +38,9 @@ export function SettingsNav({
         >
           <section.icon size={15} />
           <span>{section.label}</span>
-        </button>
-      ))}
+        </button>;
+        return section.id === "keyboard" ? <ShortcutTooltip key={section.id} id="app.shortcuts">{button}</ShortcutTooltip> : button;
+      })}
     </nav>
   );
 }

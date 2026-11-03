@@ -1125,6 +1125,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
     !!previewAttachment?.previewDataUrl
     || !!deleteCandidate
     || showElevatedPermissionsDialog
+    || reviewFeedbackDialogOpen
     || approvalPending;
   const modalOpen = settingsOpen || nonSettingsModalOpen;
 
@@ -1186,8 +1187,8 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
   // Read the same way, so a chord cannot reach past a dialog to a window the
   // user cannot currently see.
   shortcutsBlockedRef.current = modalOpen;
-  // The one exception: the settings chord keeps working while the settings
-  // dialog itself is what is open, so the key that opened it closes it.
+  // Settings and Keyboard shortcuts remain available inside Settings.
+  // Other dialogs keep every app action out.
   settingsToggleAllowedRef.current = settingsOpen && !nonSettingsModalOpen;
 
   useEffect(() => {
@@ -1195,12 +1196,12 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
       // Never on the auto-repeat of a held key, and never mid-IME sequence.
       if (event.repeat || event.isComposing) return;
       if (shortcutsBlockedRef.current) {
-        // Behind the settings dialog the settings chord still lands — it
-        // toggles the dialog closed. Every other modal keeps every chord out.
+        // Settings can close itself or show Keyboard. Every other modal
+        // keeps app shortcuts out.
         const blockedShortcut = shortcutForEvent(event);
-        if (blockedShortcut?.id === "app.settings" && settingsToggleAllowedRef.current) {
+        if ((blockedShortcut?.id === "app.settings" || blockedShortcut?.id === "app.shortcuts") && settingsToggleAllowedRef.current) {
           event.preventDefault();
-          shortcutActionsRef.current["app.settings"]?.();
+          shortcutActionsRef.current[blockedShortcut.id]?.();
         }
         return;
       }
@@ -1284,7 +1285,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
     };
     document.addEventListener("keydown", trapFocus);
     return () => { window.cancelAnimationFrame(frame); document.removeEventListener("keydown", trapFocus); };
-  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending]);
+  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending, reviewFeedbackDialogOpen]);
 
 
   // The offset lives on the DOM node rather than in the style prop, so it needs
@@ -3995,7 +3996,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
                     </button>
                   </ShortcutTooltip>
                 ) : isGenerating ? (
-                  <ShortcutTooltip id="composer.send" label="Queue prompt">
+                  <ShortcutTooltip id="composer.send" sendOnEnter={sendOnEnter} label="Queue prompt">
                     <button
                       className="sendButton queueButton"
                       type="button"
@@ -4007,7 +4008,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
                     </button>
                   </ShortcutTooltip>
                 ) : (
-                  <ShortcutTooltip id="composer.send" label="Send prompt">
+                  <ShortcutTooltip id="composer.send" sendOnEnter={sendOnEnter} label="Send prompt">
                     <button className="sendButton" type="button" onClick={() => void startTask()} disabled={!canStart} aria-label="Send prompt">
                       {busy ? <Loader2 className="spin" size={17} /> : <Send aria-hidden="true" size={17} />}
                     </button>
@@ -4076,9 +4077,9 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
                 <Settings size={17} />
                 <strong id="settings-title">Settings</strong>
               </span>
-              <button className="chromeButton" type="button" onClick={closeSettingsDialog} title="Close settings">
+              <ShortcutTooltip id="dialog.dismiss" label="Close settings"><button className="chromeButton" type="button" onClick={closeSettingsDialog} aria-label="Close settings">
                 <X size={15} />
-              </button>
+              </button></ShortcutTooltip>
             </header>
 
             <div className="settingsLayout">
@@ -4126,7 +4127,7 @@ function App({ startupSettings, onCloud }: { startupSettings: DesktopStartupSett
                   <VoiceSettings api={api} backend={backend} active onBackendStatus={setBackend}
                     serverMode={connectionSettings.settings.mode === "server"} speechAdvertised={dictationAvailable} />
                 ) : null}
-                {settingsTab === "keyboard" ? <KeyboardSettingsPanel api={api} /> : null}
+                {settingsTab === "keyboard" ? <KeyboardSettingsPanel api={api} sendOnEnter={sendOnEnter} /> : null}
                 {settingsTab === "skills" ? (
                   <SkillsSettingsPanel {...skillSettings.panelProps} />
                 ) : null}

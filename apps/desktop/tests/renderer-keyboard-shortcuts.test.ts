@@ -143,7 +143,8 @@ test("the shortcuts that fire and the shortcuts that are documented are one tabl
   // closed.
   assert.match(main, /if \(event\.repeat \|\| event\.isComposing\) return/);
   assert.match(main, /if \(shortcutsBlockedRef\.current\) \{/);
-  assert.match(main, /blockedShortcut\?\.id === "app\.settings" && settingsToggleAllowedRef\.current/);
+  assert.match(main, /blockedShortcut\?\.id === "app\.settings" \|\| blockedShortcut\?\.id === "app\.shortcuts"/);
+  assert.match(main, /\|\| reviewFeedbackDialogOpen/);
   assert.match(main, /shortcutsBlockedRef\.current = modalOpen/);
   // The actions are read through a ref and rewritten every render, so the one
   // listener always calls today's closures rather than the render it
@@ -166,7 +167,7 @@ test("the shortcuts that fire and the shortcuts that are documented are one tabl
     /<ShortcutTooltip id="app\.settings">/,
     /<ShortcutTooltip id="run\.stop" label="Stop generation" disabled=\{stopPending\}>/,
     /<ShortcutTooltip\s+id="review\.toggle"/,
-    /<ShortcutTooltip id="composer\.send" label="Send prompt">/,
+    /<ShortcutTooltip id="composer\.send" sendOnEnter=\{sendOnEnter\} label="Send prompt">/,
   ]) {
     assert.match(main, call);
   }
@@ -176,7 +177,7 @@ test("the shortcuts that fire and the shortcuts that are documented are one tabl
 
   const nav = fs.readFileSync(new URL("../src/renderer/SettingsNav.tsx", import.meta.url), "utf8");
   assert.match(nav, /id: "keyboard", label: "Keyboard"/);
-  assert.match(main, /settingsTab === "keyboard" \? <KeyboardSettingsPanel api=\{api\} \/> : null/);
+  assert.match(main, /settingsTab === "keyboard" \? <KeyboardSettingsPanel api=\{api\} sendOnEnter=\{sendOnEnter\} \/> : null/);
 });
 
 test("a rebound chord replaces the shipped one everywhere at once", () => {

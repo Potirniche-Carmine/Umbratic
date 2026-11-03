@@ -27,7 +27,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-import { isMacPlatform, shortcutById, shortcutKeys, useShortcuts, type ShortcutId } from "./keyboardShortcuts";
+import { composerSendShortcut, isMacPlatform, shortcutById, shortcutKeys, useShortcuts, type ShortcutId } from "./keyboardShortcuts";
 
 /**
  * How long the pointer rests before the tooltip appears.
@@ -209,6 +209,8 @@ export function Tooltip({
           className={`umbraticTooltip is${anchor.placement === "top" ? "Above" : "Below"}`}
           id={describedBy}
           role="tooltip"
+          popover="manual"
+          ref={element => { if (element && !element.matches(":popover-open")) element.showPopover(); }}
           style={{ position: "fixed", left: anchor.left, top: anchor.top }}
         >
           <span className="umbraticTooltipText">{content}</span>
@@ -236,9 +238,11 @@ export function ShortcutTooltip({
   label,
   placement,
   disabled,
+  sendOnEnter = true,
   children,
 }: {
   id: ShortcutId;
+  sendOnEnter?: boolean;
   /** Overrides the shortcut's own label, for a control that says it differently. */
   label?: string;
   placement?: TooltipPlacement;
@@ -246,7 +250,7 @@ export function ShortcutTooltip({
   children: ReactElement;
 }) {
   useShortcuts();
-  const definition = shortcutById(id);
+  const definition = id === "composer.send" ? composerSendShortcut(sendOnEnter) : shortcutById(id);
   return (
     <Tooltip
       content={label ?? definition.label}

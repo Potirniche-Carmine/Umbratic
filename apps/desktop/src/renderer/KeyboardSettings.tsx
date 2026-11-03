@@ -16,6 +16,7 @@ import {
   type ShortcutDefinition,
   type ShortcutId,
   type ShortcutOverrides,
+  type ShortcutMode,
 } from "./keyboardShortcuts";
 import type { DesktopApi } from "../shared/desktopApi";
 
@@ -33,7 +34,7 @@ import type { DesktopApi } from "../shared/desktopApi";
  * shortcut nobody can press. The stored binding is the same either way, so a
  * user who moves between the two machines does not rebind anything twice.
  */
-export function KeyboardSettingsPanel({ api }: { api: DesktopApi }) {
+export function KeyboardSettingsPanel({ api, mode = "private", showHeading = true, sendOnEnter = true }: { api: DesktopApi; mode?: ShortcutMode; showHeading?: boolean; sendOnEnter?: boolean }) {
   const mac = isMacPlatform();
   useShortcuts();
   /** The row currently listening for a chord, or null. */
@@ -108,40 +109,37 @@ export function KeyboardSettingsPanel({ api }: { api: DesktopApi }) {
     save(next);
   }, [save]);
 
-  const resetAll = useCallback(() => {
+  const groups = shortcutSections(mode, sendOnEnter);
+  const visibleIds = new Set(groups.flatMap(group => group.rows.map(row => row.id)));
+  const resetAll = () => {
     setRecording(null);
     setRefusal(null);
-    save({});
-  }, [save]);
+    const next = { ...shortcutOverrides() };
+    for (const id of visibleIds) delete next[id];
+    save(next);
+  };
 
-  const changed = Object.keys(shortcutOverrides()).length;
+  const changed = Object.keys(shortcutOverrides()).filter(id => visibleIds.has(id as ShortcutId)).length;
 
   return (
-    <div className="settingsPanel">
-      <div className="settingsPanelHead">
-        <h3>Keyboard</h3>
-      </div>
+    <div className="settingsPanel keyboardSettingsPanel">
+      {showHeading && <div className="settingsPanelHead"><h3>Keyboard</h3></div>}
 
-      {shortcutSections().map((group) => (
-        <div className="settingsGroup" key={group.section}>
-          <h4>{group.section}</h4>
-          <ul className="shortcutList">
-            {group.rows.map((row) => (
-              <ShortcutRow
-                key={row.id}
-                row={row}
-                mac={mac}
-                recording={recording === row.id}
-                refusal={recording === row.id ? refusal : null}
-                overridden={!!shortcutOverrides()[row.id]}
-                onRecord={() => { setRefusal(null); setRecording(row.id); }}
-                onCancel={() => { setRefusal(null); setRecording(null); }}
-                onReset={() => reset(row.id)}
-              />
-            ))}
-          </ul>
-        </div>
-      ))}
+      <ul className="shortcutList">
+        {groups.flatMap(group => group.rows).map((row) => (
+          <ShortcutRow
+            key={row.id}
+            row={row}
+            mac={mac}
+            recording={recording === row.id}
+            refusal={recording === row.id ? refusal : null}
+            overridden={!!shortcutOverrides()[row.id]}
+            onRecord={() => { setRefusal(null); setRecording(row.id); }}
+            onCancel={() => { setRefusal(null); setRecording(null); }}
+            onReset={() => reset(row.id)}
+          />
+        ))}
+      </ul>
 
       <div className="shortcutFooter">
         {/* Stays on the page whether or not anything has been changed, so it is
@@ -158,7 +156,7 @@ export function KeyboardSettingsPanel({ api }: { api: DesktopApi }) {
             : `Put ${changed === 1 ? "the changed shortcut" : `all ${changed} changed shortcuts`} back to the shipped chord`}
         >
           <RotateCcw size={13} aria-hidden="true" />
-          <span>Reset all to defaults</span>
+          <span>Reset shortcuts</span>
         </button>
       </div>
     </div>
@@ -189,8 +187,8 @@ function ShortcutRow({
   return (
     <li className={`shortcutRow ${recording ? "isRecording" : ""}`}>
       <div className="shortcutText">
-        <strong>{row.label}</strong>
-        <span>{refusal ?? row.detail}</span>
+        <strong title={row.detail}>{row.label}</strong>
+        {refusal && <span role="alert">{refusal}</span>}
       </div>
       {editable ? (
         <div className="shortcutEdit">
@@ -204,6 +202,7 @@ function ShortcutRow({
               where the eye is. */}
           <button
             className={`shortcutKeys shortcutKeysButton ${refusal ? "isRefused" : ""}`}
+            title={recording ? "Escape to cancel" : row.detail}
             type="button"
             onClick={recording ? onCancel : onRecord}
             aria-label={recording ? `Cancel changing ${row.label}` : `Change the chord for ${row.label}`}

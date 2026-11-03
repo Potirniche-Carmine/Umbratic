@@ -6,6 +6,8 @@ import type { ReviewFile } from "../../shared/reviewDiff";
 import { ReviewPanel } from "../review/ReviewPanel";
 import { ReviewFeedbackChip, ReviewFeedbackDialog } from "../review/ReviewFeedbackDialog";
 import { appendReviewFeedback, reviewCommentLineLabel, type ReviewCommentDraft } from "../review/reviewComments";
+import { ShortcutTooltip } from "../Tooltip";
+import { useCloudShortcuts } from "./useCloudShortcuts";
 import { ErrorToast } from "../errorToast";
 import { PromptTextarea } from "../PromptTextarea";
 import { promptEnterAction } from "../promptKeyboard";
@@ -39,7 +41,7 @@ export function CloudWorkspace({ api, settings, onSettings }: {
   const [resetOpen, setResetOpen] = useState(false);
   const [prompt, setPrompt] = useState(""); const [error, setError] = useState("");
   const [attachmentPreview, setAttachmentPreview] = useState<CloudImage>();
-  const [voiceSettings, setVoiceSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"connection" | "voice" | "keyboard">("connection");
   const [dictationAvailable, setDictationAvailable] = useState(false);
   const [images, setImages] = useState<CloudImage[]>([]);
   const [attaching, setAttaching] = useState(false);
@@ -160,11 +162,25 @@ export function CloudWorkspace({ api, settings, onSettings }: {
   }
   function insert(value: { value: string; caret: number }) { setPrompt(value.value); requestAnimationFrame(() => composer.current?.setSelectionRange(value.caret, value.caret)); }
 
+  function openSettings(tab?: "connection" | "voice" | "keyboard") {
+    if (busy) return;
+    if (tab) setSettingsTab(tab);
+    setSettingsOpen(true);
+  }
+  useCloudShortcuts({
+    "app.settings": () => openSettings(),
+    "app.shortcuts": () => openSettings("keyboard"),
+    "composer.focus": () => composer.current?.focus(),
+    "review.toggle": () => { if (gitRepositories.length) setReviewOpen(current => !current); },
+    "dictation.toggle": () => { if (!running && !pending) { if (dictationAvailable) void dictation.toggle(); else openSettings("voice"); } },
+    "run.stop": () => { if (running && !pending && workspace) void action(() => api.stopCloudTurn({ key: workspace.key })); },
+  }, settingsOpen || resetOpen || feedbackOpen || !!attachmentPreview || !!filePreview, () => setReviewOpen(false));
+
   return <div className={`cloudShell ${/Mac/.test(navigator.platform) ? "macChrome" : ""}`}>
     <header className="cloudTopbar">
       <CloudFolders projects={projects} selectedIds={selectedIds} disabled={busy} onChange={ids => void action(() => onSettings({ ...settings, workspaceRepositoryIds: ids }))} onAdd={() => void chooseFolders()}/>
       <div className="cloudTopbarSpacer"/>
-      {gitRepositories.length > 0 && <button className="cloudIconButton" aria-label={reviewOpen ? "Hide review" : "Open review"} title={reviewOpen ? "Hide review" : "Open review"} aria-pressed={reviewOpen} onClick={() => setReviewOpen(!reviewOpen)}><PanelRight size={18}/></button>}
+      {gitRepositories.length > 0 && <ShortcutTooltip id="review.toggle" label={reviewOpen ? "Hide review" : "Open review"} placement="bottom"><button className="cloudIconButton" aria-label={reviewOpen ? "Hide review" : "Open review"} aria-pressed={reviewOpen} onClick={() => setReviewOpen(!reviewOpen)}><PanelRight size={18}/></button></ShortcutTooltip>}
     </header>
     <main className={`cloudMain ${reviewOpen ? "withReview" : ""}`}>
       <div className={`cloudWorkColumn ${!workspace?.entries.length ? "isEmpty" : ""}`}>
@@ -191,11 +207,11 @@ export function CloudWorkspace({ api, settings, onSettings }: {
               <div className="cloudTopbarSpacer"/>
               <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.txt,.md,.csv,.json,.yaml,.yml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.rs,.go,.c,.h,.cpp,.sql,.log" multiple hidden onChange={event => { void attach(Array.from(event.target.files || [])); event.target.value = ""; }}/>
               <button className="cloudIconButton cloudAttach" type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInput.current?.click()}><Plus size={20}/></button>
-              <DictationControl status={dictation.status} enabled={dictationAvailable} devices={dictation.devices} deviceId={dictation.deviceId} onToggle={dictation.toggle} onSelectDevice={dictation.selectDevice} onRequestSetup={() => { setVoiceSettings(true); setSettingsOpen(true); }}/>
+              <DictationControl status={dictation.status} enabled={dictationAvailable} devices={dictation.devices} deviceId={dictation.deviceId} onToggle={dictation.toggle} onSelectDevice={dictation.selectDevice} onRequestSetup={() => openSettings("voice")}/>
               {connection?.state !== "ready" && !running ? <button type="button" className="cloudAction cloudConnectAction" disabled={busy || checking && working !== "connect"} onClick={() => {
                 if (working === "connect") void controller.cancel(); else setSettingsOpen(true);
-              }}>{working === "connect" ? "Cancel" : checking ? "Connecting…" : connection?.state === "missing" ? "Install" : "Connect"}</button> : running ? <button type="button" className="cloudSend" aria-label="Stop work" disabled={pending} onClick={() => void action(() => api.stopCloudTurn({ key: workspace!.key }))}><Square size={16}/></button>
-                : <button className="cloudSend" type="submit" aria-label="Start work" disabled={busy || !hasDraft || !ready}><ArrowUp size={20}/></button>}
+              }}>{working === "connect" ? "Cancel" : checking ? "Connecting…" : connection?.state === "missing" ? "Install" : "Connect"}</button> : running ? <ShortcutTooltip id="run.stop" label="Stop work"><button type="button" className="cloudSend" aria-label="Stop work" disabled={pending} onClick={() => void action(() => api.stopCloudTurn({ key: workspace!.key }))}><Square size={16}/></button></ShortcutTooltip>
+                : <ShortcutTooltip id="composer.send" label="Send prompt" sendOnEnter={sendOnEnter}><button className="cloudSend" type="submit" aria-label="Start work" disabled={busy || !hasDraft || !ready}><ArrowUp size={20}/></button></ShortcutTooltip>}
             </div>
           </form>
           <div className="cloudContextBar"><CloudRunControls settings={settings} connection={connection} disabled={busy} onSave={value => void action(() => onSettings(value))}/><span role="status">{workspace?.state === "waiting" ? "Waiting for you" : working === "connect" ? "Connecting…" : ""}</span>
@@ -211,9 +227,9 @@ export function CloudWorkspace({ api, settings, onSettings }: {
           onAddFeedback={comments => { setFeedback(current => [...current, ...comments.map(comment => ({ ...comment, filePath: gitRepositories.length > 1 ? `${reviewRepository!.rootPath}/${comment.filePath}` : comment.filePath }))]); composer.current?.focus(); }}
           onLoadDocumentReview={async () => ({ ok: false, code: "not_available", message: "Open this document in its native app to preview it." })}/>}</aside>}
     </main>
-    <button className="cloudSettingsLauncher cloudIconButton" title="Settings" aria-label="Cloud settings" disabled={busy} onClick={() => setSettingsOpen(true)}><span className="topbarLogo" aria-hidden="true"/><span>Umbratic</span><Settings2 size={14} aria-hidden="true"/></button>
+    <ShortcutTooltip id="app.settings"><button className="cloudSettingsLauncher cloudIconButton" aria-label="Cloud settings" disabled={busy} onClick={() => openSettings()}><span className="topbarLogo" aria-hidden="true"/><span>Umbratic</span><Settings2 size={14} aria-hidden="true"/></button></ShortcutTooltip>
     <ErrorToast message={error || dictation.status.error || null} onDismiss={() => { setError(""); dictation.dismissError(); }}/>
-    {settingsOpen && <CloudSettingsPanel usage={latestCloudUsage([connection?.usage, workspace?.account === connection?.account ? workspace?.usage : undefined])} api={api} initialTab={voiceSettings ? "voice" : "connection"} settings={settings} controller={controller} onSave={onSettings} onClose={() => { setSettingsOpen(false); setVoiceSettings(false); }}/>}
+    {settingsOpen && <CloudSettingsPanel usage={latestCloudUsage([connection?.usage, workspace?.account === connection?.account ? workspace?.usage : undefined])} api={api} initialTab={settingsTab} sendOnEnter={sendOnEnter} settings={settings} controller={controller} onSave={onSettings} onClose={() => setSettingsOpen(false)}/>}
     {resetOpen && workspace && <CloudResetDialog busy={pending} onCancel={() => setResetOpen(false)} onReset={() => void action(async () => { setWorkspace(await api.resetCloudContext({ key: workspace.key })); setFeedback([]); setImages([]); setPrompt(""); setResetOpen(false); follow.current = true; composer.current?.focus(); })}/>}
     {attachmentPreview && <CloudAttachmentPreview file={attachmentPreview} onClose={() => setAttachmentPreview(undefined)}/>}
     {filePreview && workspace && <CloudFilePreview api={api} workspaceKey={workspace.key} {...filePreview} onClose={() => setFilePreview(undefined)}/>}

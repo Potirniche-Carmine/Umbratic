@@ -207,13 +207,22 @@
 .cloudMiniUsage > span:last-child { display: grid; gap: 1px; min-width: 38px; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text); }
 .cloudMiniUsage small { color: var(--muted); font-size: 10px; }
 @media (prefers-reduced-motion: reduce) { .cloudRingValue { transition: none; } }
-.cloudFoldersMenu { width: 320px; padding: 5px; max-height: min(480px, 70vh); overflow: auto; }
-.cloudFoldersMenu button { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 9px; background: transparent; border: 0; border-radius: 7px; }
-.cloudFoldersMenu button:hover { background: var(--control-hover); }
-.cloudFoldersMenu button > svg { flex: 0 0 auto; }
-.cloudFoldersMenu button > span { min-width: 0; display: flex; flex-direction: column; }
-.cloudFoldersMenu strong { font-size: 13px; font-weight: 500; }
-.cloudFoldersMenu small { display: block; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cloudFoldersMenu { width: min(280px, calc(100vw - 24px)); padding: 7px; max-height: min(440px, 70dvh); overflow: hidden; background: color-mix(in srgb, var(--surface-2) 94%, transparent); backdrop-filter: blur(24px); border-radius: 16px; }
+.cloudFoldersHeading { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 6px 10px; }
+.cloudFoldersHeading > span { font-size: 12px; font-weight: 550; color: var(--muted); }
+.cloudFoldersMenu .cloudAddFolder { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--control-bg); color: var(--text); }
+.cloudFoldersMenu .cloudAddFolder:hover { background: var(--control-hover); border-color: var(--line-strong); }
+.cloudFolderList { overflow-y: auto; max-height: min(380px, calc(70dvh - 50px)); }
+.cloudFolderList > button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 42px; padding: 7px 10px; text-align: left; background: transparent; border: 0; border-radius: 9px; color: var(--text); }
+.cloudFolderList > button:hover, .cloudFolderList > button:focus-visible { background: var(--control-hover); }
+.cloudFoldersMenu button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.cloudFolderGlyph { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 24px; color: var(--muted); }
+.cloudFolderList [aria-checked=true] .cloudFolderGlyph { color: var(--text); }
+.cloudFolderIdentity { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.cloudFolderIdentity strong { font-size: 13px; font-weight: 450; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cloudFolderIdentity small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cloudFolderCheck { flex: 0 0 14px; }
+@media (prefers-reduced-transparency: reduce) { .cloudFoldersMenu { background: var(--surface-2); backdrop-filter: none; } }
 .cloudReview { display: flex; flex-direction: column; }
 .cloudReview > .reviewPanel { height: auto; flex: 1; min-height: 0; }
 .cloudReviewLoading { padding: 22px; font-size: 13px; color: var(--muted); }
@@ -289,11 +298,6 @@
 .cloudRunControls .cloudSelectTrigger { gap: 6px; min-height: 30px; border-radius: 8px; padding: 4px 8px; font-size: 12px !important; }
 .cloudRunControls .cloudSelectText { min-width: 48px; }
 .cloudContextBar .cloudSelectTrigger:hover { background: var(--control-hover); }
-.cloudFoldersHeading { display: flex; justify-content: space-between; padding: 9px 10px 11px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
-.cloudFoldersHeading > span { font-weight: 400; color: var(--muted); }
-.cloudFoldersMenu > button { gap: 12px; padding: 10px; }
-.cloudFoldersMenu > button > span { flex: 1; min-width: 0; }
-.cloudFoldersMenu small { opacity: .7; }
 .cloudFolderCheck { margin-left: auto; }
 .cloudResetDialog { width: min(360px, calc(100vw - 64px)); background: var(--modal-bg); border: 1px solid var(--line-strong); border-radius: 18px; color: var(--text); padding: 24px; box-shadow: 0 24px 80px var(--shadow-color); }
 .cloudResetDialog::backdrop { background: rgba(0,0,0,.3); backdrop-filter: blur(6px); }
@@ -310,6 +314,5 @@
 .cloudApproval > pre { padding: 12px; background: var(--surface-2); border-radius: 8px; color: var(--text); }
 .cloudApproval details { font-size: 12px; color: var(--muted); }
 .cloudApproval details > summary { cursor: pointer; }
-.cloudFoldersMenu > .cloudAddFolder { width: 32px; height: 32px; padding: 0; margin: 4px 0 0 4px; display: grid; place-items: center; }
 .cloudShell > .toast { width: min(400px, calc(100vw - 36px)); border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-2); color: var(--text); font-size: 13px; box-shadow: 0 8px 28px var(--shadow-color); }
 .cloudShell > .toast > svg { color: var(--amber); }
