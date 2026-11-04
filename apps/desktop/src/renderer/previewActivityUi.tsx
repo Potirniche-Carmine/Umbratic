@@ -25,7 +25,7 @@ function PreviewActivityUi() {
       } })),
     ],
   };
-  return <main style={{ maxWidth: 760, margin: "40px auto", padding: 24 }}>
+  return <main className="unifiedWorkspace" style={{ maxWidth: 760, margin: "40px auto", padding: 24 }}>
     <nav style={{ display: "flex", gap: 20, marginBottom: 30 }}>
       <button onClick={() => setMode(mode === "cloud" ? "private" : "cloud")}>{mode === "cloud" ? "Show Private" : "Show Cloud"}</button>
       <button onClick={() => setFinished(value => !value)}>{finished ? "Start work" : "Finish work"}</button>
@@ -33,12 +33,16 @@ function PreviewActivityUi() {
     </nav>
     <WorkingBlock item={item} clock={Date.parse("2026-11-03T12:00:20Z")} expanded={expanded.has(item.id)} expandedToolIds={tools} skills={[]} followScrollRef={follow}
       setExpanded={setExpanded} setExpandedTools={setTools} setBodyRef={() => {}} onPointerDown={() => {}} onScroll={() => {}} onTouchMove={() => {}} onWheel={() => {}}/>
-    <div className={mode === "cloud" ? "cloudDock" : "composer"} style={{ marginTop: 36, position: "relative", width: "100%", bottom: "auto", padding: mode === "cloud" ? 20 : 0 }}>
-      <div className={mode === "cloud" ? "" : "promptInputShell"}><div className={mode === "cloud" ? "" : "promptEditor"}>
-        {mode === "private" && <div className="promptHighlight" aria-hidden="true">{draft}</div>}
-        <PromptTextarea value={draft} aria-label="Prompt" onChange={event => setDraft(event.target.value)} previewCaret={draft.length}
-          dictation={{ state: recording ? "recording" : "idle", preview: recording ? text : "", level: 0, error: null }}/>
-      </div></div>
+    <div className={mode === "cloud" ? "" : "composer"} style={{ marginTop: 36, position: "relative", width: "100%", bottom: "auto" }}>
+      <div className={`promptInputShell ${mode === "cloud" ? "cloudDock" : ""}`}>
+        <div className="promptAttachmentStrip"/>
+        <div className="promptEditor">
+          {mode === "private" && <div className="promptHighlight promptTextLayout" aria-hidden="true">{draft}</div>}
+          <PromptTextarea value={draft} aria-label="Prompt" onChange={event => setDraft(event.target.value)} previewCaret={draft.length}
+            dictation={{ state: recording ? "recording" : "idle", preview: recording ? text : "", level: 0, error: null }}/>
+        </div>
+        <div className="promptActionRail"/>
+      </div>
     </div>
   </main>;
 }

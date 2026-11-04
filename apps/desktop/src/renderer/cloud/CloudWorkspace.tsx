@@ -2,8 +2,8 @@ import { useCloudChats } from "./useCloudChats";
 import { CloudChatArchive } from "./CloudChatArchive";
 import { type WorkspaceSurfaceProps } from "../WorkspaceNavigation";
 import React, { useMemo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Send, Paperclip, PanelRight, RotateCcw, Square, Settings2 } from "lucide-react";
-import type { DesktopApi, RepositoryInfo } from "../../shared/desktopApi";
+import { Send, Paperclip, RotateCcw, Square } from "lucide-react";
+import type { DesktopApi, RepositoryInfo, IdeInfo } from "../../shared/desktopApi";
 import { modelChoiceError, type CloudImage, type CloudSettings, type CloudChatRecord, type CloudProvider } from "../../shared/cloud";
 import type { ReviewFile } from "../../shared/reviewDiff";
 import { ReviewPanel } from "../review/ReviewPanel";
@@ -33,6 +33,8 @@ import { CloudUsageIndicator } from "./CloudUsage";
 import type { CloudConnectionController } from "./useCloudConnection";
 import type { SettingsTab } from "../SettingsNav";
 import { ComposerActionRail } from "../ComposerActionRail";
+import { WorkspaceHeader, WorkspaceIdePicker, WorkspaceReviewToggle, WorkspaceSettingsButton } from "../WorkspaceChrome";
+import { defaultIdeChoices } from "../previewSupport";
 import { ComposerGreeting } from "../composerChrome";
 
 export function CloudWorkspace({ api, settings, onSettings, active, navigation, onActivity, controllers, settingsVisible, cloudBusy, onOpenSettings }: {
@@ -54,6 +56,19 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [sendOnEnter, setSendOnEnter] = useState(true);
   const [pending, setPending] = useState(false);
+  const [ides, setIdes] = useState<IdeInfo[]>(defaultIdeChoices);
+  const [ideId, setIdeId] = useState(defaultIdeChoices[0].id);
+  const [ideOpen, setIdeOpen] = useState(false);
+  const selectedIde = ides.find(ide => ide.id === ideId) || ides[0] || defaultIdeChoices[0];
+  useEffect(() => { void api.listAvailableIdes().then(choices => { const available = choices.filter(ide => ide.id !== "cursor"); if (available.length) setIdes(available); }).catch(() => undefined); }, [api]);
+  useEffect(() => {
+    if (!ideOpen) return;
+    const outside = (event: PointerEvent) => { if (!(event.target instanceof Element) || !event.target.closest(".idePicker")) setIdeOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setIdeOpen(false); };
+    document.addEventListener("pointerdown", outside); document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
+  }, [ideOpen]);
+  useEffect(() => { if (!active) setIdeOpen(false); }, [active]);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewFiles, setReviewFiles] = useState<ReviewFile[]>([]);
@@ -190,7 +205,7 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
     "run.stop": () => { if (running && !pending && workspace) void action(() => api.stopCloudTurn({ key: workspace.key })); },
   }, !active || !!deleteChat || settingsVisible || resetOpen || feedbackOpen || !!attachmentPreview || !!filePreview, () => setReviewOpen(false));
 
-  return <div className={`cloudShell unifiedCloudShell ${/Mac/.test(navigator.platform) ? "macChrome" : ""}`}>
+  return <div className={`appShell cloudShell unifiedCloudShell ${/Mac/.test(navigator.platform) ? "macChrome" : ""}`}>
     <aside className="sidebar">
       {navigation}
       <div className="sidebarStack"><CloudChatArchive chats={chat.chats} projects={projects} activeKey={workspace?.key} loading={chat.loading}
@@ -198,22 +213,25 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
         onSelect={key => void chat.open({ provider, key })} onNew={ids => void chat.open({ provider, repositoryIds: ids || selectedIds }, true)}
         onAddFolder={() => void chooseFolders(false)} onDelete={setDeleteChat}/></div>
       <div className="sidebarFooter">
-        <ShortcutTooltip id="app.settings"><button className="settingsPlaceholder" onClick={() => openSettings()}><Settings2 size={16}/><span>Settings</span></button></ShortcutTooltip>
+        <WorkspaceSettingsButton onClick={() => openSettings()}/>
       </div>
     </aside>
-    <header className="cloudTopbar">
-      <div className="workspaceHeaderIdentity"><strong>{chat.chats.find(row => row.key === workspace?.key)?.title || "New chat"}</strong><small>{repositories.map(project => project.name).join(" · ") || "No folder selected"}</small></div>
-      {repositories.some(project => indexingPaths.has(project.rootPath)) && <span className="workspaceIndexing" role="status"><span className="workspaceIndexingSpinner" aria-hidden="true"/>Indexing workspace…</span>}
-      <div className="cloudTopbarSpacer"/>
-      {gitRepositories.length > 0 && <ShortcutTooltip id="review.toggle" label={reviewOpen ? "Hide review" : "Open review"} placement="bottom"><button className="cloudIconButton" aria-label={reviewOpen ? "Hide review" : "Open review"} aria-pressed={reviewOpen} onClick={() => setReviewOpen(!reviewOpen)}><PanelRight size={18}/></button></ShortcutTooltip>}
-    </header>
-    <main className={`cloudMain ${reviewOpen ? "withReview" : ""}`}>
+    <main className="workspace">
+        <WorkspaceHeader title={chat.chats.find(row => row.key === workspace?.key)?.title || "New chat"} meta={<span>{repositories.map(project => project.name).join(" · ") || "No folder selected"}</span>} indexing={repositories.some(project => indexingPaths.has(project.rootPath))}>
+          <WorkspaceIdePicker choices={ides} selected={selectedIde} disabled={!repositories.length} open={ideOpen && !!repositories.length}
+            title={repositories.length ? `Open ${repositories[0].name} in ${selectedIde.label}` : "Select a folder first"}
+            onToggle={() => setIdeOpen(open => !open)} onSelect={id => { setIdeId(id); setIdeOpen(false); }}
+            onOpen={() => { setIdeOpen(false); void action(async () => { const result = await api.openRepositoryInIde({ repositoryId: repositories[0].id, ideId: selectedIde.id }); if (!result.ok) throw new Error(result.message); }); }}/>
+          <WorkspaceReviewToggle open={reviewOpen} onClick={() => setReviewOpen(open => !open)}/>
+        </WorkspaceHeader>
+    <section className={`workArea cloudMain ${reviewOpen ? "withReview" : ""}`}>
       <div className={`cloudWorkColumn ${!workspace?.entries.length ? "isEmpty" : ""}`}>
-        <div className="cloudCanvas" ref={scroller} onScroll={event => { const element = event.currentTarget; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100; }}>
+
+        <div className="cloudCanvas composerBody" ref={scroller} onScroll={event => { const element = event.currentTarget; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100; }}>
           {!workspace?.entries.length ? <ComposerGreeting label="What are we working on?"/> : <CloudTimeline workspace={workspace} onLocalFile={(path, line) => setFilePreview({ path, line })} onReviewFile={openReviewFile}/>}
           {workspace?.approvals.map(approval => <CloudApprovalCard key={approval.id} approval={approval} onRespond={(allow, answers) => api.respondCloudApproval({ key: workspace.key, id: approval.id, allow, answers })}/>)}
         </div>
-        <div className="cloudDockArea">
+        <div className="promptDock cloudDockArea">
           <form className="cloudDock promptInputShell" onSubmit={event => { event.preventDefault(); void submit(); }} onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); void attach(Array.from(event.dataTransfer.files)); } }}>
             <div className="promptAttachmentStrip"><AttachmentPreviewList files={images.map(cloudImageAttachment)} mode="composer" onOpen={file => setAttachmentPreview(images.find(image => `${image.id}${image.extension || ".png"}` === file.path))} onRemove={file => setImages(current => current.filter(image => `${image.id}${image.extension || ".png"}` !== file.path))}/>{feedback.length > 0 && <ReviewFeedbackChip count={feedback.length} onClick={() => setFeedbackOpen(true)}/>}</div>
             <div className="promptEditor"><PromptTextarea disabled={chat.loading} dictation={dictation.status} previewCaret={promptCaret.current} ref={composer} aria-label="Give an instruction" placeholder="What should we build today?" value={prompt} maxLength={100_000} onSelect={event => { promptCaret.current = event.currentTarget.selectionStart; }} onChange={event => setPrompt(event.target.value)} onPaste={event => {
@@ -256,6 +274,7 @@ export function CloudWorkspace({ api, settings, onSettings, active, navigation, 
           undoUnavailableReason="" selectedIdeLabel="Editor" onClose={() => setReviewOpen(false)} onUndoFile={() => undefined} onUndoAll={() => undefined} onOpenFile={() => undefined} onScopeChange={() => undefined} onResizePointerDown={() => undefined} onResizeKeyDown={() => undefined}
           onAddFeedback={comments => { setFeedback(current => [...current, ...comments.map(comment => ({ ...comment, filePath: gitRepositories.length > 1 ? `${reviewRepository!.rootPath}/${comment.filePath}` : comment.filePath }))]); composer.current?.focus(); }}
           onLoadDocumentReview={async () => ({ ok: false, code: "not_available", message: "Open this document in its native app to preview it." })}/>}</aside>}
+    </section>
     </main>
     {active && deleteChat && <CloudResetDialog deleting count={deleteChat.length} busy={pending} onCancel={() => setDeleteChat(null)} onReset={() => void action(async () => { await chat.remove(deleteChat.map(chat => chat.key)); setDeleteChat(null); })}/>}
     <ErrorToast message={error || dictation.status.error || null} onDismiss={() => { setError(""); dictation.dismissError(); }}/>

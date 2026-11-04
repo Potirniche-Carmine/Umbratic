@@ -6,6 +6,7 @@ import { WorkspaceNavigation, type WorkspaceActivity, type WorkspaceProvider, ty
 import { useCloudConnection } from "./useCloudConnection";
 import { CloudSettingsPanel } from "./CloudSettingsPanel";
 import type { SettingsTab } from "../SettingsNav";
+import { WorkspaceSidebarResize } from "../WorkspaceChrome";
 import { CloudWorkspace } from "./CloudWorkspace";
 
 const selectionKey = "umbratic.workspace-provider";
@@ -18,6 +19,12 @@ function initialProvider(settings: CloudSettings): WorkspaceProvider {
 }
 
 export function WorkspaceRoot({ api, renderPrivate }: { api: DesktopApi; renderPrivate(props: LocalWorkspaceSurfaceProps): React.ReactNode }) {
+  const [sidebarWidth, setSidebarWidth] = useState(246);
+  useEffect(() => {
+    const resize = () => setSidebarWidth(width => Math.min(width, Math.max(196, Math.min(300, Math.round(window.innerWidth * .34)))));
+    resize(); window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
   const [settings, setSettings] = useState<CloudSettings | null>(null);
   const [provider, setProvider] = useState<WorkspaceProvider>("local");
   const [visited, setVisited] = useState<Set<WorkspaceProvider>>(new Set());
@@ -60,8 +67,8 @@ export function WorkspaceRoot({ api, renderPrivate }: { api: DesktopApi; renderP
   const controllers = { codex, claude };
   const providerSettings = <CloudSettingsPanel settings={settings} controllers={controllers} busy={activity.codex !== "idle" || activity.claude !== "idle"} onSave={save}/>;
   const openSettings = (tab: SettingsTab) => setSettingsRequest(current => ({ id: (current?.id || 0) + 1, tab }));
-  const navigation = <WorkspaceNavigation provider={provider} activity={activity} onSelect={select}/>;
-  return <div className="unifiedWorkspace">
+  const navigation = <><WorkspaceNavigation provider={provider} activity={activity} onSelect={select}/><WorkspaceSidebarResize width={sidebarWidth} onChange={setSidebarWidth}/></>;
+  return <div className="unifiedWorkspace" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-reserved-width": `${sidebarWidth}px` } as React.CSSProperties}>
     <div className="workspaceSurface" hidden={provider !== "local"} inert={provider !== "local"}>
       {renderPrivate({ active: provider === "local", navigation, onActivity: state => reportActivity("local", state), settingsRequest, providerSettings, onSettingsVisibility: setSettingsVisible })}
     </div>

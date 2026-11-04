@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useId, useRef, useState } from "react";
 import { Check, Folder, FolderOpen, Plus } from "lucide-react";
 import { compactPath } from "./compactPath";
 import { Tooltip } from "./Tooltip";
@@ -8,13 +8,17 @@ export function WorkspaceFolderPicker({ projects, selectedIds, disabled, onChang
   projects: RepositoryInfo[]; selectedIds: string[]; disabled: boolean; multiple?: boolean;
   onChange(ids: string[]): void; onAdd(): void;
 }) {
+  const id = useId();
   const menu = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [pendingIds, setPendingIds] = useState(selectedIds);
   const selected = projects.filter(project => selectedIds.includes(project.id)).sort((a, b) => a.rootPath < b.rootPath ? -1 : a.rootPath > b.rootPath ? 1 : 0);
   return <div className="cloudFolderPicker">
-    <Tooltip content="Workspace folders" placement="bottom" disabled={open}><button ref={trigger} type="button" className="workspaceControl" aria-label="Workspace folders" aria-expanded={open} aria-haspopup="dialog" disabled={disabled} onClick={event => {
+    <Tooltip content="Workspace folders" placement="bottom" disabled={open}><button ref={trigger} type="button" className="workspaceControl" aria-label="Workspace folders" aria-expanded={open} aria-haspopup="dialog" aria-controls={id} popoverTarget={id} disabled={disabled} onClick={event => {
+      // Associate the trigger with its popover so light-dismiss does not close
+      // it on pointerdown before this click can toggle it closed.
+      event.preventDefault();
       const element = menu.current!;
       if (element.matches(":popover-open")) { element.hidePopover(); return; }
       setPendingIds(selectedIds);
@@ -22,7 +26,7 @@ export function WorkspaceFolderPicker({ projects, selectedIds, disabled, onChang
       element.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - 292))}px`; element.style.top = "auto"; element.style.bottom = `${window.innerHeight - rect.top + 8}px`; element.style.maxHeight = `${Math.max(120, rect.top - 20)}px`; element.showPopover();
       if (event.detail === 0) element.querySelector<HTMLButtonElement>("[role=checkbox]")?.focus();
     }}><FolderOpen size={14}/><strong>{selected.length ? selected.map(project => project.name).join(" · ") : "Select folder"}</strong></button></Tooltip>
-    <div ref={menu} popover="auto" role="dialog" aria-label="Workspace folders" className="cloudFoldersMenu" onToggle={event => setOpen(event.newState === "open")} onKeyDown={event => {
+    <div id={id} ref={menu} popover="auto" role="dialog" aria-label="Workspace folders" className="cloudFoldersMenu" onToggle={event => setOpen(event.newState === "open")} onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); menu.current?.hidePopover(); trigger.current?.focus(); return; }
       if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
       const buttons = Array.from(menu.current!.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));

@@ -21,7 +21,7 @@ export function WorkspaceNavigation({ provider, activity, onSelect }: {
     <div className="workspaceIdentity"><span className="topbarLogo" aria-hidden="true"/><span>Umbratic</span></div>
     <nav aria-label="Chat providers" className="workspaceProviders">
       {(["codex", "claude", "local"] as const).map(id => <button type="button" key={id}
-        className={`workspaceProvider ${provider === id ? "isSelected" : ""}`} aria-current={provider === id ? "page" : undefined} onClick={() => onSelect(id)}>
+        className={`workspaceProvider ${provider === id ? "isSelected" : ""}`} aria-label={workspaceProviderLabels[id]} aria-current={provider === id ? "page" : undefined} onClick={() => onSelect(id)}>
         <span className="workspaceProviderIcon">{id === "local" ? <Monitor size={17}/> : cloudProviderIcons[id]}</span>
         <span>{workspaceProviderLabels[id]}</span>
         {activity[id] !== "idle" && <span className={`workspaceActivity is-${activity[id]}`} role="status" aria-label={`${workspaceProviderLabels[id]} ${activity[id] === "waiting" ? "needs your attention" : "is working"}`}/>}

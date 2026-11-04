@@ -910,5 +910,6 @@ button.attachmentPreview:focus-visible {
 }
 
 /* The shared text input grows before scrolling, including in Cloud. */
-.promptTextarea { display: block; box-sizing: border-box; width: 100%; min-height: 56px; max-height: min(340px, 40dvh); field-sizing: content; resize: none; overflow-y: auto; font: inherit; line-height: 1.5; border: 0; background: transparent; outline: none; }
+.promptTextarea { display: block; box-sizing: border-box; width: 100%; min-height: 56px; max-height: min(340px, 40dvh); field-sizing: content; resize: none; overflow-y: auto; font: inherit; line-height: 1.5; border: 0; color: var(--text); background: transparent; outline: none; }
+.promptTextarea::placeholder { color: var(--faint); opacity: 1; }
 .promptTextarea:focus, .promptTextarea:focus-visible { outline: none !important; box-shadow: none; }

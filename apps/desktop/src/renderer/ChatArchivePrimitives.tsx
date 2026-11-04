@@ -7,7 +7,7 @@ export function ChatArchiveToolbar({ query, disabled, onQueryChange, onNew, onAd
 }) {
   return <>
     <div className="workspaceArchiveActions">
-      <ShortcutTooltip id="chat.new" placement="bottom"><button className="workspaceNewChat" type="button" disabled={disabled} onClick={onNew}><SquarePen size={16}/><span>New chat</span></button></ShortcutTooltip>
+      <ShortcutTooltip id="chat.new" placement="bottom"><button className="workspaceNewChat" type="button" aria-label="New chat" disabled={disabled} onClick={onNew}><SquarePen size={16}/><span>New chat</span></button></ShortcutTooltip>
       <button className="cloudIconButton" type="button" disabled={disabled} onClick={onAddFolder} aria-label="New project" title="New project"><FolderPlus size={17}/></button>
     </div>
     <label className="workspaceChatSearch"><Search size={14}/><input aria-label="Search chats" placeholder="Search chats" value={query} onChange={event => onQueryChange(event.target.value)}/></label>

@@ -115,7 +115,6 @@ import {
   MessageSquareText,
   Mic,
   MicOff,
-  PanelRight,
   Paperclip,
   Play,
   RotateCw,
@@ -211,7 +210,7 @@ import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
 import { ConnectionNotice } from "./connectionNotice";
 import { ErrorToast } from "./errorToast";
-import { IdeIcon } from "./ideLogos";
+import { WorkspaceHeader, WorkspaceIdePicker, WorkspaceReviewToggle, WorkspaceSettingsButton } from "./WorkspaceChrome";
 
 export const streamingMarkdownRenderBatchIntervalMs = 50;
 const maxCachedTaskEventGroups = 24;
@@ -259,14 +258,10 @@ export function takeBatchedBackendEvents(pendingEvents: BackendUiEvent[]): Backe
   return pendingEvents.splice(0);
 }
 
-const sidebarDefaultWidth = 246;
-const sidebarMinWidth = 196;
-const sidebarMaxWidth = 300;
 const reviewMinWidth = 360;
 const reviewDefaultWidth = 440;
 const reviewOpenWidthRatio = 0.65;
 const reviewMaxWidthRatio = 0.95;
-const sidebarMaxRatio = 0.34;
 /// Every control that opens the review panel. A pointerdown on one of these is
 /// not a click away from the panel: the button's own click lands after the
 /// pointerdown, so closing here would only make it reopen what had just
@@ -381,7 +376,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
-  const [sidebarWidth, setSidebarWidth] = useState(sidebarDefaultWidth);
   const [reviewWidth, setReviewWidth] = useState(reviewDefaultWidth);
   const [reviewHasSessionWidth, setReviewHasSessionWidth] = useState(false);
   const [showElevatedPermissionsDialog, setShowElevatedPermissionsDialog] = useState(false);
@@ -821,9 +815,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
   );
   const chatJumpNumbersById = useMemo(() => chatJumpNumbers(visibleChats), [visibleChats]);
   const layoutStyle = {
-    "--sidebar-width": `${sidebarWidth}px`,
-    "--sidebar-reserved-width": `${sidebarWidth}px`,
-    "--sidebar-visual-gap": `${Math.max(0, sidebarDefaultWidth - sidebarWidth)}px`,
     "--review-width": `${reviewWidth}px`,
   } as React.CSSProperties;
   const reviewLayoutOpen = reviewOpen || reviewClosing;
@@ -2461,61 +2452,9 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
       owner === "composer"
         ? `Open ${repository?.name ?? "folder"} in ${selectedIde.label}`
         : `Use ${selectedIde.label} for changed files`;
-    return (
-      <div className={`idePicker ${canOpen ? "" : "isDisabled"}`}>
-        <button
-          className="idePickerOpen"
-          type="button"
-          onClick={() => openIde(selectedIde.id)}
-          disabled={!canOpen}
-          title={canOpen ? openTitle : disabledTitle}
-        >
-          <IdeIcon icon={selectedIde.icon} />
-        </button>
-        <button
-          className="idePickerToggle"
-          type="button"
-          onClick={() => toggleIdeMenu(owner)}
-          disabled={!canOpen}
-          aria-expanded={expanded}
-          aria-haspopup="menu"
-          title={canOpen ? "Choose editor" : disabledTitle}
-        >
-          <ChevronDown size={13} />
-        </button>
-        {expanded ? (
-          <div className="ideMenu" role="menu" onKeyDown={(event) => {
-            const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("[role='menuitem']"));
-            const index = items.indexOf(document.activeElement as HTMLButtonElement);
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-              event.preventDefault();
-              items[(index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
-            } else if (event.key === "Home") { event.preventDefault(); items[0]?.focus(); }
-            else if (event.key === "End") { event.preventDefault(); items.at(-1)?.focus(); }
-          }}>
-            {availableIdes.map((ide) => (
-              <button
-                className={ide.id === selectedIde.id ? "active" : ""}
-                key={ide.id}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setSelectedIdeId(ide.id);
-                  setIdeMenuOpen(null);
-                }}
-              >
-                <IdeIcon icon={ide.icon} />
-                <span>{ide.label}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  function sidebarMaxAvailableWidth() {
-    return clamp(Math.round(window.innerWidth * sidebarMaxRatio), sidebarMinWidth, sidebarMaxWidth);
+    return <WorkspaceIdePicker choices={availableIdes} selected={selectedIde} disabled={!canOpen} open={expanded}
+      title={canOpen ? openTitle : disabledTitle} onOpen={() => void openIde(selectedIde.id)} onToggle={() => toggleIdeMenu(owner)}
+      onSelect={id => { setSelectedIdeId(id); setIdeMenuOpen(null); }}/>;
   }
 
   function reviewMaxWidth() {
@@ -3326,15 +3265,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
     }
   }
 
-  function beginSidebarResize(event: React.PointerEvent<HTMLDivElement>) {
-    const startX = event.clientX;
-    const startWidth = sidebarWidth;
-    trackPanelResize(event,
-      (clientX) => setSidebarWidth(clamp(startWidth + clientX - startX, sidebarMinWidth, sidebarMaxAvailableWidth())),
-      () => setSidebarWidth((current) => clamp(current, sidebarMinWidth, sidebarMaxAvailableWidth())),
-    );
-  }
-
   function beginReviewResize(event: React.PointerEvent<HTMLDivElement>) {
     if (!event.isPrimary || event.button !== 0) return;
     cancelReviewClose();
@@ -3376,7 +3306,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
 
       <aside className="sidebar">
         {navigation}
-        <div className="sidebarResizeHandle" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={sidebarMinWidth} aria-valuemax={sidebarMaxAvailableWidth()} aria-valuenow={Math.round(sidebarWidth)} aria-label="Sidebar width" onPointerDown={beginSidebarResize} onKeyDown={(event) => { const step = event.shiftKey ? 24 : 8; if (event.key === "ArrowLeft") { event.preventDefault(); setSidebarWidth((width) => clamp(width - step, sidebarMinWidth, sidebarMaxAvailableWidth())); } if (event.key === "ArrowRight") { event.preventDefault(); setSidebarWidth((width) => clamp(width + step, sidebarMinWidth, sidebarMaxAvailableWidth())); } }} />
         <div className="sidebarStack">
           <ChatArchive
             chatProjectGroups={chatProjectGroups} activeChatId={activeChatId}
@@ -3402,55 +3331,17 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
               <span>Restart to update</span>
             </button>
           ) : null}
-          <ShortcutTooltip id="app.settings">
-            <button
-              className="settingsPlaceholder"
-              type="button"
-              onClick={() => openSettings()}
-            >
-              <Settings size={16} />
-              <span>Settings</span>
-            </button>
-          </ShortcutTooltip>
+          <WorkspaceSettingsButton onClick={() => openSettings()}/>
         </div>
       </aside>
 
       <main className={`workspace ${approvalPending ? "approvalPending" : ""}`}>
         <section className="workArea">
           <section className="composerPanel">
-            <div className="composerHeader">
-              <div className="composerHeaderTitle">
-                <strong>{composerHeaderTitle}</strong>
-                <div className="composerHeaderMetaRow">
-                  <span>{composerHeaderMeta}</span>
-                  {remoteBadge ? <RemoteChatBadge name={remoteBadge.name} directory={remoteBadge.directory} /> : null}
-                </div>
-                {indexingThisWorkspace ? (
-                  <span className="workspaceIndexing" role="status">
-                    <span className="workspaceIndexingSpinner" aria-hidden="true" />
-                    Indexing this folder…
-                  </span>
-                ) : null}
-              </div>
-              <div className="composerHeaderActions">
-                {renderIdePicker("composer")}
-                <ShortcutTooltip
-                  id="review.toggle"
-                  label={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
-                  placement="bottom"
-                >
-                  <button
-                    className="chromeButton composerReviewToggle"
-                    type="button"
-                    onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}
-                    aria-pressed={reviewOpen && !reviewClosing}
-                    aria-label={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
-                  >
-                    <PanelRight size={15} />
-                  </button>
-                </ShortcutTooltip>
-              </div>
-            </div>
+            <WorkspaceHeader title={composerHeaderTitle} meta={<><span>{composerHeaderMeta}</span>{remoteBadge ? <RemoteChatBadge name={remoteBadge.name} directory={remoteBadge.directory}/> : null}</>} indexing={indexingThisWorkspace}>
+              {renderIdePicker("composer")}
+              <WorkspaceReviewToggle open={reviewOpen} closing={reviewClosing} onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}/>
+            </WorkspaceHeader>
             <div
               className="composerBody"
               ref={streamRef}
@@ -3866,7 +3757,7 @@ item.reviewFeedback.length ? (
                 <AttachmentPreviewList files={pickedAttachments} mode="composer" onRemove={removeAttachment} onOpen={openMessageAttachment} />
               </div>
               <div className="promptEditor">
-                <div className="promptHighlight" aria-hidden="true">
+                <div className="promptHighlight promptTextLayout" aria-hidden="true">
                   <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
                     {renderPromptHighlights(prompt, attachedFiles, skills)}
 

@@ -442,11 +442,8 @@
   .dictationControl.isRecording { background: color-mix(in srgb, var(--red) 12%, var(--surface-2)); border-color: var(--red); }
 }
 
-.promptSpeechSurface { position: relative; min-width: 0; font: inherit; }
+.promptTextSurface { position: relative; min-width: 0; font: inherit; }
 .promptSpeechSurface .isSpeechPreview { color: transparent !important; -webkit-text-fill-color: transparent; caret-color: transparent; }
 .promptSpeechPreview { position: absolute; inset: 0; overflow: hidden; pointer-events: none; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; color: var(--text); }
 .promptSpeechInterim { color: color-mix(in srgb, var(--muted) 80%, var(--bg)); }
 .promptEditor:has(.promptSpeechSurface) > .promptHighlight { visibility: hidden; }
-.cloudDock .promptSpeechPreview { padding: 0 3px 12px; font-size: 15px; line-height: 1.6; }
-
-.composer .promptSpeechPreview { padding: 9px 14px 11px; scrollbar-gutter: stable; word-break: break-word; }
