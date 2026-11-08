@@ -6,7 +6,7 @@ import type { ComposerTimelineItem } from "./rendererTypes";
 type AssistantItem = Extract<ComposerTimelineItem, { type: "assistant" }>;
 
 type AssistantMessageProps = {
-  item: AssistantItem;
+  item: Pick<AssistantItem, "text" | "final">;
   /** False while the run is still going: an answer is not finished being written. */
   settled: boolean;
   /** The turn's answer text, which is what copying a response should yield. */

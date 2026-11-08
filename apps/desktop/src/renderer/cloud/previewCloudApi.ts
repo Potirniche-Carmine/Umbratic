@@ -1,6 +1,6 @@
 import { previewCloudConversation } from "./previewCloudConversation";
 import { previewCodexModels } from "./previewCodexModels";
-import { defaultCloudSettings, type CloudApi, type CloudConnection, type CloudProvider, type CloudWorkspace } from "../../shared/cloud";
+import { defaultCloudSettings, type CloudApi, type CloudConnection, type CloudProvider, type CloudWorkspace, type CloudImage } from "../../shared/cloud";
 
 /** Browser-only design fixtures. Never installs, starts, or authenticates a runtime. */
 export function createPreviewCloudApi(): CloudApi {
@@ -30,12 +30,16 @@ export function createPreviewCloudApi(): CloudApi {
     };
   }
   const chats = new Map<string, CloudWorkspace>();
+  const images = new Map<string, CloudImage>();
   const emptyChat = (provider: CloudProvider, key = `preview-${provider}`): CloudWorkspace => ({ key, chatId: key, provider, path: "/preview", state: "idle", compactions: 0, entries: [], approvals: [] });
   return {
     listCloudChats: async ({ provider }) => [...chats.values()].filter(chat => chat.provider === provider).map(chat => ({ key: chat.key, provider, title: chat.entries[0]?.text || "New chat", paths: [chat.path], state: chat.state, updatedAt: chat.lastActiveAt || "" })),
     createCloudChat: async ({ provider }) => { const chat = emptyChat(provider, crypto.randomUUID()); chats.set(chat.key, chat); return chat; },
     deleteCloudChat: async ({ key }) => { chats.delete(key); },
     readCloudFile: async ({ path }) => { if (sourceFixture && ["/preview/core/monitor.c", "/preview/main.c"].includes(path)) return { path, text: sourceText }; throw new Error("Open the desktop app to preview workspace files."); },
+    installCloudBrowser: async () => { throw new Error("Open the desktop app to install the browser."); },
+    listCloudAllowedCommands: async () => [],
+    revokeCloudAllowedCommand: async () => undefined,
     getCloudSettings: async () => settings,
     saveCloudSettings: async value => { settings = value; return settings; },
     inspectCloudProvider: async ({ provider }) => connection(provider),
@@ -44,16 +48,20 @@ export function createPreviewCloudApi(): CloudApi {
     disconnectCloudProvider: async ({ provider }) => { state[provider] = "sign_in"; return connection(provider); },
     signInCloudProvider: async ({ provider }) => { if (params.get("login") !== "pending") state[provider] = "ready"; return { message: "Preview connection" }; },
     pickCloudFolders: async () => [],
-    saveCloudImages: async ({ files }) => files.map(file => ({ id: crypto.randomUUID(), name: file.name, mimeType: file.mimeType || "image/png", previewDataUrl: file.dataUrl })),
+    saveCloudImages: async ({ files }) => files.map(file => {
+      const image = { id: crypto.randomUUID(), name: file.name, mimeType: file.mimeType || "image/png", previewDataUrl: file.dataUrl };
+      images.set(image.id, image); return image;
+    }),
     getCloudWorkspace: async ({ provider, key }) => key && chats.has(key) ? chats.get(key)! : ({ key: `preview-${provider}`, provider, path: "/preview", state: "idle", compactions: 0, entries: sourceFixture ? [
       { id: "source-prompt", kind: "instruction", at: new Date().toISOString(), text: "Show me how the monitor synchronizes data." },
       { id: "source-answer", kind: "answer", at: new Date().toISOString(), text: "The monitor reads configuration, then publishes status and audit records.\n\n```mermaid\nflowchart LR\n C[Config databases] -->|Settings and control commands| M[Local monitor database]\n M -->|Status and sync progress| C\n M -->|Alerts and scan results| A[Audit databases]\n M -->|Standards data| S[Standard databases]\n```\n\nThe connection check is in [monitor.c](/preview/core/monitor.c:16). See [main.c](/preview/main.c) for the complete file.\n\n```c\n" + sourceText + "```" },
     ] : [], approvals: [] }),
     startCloudTurn: async () => { throw new Error("This is a design preview. Open the desktop app to start work."); },
+    sendCloudFollowUp: async () => { throw new Error("Open the conversation preview to try queued prompts and steering."); },
+    removeCloudQueuedPrompt: async () => { throw new Error("Open the conversation preview to edit queued prompts."); },
     stopCloudTurn: async () => undefined,
-    resetCloudContext: async () => { throw new Error("No runtime is connected in this preview."); },
     respondCloudApproval: async () => undefined,
     onCloudWorkspace: () => () => undefined,
-    ...(conversationFixture ? previewCloudConversation() : {}),
+    ...(conversationFixture ? previewCloudConversation(images) : {}),
   };
 }

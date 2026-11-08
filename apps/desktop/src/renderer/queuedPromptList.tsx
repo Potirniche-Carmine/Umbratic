@@ -2,9 +2,7 @@ import React from "react";
 import { CornerUpRight, MessageSquareText, Pencil, Trash2 } from "lucide-react";
 
 import { visibleReviewPrompt, type ReviewFeedbackReference } from "./review/reviewComments";
-import type { QueuedComposerPrompt } from "./rendererTypes";
-
-export function QueuedPromptList({
+export function QueuedPromptList<T extends { id: string; prompt: string }>({
   items,
   isGenerating,
   steerPending,
@@ -12,14 +10,16 @@ export function QueuedPromptList({
   onSteer,
   onDelete,
   onPreviewFeedback,
+  sendWhenIdle = false,
 }: {
-  items: QueuedComposerPrompt[];
+  items: T[];
   isGenerating: boolean;
   steerPending: boolean;
-  onEdit: (item: QueuedComposerPrompt) => void;
-  onSteer: (item: QueuedComposerPrompt) => void;
+  onEdit: (item: T) => void;
+  onSteer: (item: T) => void;
   onDelete: (id: string) => void;
   onPreviewFeedback: (feedback: ReviewFeedbackReference[]) => void;
+  sendWhenIdle?: boolean;
 }) {
   if (!items.length) return null;
   return (
@@ -36,7 +36,7 @@ export function QueuedPromptList({
               aria-label="Edit queued prompt"
               title="Edit queued prompt"
             >
-              <span className="queuedPromptText">{visiblePrompt.text || item.prompt}</span>
+              <span className="queuedPromptText">{visiblePrompt.text || item.prompt || "Attached files"}</span>
               <Pencil className="queuedPromptEditIcon" aria-hidden="true" size={13} />
             </button>
             {visiblePrompt.feedback.length ? (
@@ -51,16 +51,16 @@ export function QueuedPromptList({
                 <span>{visiblePrompt.feedback.length}</span>
               </button>
             ) : null}
-            {isGenerating ? (
+            {isGenerating || sendWhenIdle ? (
               <button
                 className="queuedPromptSteer"
                 type="button"
                 onClick={() => onSteer(item)}
                 disabled={steerPending}
-                aria-label="Steer with queued prompt"
+                aria-label={isGenerating ? "Steer with queued prompt" : "Send queued prompt"}
               >
                 <CornerUpRight size={13} />
-                <span>Steer</span>
+                <span>{isGenerating ? "Steer" : "Send"}</span>
               </button>
             ) : null}
             <button

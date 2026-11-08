@@ -1,4 +1,4 @@
-import type { CloudSettings, CloudWorkspace, CloudWorkspaceInput, CloudProvider } from "../shared/cloud";
+import type { CloudSettings, CloudWorkspace, CloudWorkspaceInput, CloudProvider, CloudFollowUpInput } from "../shared/cloud";
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 import type { BackendUiEvent } from "../shared/backendEvents";
 import type {
@@ -53,6 +53,9 @@ function invoke(channel: string, ...args: unknown[]): Promise<any> {
 }
 
 const umbraticApi = {
+  installCloudBrowser: () => invoke("umbratic:install-cloud-browser"),
+  listCloudAllowedCommands: () => invoke("umbratic:list-cloud-allowed-commands"),
+  revokeCloudAllowedCommand: (input: { id: string }) => invoke("umbratic:revoke-cloud-allowed-command", input),
   getCloudSettings: () => invoke("umbratic:get-cloud-settings"),
   saveCloudSettings: (input: CloudSettings) => invoke("umbratic:save-cloud-settings", input),
   inspectCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:inspect-cloud-provider", input),
@@ -68,9 +71,10 @@ const umbraticApi = {
   deleteCloudChat: (input: { key: string; provider: CloudProvider }) => invoke("umbratic:delete-cloud-chat", input),
   getCloudWorkspace: (input: CloudWorkspaceInput) => invoke("umbratic:get-cloud-workspace", input),
   startCloudTurn: (input: CloudWorkspaceInput & { prompt: string; imageIds?: string[] }) => invoke("umbratic:start-cloud-turn", input),
+  sendCloudFollowUp: (input: CloudFollowUpInput) => invoke("umbratic:send-cloud-follow-up", input),
+  removeCloudQueuedPrompt: (input: { key: string; id: string }) => invoke("umbratic:remove-cloud-queued-prompt", input),
   stopCloudTurn: (input: { key: string }) => invoke("umbratic:stop-cloud-turn", input),
-  resetCloudContext: (input: { key: string }) => invoke("umbratic:reset-cloud-context", input),
-  respondCloudApproval: (input: { key: string; id: string; allow: boolean; answers?: Record<string, string> }) => invoke("umbratic:respond-cloud-approval", input),
+  respondCloudApproval: (input: { key: string; id: string; allow: boolean; remember?: boolean; answers?: Record<string, string> }) => invoke("umbratic:respond-cloud-approval", input),
   onCloudWorkspace: (callback: (workspace: CloudWorkspace) => void) => {
     const listener = (_event: IpcRendererEvent, value: CloudWorkspace) => callback(value);
     ipcRenderer.on("umbratic:cloud-workspace", listener);

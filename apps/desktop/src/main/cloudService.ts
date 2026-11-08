@@ -1,3 +1,4 @@
+import { commandRule, allowedCloudCommand, rememberCloudCommand } from "./cloudCommandRules";
 import { cloudChatRecord, cloudWorkspaceKey, storedCloudWorkspaces } from "./cloudChatStore";
 import { cloudTurnPrompt, rememberCloudSession } from "../shared/cloudHandoff";
 import { resolveCloudImages } from "./cloudImages";
@@ -8,7 +9,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { contextResetReason, defaultCloudSettings, isCloudProvider, validateCloudSettings,
-  type CloudConnection, type CloudSettings, type CloudWorkspace, type CloudWorkspaceInput } from "../shared/cloud";
+  type CloudConnection, type CloudSettings, type CloudWorkspace, type CloudWorkspaceInput, type CloudFollowUpInput } from "../shared/cloud";
 import { withAppDatabase } from "./storageDatabase";
 import { readProjects } from "./storage";
 import { getMainWindow } from "./mainRuntime";
@@ -19,6 +20,7 @@ import type { ApprovalAnswer, CloudRun, CloudRuntimeSink } from "./cloudRuntimeT
 
 const workspaces = new Map<string, CloudWorkspace>();
 const runs = new Map<string, CloudRun>();
+const steering = new Map<string, Promise<void>>();
 const stopping = new Set<string>();
 const approvals = new Map<string, { key: string; resolve(value: ApprovalAnswer): void }>();
 const timers = new Map<string, NodeJS.Timeout>();
@@ -41,7 +43,7 @@ export function getCloudSettings(): CloudSettings {
   return defaultCloudSettings();
 }
 export function saveCloudSettings(input: CloudSettings): CloudSettings {
-  if (runs.size || cloudInstallInProgress() || disconnecting.size) throw new Error("Wait for the current work or installation to finish before changing settings.");
+  if (cloudInstallInProgress() || disconnecting.size) throw new Error("Wait for the installation or disconnection to finish before changing settings.");
   const settings = validateCloudSettings(input);
   writeStored("cloud:settings", settings);
   return settings;
@@ -115,6 +117,12 @@ export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
     const projects = readProjects();
     const scratch = fs.realpathSync(scratchDirectory());
     const roots = saved.paths || [saved.path];
+    if (saved.repositoryIds?.length === 0 && saved.scratchPath) {
+      const restored = workspaces.get(saved.key) || { ...saved, state: "idle" as const, approvals: [] };
+      fs.mkdirSync(saved.scratchPath, { recursive: true });
+      workspaces.set(saved.key, restored);
+      return structuredClone(restored);
+    }
     const ids = roots.filter(root => root !== scratch).map(root => {
       const project = projects.find(project => {
         try { return fs.realpathSync(project.rootPath) === root; } catch { return false; }
@@ -136,15 +144,20 @@ export function getCloudWorkspace(input: CloudWorkspaceInput): CloudWorkspace {
     return root;
   }))].sort();
   if (!paths.length) paths.push(fs.realpathSync(scratchDirectory()));
-  const directory = paths[0];
   const key = cloudWorkspaceKey(input.provider, paths, input.chatId);
+  let scratchPath = path.join(app.getPath("userData"), "cloud", "workspaces", key);
+  fs.mkdirSync(scratchPath, { recursive: true });
+  scratchPath = fs.realpathSync(scratchPath);
+  if (!ids.length) paths.splice(0, paths.length, fs.realpathSync(scratchPath));
+  const directory = paths[0];
   let workspace = workspaces.get(key);
   if (!workspace) {
     const record = readStored(`cloud:workspace:${key}`) as CloudWorkspace | undefined;
-    const stored = record?.key === key && record.provider === input.provider && record.path === directory && Array.isArray(record.entries) ? record : undefined;
+    const stored = record?.key === key && record.provider === input.provider && (record.path === directory || !ids.length && record.path === fs.realpathSync(scratchDirectory())) && Array.isArray(record.entries) ? record : undefined;
     workspace = stored
-      ? { ...stored, paths, repositoryIds: [...new Set(ids)], state: "idle", approvals: [] }
+      ? { ...stored, path: directory, paths, repositoryIds: [...new Set(ids)], state: "idle", approvals: [] }
       : { key, chatId: input.chatId, repositoryIds: [...new Set(ids)], provider: input.provider, path: directory, paths, compactions: 0, state: "idle", entries: [], approvals: [] };
+    workspace.scratchPath = scratchPath;
     if (stored && stored.state !== "idle") append(workspace, "context", "The previous run was interrupted when Umbratic closed. You can continue from its saved context.");
     if (workspace.sessionId && !workspace.sessions?.[workspace.provider]) rememberCloudSession(workspace);
     workspaces.set(key, workspace);
@@ -157,16 +170,22 @@ export function listCloudChats(input: { provider: import("../shared/cloud").Clou
   const all = new Map<string, CloudWorkspace>(storedCloudWorkspaces().map(workspace => [workspace.key, { ...workspace, state: "idle" as const }]));
   for (const [key, workspace] of workspaces) all.set(key, workspace);
   return [...all.values()].filter(workspace => workspace.provider === input.provider)
-    .filter(workspace => workspace.chatId || workspace.entries.length)
+    .filter(workspace => workspace.entries.length)
     .map(cloudChatRecord).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export function createCloudChat(input: CloudWorkspaceInput): CloudWorkspace {
-  const snapshot = getCloudWorkspace({ provider: input.provider, repositoryIds: input.repositoryIds, repositoryId: input.repositoryId, chatId: crypto.randomUUID() });
-  const workspace = requiredWorkspace(snapshot.key);
-  workspace.lastActiveAt = new Date().toISOString();
-  flush(workspace);
-  return structuredClone(workspace);
+  return getCloudWorkspace({ provider: input.provider, repositoryIds: input.repositoryIds, repositoryId: input.repositoryId, chatId: crypto.randomUUID() });
+}
+
+export function cloudProjectChats(projectId: string): CloudWorkspace[] {
+  const project = readProjects().find(project => project.id === projectId);
+  if (!project) throw new Error("Open the workspace folder again.");
+  const all = new Map(storedCloudWorkspaces().map(workspace => [workspace.key, workspace]));
+  for (const [key, workspace] of workspaces) all.set(key, workspace);
+  const matches = [...all.values()].filter(workspace => workspace.repositoryIds?.includes(projectId) || (workspace.paths || [workspace.path]).includes(project.rootPath));
+  if (matches.some(workspace => runs.has(workspace.key))) throw new Error("Stop the chats in this project before deleting it.");
+  return matches;
 }
 
 export function deleteCloudChat(input: { key: string; provider: import("../shared/cloud").CloudProvider }): void {
@@ -177,6 +196,8 @@ export function deleteCloudChat(input: { key: string; provider: import("../share
   deleteCloudHistory(workspace, workspaces.values());
   clearTimeout(timers.get(workspace.key)); timers.delete(workspace.key);
   workspaces.delete(workspace.key);
+  const scratch = path.join(app.getPath("userData"), "cloud", "workspaces", workspace.key);
+  if (/^[a-f0-9]{64}$/.test(workspace.key)) fs.rmSync(scratch, { recursive: true, force: true });
 }
 
 function append(workspace: CloudWorkspace, kind: CloudWorkspace["entries"][number]["kind"], text: string): void {
@@ -186,23 +207,13 @@ function append(workspace: CloudWorkspace, kind: CloudWorkspace["entries"][numbe
 function flush(workspace: CloudWorkspace): void {
   clearTimeout(timers.get(workspace.key)); timers.delete(workspace.key);
   if (closing) return;
-  writeStored(`cloud:workspace:${workspace.key}`, { ...workspace, approvals: [] });
+  if (workspace.entries.length) writeStored(`cloud:workspace:${workspace.key}`, { ...workspace, approvals: [] });
   getMainWindow()?.webContents.send("umbratic:cloud-workspace", workspace);
 }
 function publish(workspace: CloudWorkspace): void {
   workspace.lastActiveAt = new Date().toISOString();
   if (closing || timers.has(workspace.key)) return;
   timers.set(workspace.key, setTimeout(() => flush(workspace), 80));
-}
-function clearContext(workspace: CloudWorkspace, reason: string, pendingImageIds: string[] = []): void {
-  deleteCloudHistory(workspace, workspaces.values(), pendingImageIds);
-  workspace.sessions = undefined;
-  workspace.sessionId = undefined; workspace.account = undefined; workspace.lastActiveAt = undefined;
-  workspace.usage = undefined;
-  workspace.compactions = 0; workspace.contextWindow = undefined; workspace.inputTokens = undefined;
-  workspace.entries = []; workspace.approvals = [];
-  workspace.contextStartEntryId = undefined;
-  if (reason) append(workspace, "context", reason);
 }
 function requiredWorkspace(key: string): CloudWorkspace {
   const workspace = workspaces.get(key);
@@ -213,7 +224,7 @@ export function readCloudFile(input: { key: string; path: string }): { path: str
   const workspace = requiredWorkspace(input?.key);
   if (typeof input.path !== "string" || !input.path || input.path.includes("\0")) throw new Error("Choose a workspace file.");
   const target = fs.realpathSync(path.resolve(workspace.path, input.path));
-  if (!(workspace.paths || [workspace.path]).some(root => {
+  if (![...(workspace.paths || [workspace.path]), ...(workspace.scratchPath ? [workspace.scratchPath] : [])].some(root => {
     const relative = path.relative(fs.realpathSync(root), target);
     return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
   })) throw new Error("This file is outside the selected workspace folders.");
@@ -227,21 +238,13 @@ export function readCloudFile(input: { key: string; path: string }): { path: str
     return { path: target, text: new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytes)) };
   } finally { fs.closeSync(fd); }
 }
-export function resetCloudContext(input: { key: string }): CloudWorkspace {
-  const workspace = requiredWorkspace(input?.key);
-  if (runs.has(workspace.key)) throw new Error("Stop the current work before clearing context.");
-  clearContext(workspace, "");
-  flush(workspace);
-  return structuredClone(workspace);
-}
-
 export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; imageIds?: string[] }): CloudWorkspace {
   if (closing) throw new Error("Umbratic is closing.");
   if (typeof input?.prompt !== "string" || (!input.prompt.trim() && !input.imageIds?.length) || input.prompt.length > 100_000) throw new Error("Enter an instruction of up to 100,000 characters.");
   const images = resolveCloudImages(input.imageIds ?? []);
   const snapshot = getCloudWorkspace(input);
   const workspace = requiredWorkspace(snapshot.key);
-  if (runs.size || cloudInstallInProgress() || disconnecting.size) throw new Error("Finish or stop the current work or installation first.");
+  if (runs.has(workspace.key) || cloudInstallInProgress() || disconnecting.has(input.provider)) throw new Error("Finish or stop this chat or its installation first.");
   const settings = getCloudSettings();
   const reason = contextResetReason(workspace, settings);
   if (reason) {
@@ -250,9 +253,9 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
     workspace.contextStartEntryId = workspace.entries.at(-1)!.id;
   }
   const runtimePrompt = cloudTurnPrompt(workspace, input.prompt.trim());
+  const firstEntry = workspace.entries.length;
   workspace.lastActiveAt = new Date().toISOString();
   append(workspace, "instruction", input.prompt.trim());
-  const instruction = workspace.entries.at(-1)!;
   if (images.length) workspace.entries.at(-1)!.images = images.map(image => image.image);
   workspace.state = "running";
   function receiveText(id: string, text: string, additive: boolean, kind: "answer" | "thinking", phase?: import("../shared/cloud").CloudMessagePhase): void {
@@ -262,6 +265,12 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
     if (existing) {
       existing.text = (additive ? existing.text + text : text).slice(0, 1_000_000);
       if (phase) existing.phase = phase;
+      // Native providers may continue the same message after steering. Keep that
+      // response below the instruction it is now answering without duplicating it.
+      const index = workspace.entries.indexOf(existing);
+      if (workspace.entries.slice(index + 1).some(entry => entry.kind === "instruction")) {
+        workspace.entries.splice(index, 1); workspace.entries.push(existing);
+      }
     } else if (text) workspace.entries.push({ id: entryId, kind, text: text.slice(0, 1_000_000), phase, at: new Date().toISOString() });
     publish(workspace);
   }
@@ -272,7 +281,10 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
     },
     text(id, text, additive, phase) { receiveText(id, text, additive, "answer", phase); },
     thinking(id, text, additive) { receiveText(`thinking:${id}`, text, additive, "thinking"); },
-    complete() { instruction.completedAt ??= new Date().toISOString(); flush(workspace); },
+    complete() {
+      for (const entry of workspace.entries.slice(firstEntry)) if (entry.kind === "instruction") entry.completedAt ??= new Date().toISOString();
+      flush(workspace);
+    },
     activity(text, tool) {
       const id = tool ? `${workspace.sessionId}:tool:${tool.id}` : undefined;
       const existing = id ? workspace.entries.find(entry => entry.id === id) : undefined;
@@ -286,6 +298,12 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
     usage(contextWindow, inputTokens) { workspace.contextWindow = contextWindow; workspace.inputTokens = inputTokens; publish(workspace); },
     approval(request) {
       if (closing || !runs.has(workspace.key)) return Promise.resolve({ allow: false });
+      const rule = commandRule(workspace, request);
+      if (rule && allowedCloudCommand(rule)) {
+        append(workspace, "activity", `Allowed saved command: ${rule.command}`); publish(workspace);
+        return Promise.resolve({ allow: true });
+      }
+      if (!rule) request = { ...request, command: undefined };
       const id = crypto.randomUUID();
       workspace.approvals.push({ ...request, id }); workspace.state = "waiting"; publish(workspace);
       return new Promise(resolve => approvals.set(id, { key: workspace.key, resolve }));
@@ -293,15 +311,87 @@ export function startCloudTurn(input: CloudWorkspaceInput & { prompt: string; im
   };
   const run = runtime(input.provider).run(settings, structuredClone(workspace), runtimePrompt, sink, images);
   runs.set(workspace.key, run);
-  void run.done.then(() => rememberCloudSession(workspace))
+  let succeeded = false;
+  void run.done.then(() => { succeeded = true; })
     .catch(error => { if (!closing && !stopping.has(workspace.key)) append(workspace, "error", error instanceof Error ? error.message : "The runtime could not finish this work."); })
-    .finally(() => {
-      instruction.completedAt ??= new Date().toISOString();
-      if (stopping.delete(workspace.key)) append(workspace, "activity", "Work stopped.");
+    .finally(async () => {
+      await steering.get(workspace.key)?.catch(() => undefined);
+      if (succeeded) rememberCloudSession(workspace);
+      for (const entry of workspace.entries.slice(firstEntry)) if (entry.kind === "instruction") entry.completedAt ??= new Date().toISOString();
+      const stopped = stopping.delete(workspace.key);
+      if (stopped) append(workspace, "activity", "Work stopped.");
       for (const entry of workspace.entries) if (entry.tool?.status === "running") entry.tool.status = "stopped";
       denyApprovals(workspace.key); runs.delete(workspace.key); workspace.state = "idle";
-      workspace.lastActiveAt = new Date().toISOString(); flush(workspace);
+      workspace.lastActiveAt = new Date().toISOString();
+      // The service owns the queue, so switching providers or closing a view cannot lose a follow-up.
+      if (succeeded && !stopped && !closing && workspace.queuedPrompts?.length) {
+        const next = workspace.queuedPrompts.shift()!;
+        try { startCloudTurn({ provider: workspace.provider, key: workspace.key, prompt: next.prompt, imageIds: next.images.map(image => image.id) }); return; }
+        catch (cause) {
+          workspace.queuedPrompts.unshift(next);
+          append(workspace, "error", cause instanceof Error ? cause.message : "The queued prompt could not start.");
+        }
+      }
+      flush(workspace);
     });
+  flush(workspace);
+  return structuredClone(workspace);
+}
+
+export async function sendCloudFollowUp(input: CloudFollowUpInput): Promise<CloudWorkspace> {
+  if (closing) throw new Error("Umbratic is closing.");
+  if (input?.mode !== "queue" && input?.mode !== "steer") throw new Error("Choose whether to queue or steer this prompt.");
+  const workspace = requiredWorkspace(input.key);
+  const queued = input.queuedId ? workspace.queuedPrompts?.find(item => item.id === input.queuedId) : undefined;
+  if (input.queuedId && (!queued || input.mode !== "steer")) throw new Error("This queued prompt is no longer available.");
+  const prompt = queued?.prompt ?? input.prompt;
+  const imageIds = queued ? queued.images.map(image => image.id) : input.imageIds ?? [];
+  if (typeof prompt !== "string" || (!prompt.trim() && !imageIds.length) || prompt.length > 100_000) throw new Error("Enter an instruction of up to 100,000 characters.");
+  const images = resolveCloudImages(imageIds);
+  const run = runs.get(workspace.key);
+  if (!run) {
+    if (queued) {
+      workspace.queuedPrompts = workspace.queuedPrompts?.filter(item => item.id !== queued.id);
+      try { return startCloudTurn({ provider: workspace.provider, key: workspace.key, prompt, imageIds }); }
+      catch (cause) { workspace.queuedPrompts?.unshift(queued); throw cause; }
+    }
+    if (input.mode === "queue") return startCloudTurn({ provider: workspace.provider, key: workspace.key, prompt, imageIds });
+    throw new Error("This turn has finished. Send the prompt as a new turn.");
+  }
+  if (stopping.has(workspace.key)) throw new Error("Wait for the current work to stop.");
+  if (input.mode === "queue") {
+    workspace.queuedPrompts ??= [];
+    if (workspace.queuedPrompts.length >= 20) throw new Error("The queue is full. Wait for a prompt to finish or remove one.");
+    workspace.queuedPrompts.push({ id: crypto.randomUUID(), prompt: prompt.trim(), images: images.map(image => image.image) });
+    flush(workspace);
+  } else {
+    if (steering.has(workspace.key)) throw new Error("Wait for the previous steering message to send.");
+    const operation = (async () => {
+      append(workspace, "instruction", prompt.trim());
+      const entry = workspace.entries.at(-1)!;
+      if (images.length) entry.images = images.map(image => image.image);
+      publish(workspace);
+      try {
+        await run.steer(prompt.trim(), images);
+        if (queued) workspace.queuedPrompts = workspace.queuedPrompts?.filter(item => item.id !== queued.id);
+        flush(workspace);
+      } catch (cause) {
+        workspace.entries = workspace.entries.filter(item => item.id !== entry.id);
+        flush(workspace);
+        throw cause;
+      }
+    })();
+    steering.set(workspace.key, operation);
+    try { await operation; } finally { steering.delete(workspace.key); }
+  }
+  return structuredClone(workspace);
+}
+
+export function removeCloudQueuedPrompt(input: { key: string; id: string }): CloudWorkspace {
+  const workspace = requiredWorkspace(input?.key);
+  if (steering.has(workspace.key)) throw new Error("Wait for the steering message to send.");
+  if (!workspace.queuedPrompts?.some(item => item.id === input.id)) throw new Error("This queued prompt is no longer available.");
+  workspace.queuedPrompts = workspace.queuedPrompts.filter(item => item.id !== input.id);
   flush(workspace);
   return structuredClone(workspace);
 }
@@ -310,7 +400,7 @@ function denyApprovals(key: string): void {
   for (const [id, pending] of approvals) if (pending.key === key) { approvals.delete(id); pending.resolve({ allow: false }); }
   const workspace = workspaces.get(key); if (workspace) workspace.approvals = [];
 }
-export function respondCloudApproval(input: { key: string; id: string; allow: boolean; answers?: Record<string, string> }): void {
+export function respondCloudApproval(input: { key: string; id: string; allow: boolean; remember?: boolean; answers?: Record<string, string> }): void {
   const pending = approvals.get(input?.id);
   if (!pending || pending.key !== input.key || typeof input.allow !== "boolean") throw new Error("This approval is no longer pending.");
   const workspace = requiredWorkspace(input.key);
@@ -320,6 +410,11 @@ export function respondCloudApproval(input: { key: string; id: string; allow: bo
     const answer = input.answers?.[question.id];
     if (typeof answer !== "string" || !answer.trim() || answer.length > 10_000) throw new Error("Answer each question before continuing.");
     answers[question.id] = answer;
+  }
+  if (input.remember) {
+    const rule = input.allow && request ? commandRule(workspace, request) : undefined;
+    if (!rule) throw new Error("Only an approved command can be remembered.");
+    rememberCloudCommand(rule);
   }
   approvals.delete(input.id); workspace.approvals = workspace.approvals.filter(approval => approval.id !== input.id);
   workspace.state = workspace.approvals.length ? "waiting" : "running";

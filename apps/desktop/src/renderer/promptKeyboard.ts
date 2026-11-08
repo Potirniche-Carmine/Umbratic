@@ -1,7 +1,8 @@
 import { continueNumberedList, type ComposerTextInsertion } from "./composerText";
 
-export function promptEnterAction(input: { key: string; isComposing?: boolean; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; sendOnEnter: boolean; value: string; start: number; end: number }): { type: "send" } | { type: "insert"; insertion: ComposerTextInsertion } | null {
+export function promptEnterAction(input: { key: string; isComposing?: boolean; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; sendOnEnter: boolean; running?: boolean; value: string; start: number; end: number }): { type: "send" | "steer" | "queue" } | { type: "insert"; insertion: ComposerTextInsertion } | null {
   if (input.key !== "Enter" || input.isComposing) return null;
+  if (input.running) return { type: input.shiftKey ? "queue" : "steer" };
   if (input.metaKey || input.ctrlKey || input.sendOnEnter && !input.shiftKey) return { type: "send" };
   const numbered = continueNumberedList(input.value, input.start, input.end);
   if (numbered) return { type: "insert", insertion: numbered };

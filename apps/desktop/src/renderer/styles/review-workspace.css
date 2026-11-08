@@ -295,6 +295,7 @@
   position: relative;
   z-index: 4;
   display: flex;
+  flex-wrap: nowrap;
   min-height: 44px;
   align-items: center;
   gap: 10px;
@@ -332,7 +333,9 @@
 }
 
 .reviewSelectedName {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .reviewFileActions,
@@ -352,10 +355,12 @@
 
 .reviewSegmentedControl button {
   display: inline-flex;
-  min-height: 24px;
+  width: 30px;
+  min-height: 28px;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  padding: 0 8px;
+  padding: 0;
   border-radius: 6px;
   color: var(--faint);
   font-size: 10px;
@@ -372,19 +377,17 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
 }
 
-/* Sized for its longer label and centred, so switching between "Leave
-   feedback" and "Done" neither re-centres the word nor slides the layout
-   control beside it along the toolbar. */
 .reviewFeedbackModeButton {
   display: inline-flex;
-  min-width: 128px;
-  min-height: 28px;
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 0 10px;
+  padding: 0;
   border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
-  border-radius: 999px;
+  border-radius: 8px;
   color: var(--muted);
   font-size: 10.5px;
   font-weight: 680;

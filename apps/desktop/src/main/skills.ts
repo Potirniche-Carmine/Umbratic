@@ -249,9 +249,19 @@ function bundledSystemSkillsDirectory(): string {
 
 function bundledSystemSkillContent(id: string): string {
   const skillFile = path.join(bundledSystemSkillsDirectory(), id, "SKILL.md");
-  const content = readTextFileIfSafe(skillFile);
-  if (!content?.trim()) throw new Error(`System skill ${id} is missing or unreadable.`);
-  return content;
+  // Electron extracts an ASAR entry when opening a descriptor. Its real inode
+  // cannot match lstat's virtual archive inode, so the user-file reader rejects
+  // it. Read only our trusted bundled resources through Electron's ASAR API;
+  // installed and imported skills still use the strict descriptor checks.
+  try {
+    const stat = fs.statSync(skillFile);
+    if (!stat.isFile() || stat.size > skillFileByteLimit) throw new Error("Invalid bundled skill.");
+    const bytes = fs.readFileSync(skillFile);
+    if (bytes.length > skillFileByteLimit || bytes.includes(0) || !bytes.toString("utf8").trim()) throw new Error("Invalid bundled skill.");
+    return bytes.toString("utf8");
+  } catch {
+    throw new Error(`System skill ${id} is missing or unreadable.`);
+  }
 }
 
 function systemSkillById(id: string): SystemSkillDefinition | undefined {

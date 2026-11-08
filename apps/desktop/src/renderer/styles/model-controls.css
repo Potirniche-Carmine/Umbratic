@@ -50,6 +50,14 @@
   white-space: nowrap;
 }
 
+.modelTrigger > .composerReasoningEffort,
+.cloudModelTrigger > .composerReasoningEffort {
+  flex: 0 0 auto;
+  max-width: none;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
 .modelTrigger:hover:not(:disabled) {
   color: var(--text);
   background: var(--control-hover);

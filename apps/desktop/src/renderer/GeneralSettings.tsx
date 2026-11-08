@@ -77,7 +77,7 @@ export function GeneralSettingsPanel({
         />
         <ToggleRow
           title="Send with Enter"
-          description={sendOnEnter ? "Enter sends · Shift+Enter starts a new line" : "Enter starts a new line · ⌘/Ctrl+Enter sends"}
+          description={sendOnEnter ? "When idle, Enter sends · Shift+Enter starts a new line" : "When idle, Enter starts a new line · ⌘/Ctrl+Enter sends"}
           on={sendOnEnter}
           onToggle={onToggleSendOnEnter}
         />
@@ -95,18 +95,20 @@ export function GeneralSettingsPanel({
               className={reviewLayout === "split" ? "isActive" : ""}
               onClick={() => setReviewLayout("split")}
               title="Side by side"
+              aria-label="Side by side"
+              aria-pressed={reviewLayout === "split"}
             >
               <Columns2 size={14} />
-              <span>Side by side</span>
             </button>
             <button
               type="button"
               className={reviewLayout === "unified" ? "isActive" : ""}
               onClick={() => setReviewLayout("unified")}
               title="Unified"
+              aria-label="Unified"
+              aria-pressed={reviewLayout === "unified"}
             >
               <Rows3 size={14} />
-              <span>Unified</span>
             </button>
           </span>
         </div>

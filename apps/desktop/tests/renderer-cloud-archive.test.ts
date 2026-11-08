@@ -4,7 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadRendererFile } from "./helpers/load-renderer.ts";
 
-const { cloudArchiveGroups, CloudChatArchiveContent } = loadRendererFile("cloud/CloudChatArchive.tsx");
+const { cloudArchiveGroups, visibleCloudChats, CloudChatArchiveContent } = loadRendererFile("cloud/CloudChatArchive.tsx");
 const { UserPrompt } = loadRendererFile("UserPrompt.tsx");
 const projects = [{ id: "one", name: "App", rootPath: "/project/app" }, { id: "two", name: "Notes", rootPath: "/project/notes" }];
 const chat = { key: "codex-one", provider: "codex", title: "Review app", state: "idle", paths: ["/project/app"], updatedAt: "2026-11-03T10:00:00Z" };
@@ -35,4 +35,21 @@ test("user prompts keep text literal and expose compact image previews and copy"
   }));
   assert.match(result, /class="userPromptText"/); assert.match(result, /# Keep this size/); assert.match(result, /&lt;img onerror/);
   assert.doesNotMatch(result, /<h1|<img onerror/); assert.match(result, /messageAttachmentList/); assert.match(result, /Copy prompt/);
+});
+
+test("cloud jump badges follow visible, filtered rows and share a number across folders", () => {
+  const shared = { ...chat, key: "shared", repositoryIds: ["one", "two"] };
+  const second = { ...chat, key: "second", title: "Review notes", paths: ["/project/notes"] };
+  const groups = cloudArchiveGroups([shared, second], projects, "");
+  assert.deepEqual(Array.from(visibleCloudChats(groups, new Set(), ""), row => row.key), ["shared", "second"]);
+  assert.deepEqual(Array.from(visibleCloudChats(groups, new Set(["one", "two"]), "")), []);
+  assert.deepEqual(Array.from(visibleCloudChats(groups, new Set(["one", "two"]), "review"), row => row.key), ["shared", "second"]);
+  const render = jumpKeysVisible => renderToStaticMarkup(React.createElement(CloudChatArchiveContent, {
+    chats: [shared, second], projects, disabled: false, loading: false, shortcutsBlocked: false,
+    query: "", collapsed: new Set(), menu: null, jumpKeysVisible,
+    onSelect() {}, onNew() {}, onAddFolder() {}, onDelete() {}, onQueryChange() {}, onToggle() {}, onMenu() {},
+  }));
+  assert.equal((render(true).match(/class="chatJumpKey" aria-hidden="true">1/g) || []).length, 2);
+  assert.equal((render(true).match(/class="chatJumpKey" aria-hidden="true">2/g) || []).length, 1);
+  assert.doesNotMatch(render(false), /chatJumpKey/);
 });

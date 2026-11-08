@@ -1,12 +1,16 @@
-import React, { useState } from "react";
-import { ChevronDown, Cloud, Ellipsis, FolderX, GitBranch, MessageSquareX, Monitor, SquarePen } from "lucide-react";
+import React from "react";
+import { ChevronDown, Cloud, FolderX, GitBranch, MessageSquareX, Monitor, SquarePen } from "lucide-react";
 import type { ChatRecord } from "../shared/desktopApi";
-import { chatDisplayTitle, chatSubline, closedChatMessage, worktreeTitle, type ChatProjectGroup, type DeleteCandidate, type ProjectDeleteTarget, type WorktreeChatGroup } from "./chatListPresentation";
+import { chatDisplayTitle, filterChatProjectGroups, chatSubline, closedChatMessage, worktreeTitle, type ChatProjectGroup, type DeleteCandidate, type ProjectDeleteTarget, type WorktreeChatGroup } from "./chatListPresentation";
+import { ChatProjectMenu } from "./ChatProjectMenu";
+import { localChatActivity } from "./ChatActivityIndicator";
 import { ChatArchiveToolbar, ChatProjectSection, ChatArchiveRow } from "./ChatArchivePrimitives";
 
 type ChatArchiveProps = {
   chatProjectGroups: ChatProjectGroup[];
   activeChatId: string | null;
+  waitingChatId?: string | null;
+  unreadChatIds?: ReadonlySet<string>;
   chatJumpKeysVisible: boolean;
   chatJumpNumbersById: Map<string, number>;
   collapsedProjectKeys: Set<string>;
@@ -23,25 +27,22 @@ type ChatArchiveProps = {
   newChatForProject: (project: { name: string; path?: string }) => Promise<void>;
   newChatForWorktree: (project: { name: string; path?: string }, worktree: WorktreeChatGroup) => Promise<void>;
   busy: boolean;
+  query: string; onQueryChange(query: string): void;
 };
 
 export function ChatArchive(props: ChatArchiveProps) {
-  const [query, setQuery] = useState("");
-  return <ChatArchiveContent {...props} query={query} onQueryChange={setQuery}/>;
+  return <ChatArchiveContent {...props}/>;
 }
 
 export function ChatArchiveContent({
-  chatProjectGroups, activeChatId, chatJumpKeysVisible, chatJumpNumbersById,
+  chatProjectGroups, activeChatId, waitingChatId, unreadChatIds, chatJumpKeysVisible, chatJumpNumbersById,
   collapsedProjectKeys, collapsedWorktreeKeys, projectActionMenuKey,
   setProjectActionMenuKey, setDeleteCandidate, chatProjectTarget,
   toggleProjectGroup, toggleWorktreeGroup, selectChat, newChat, newProject,
   newChatForProject, newChatForWorktree, busy, query, onQueryChange,
 }: ChatArchiveProps & { query: string; onQueryChange(query: string): void }) {
   const search = query.trim().toLowerCase();
-  const visibleGroups = chatProjectGroups.map(group => !search || group.name.toLowerCase().includes(search) ? group : ({ ...group,
-    chats: group.chats.filter(chat => chatDisplayTitle(chat).toLowerCase().includes(search)),
-    worktrees: group.worktrees.map(tree => ({ ...tree, chats: tree.chats.filter(chat => chatDisplayTitle(chat).toLowerCase().includes(search)) })).filter(tree => tree.chats.length),
-  })).filter(group => !search || group.name.toLowerCase().includes(search) || group.chats.length || group.worktrees.length);
+  const visibleGroups = filterChatProjectGroups(chatProjectGroups, query);
   function renderChatRow(chat: ChatRecord) {
     const connectionLabel = chat.modelEndpointMode === "server"
       ? "Company server"
@@ -53,6 +54,8 @@ export function ChatArchiveContent({
     // what the row starts with without moving a single word of it.
     const jumpNumber = chatJumpKeysVisible ? chatJumpNumbersById.get(chat.id) : undefined;
     return <ChatArchiveRow key={chat.id} title={chatDisplayTitle(chat)} active={activeChatId === chat.id} closed={!!closedChatMessage(chat.taskState)}
+      status={localChatActivity(chat.taskState, chat.id === waitingChatId)}
+      unread={unreadChatIds?.has(chat.id)}
       onSelect={() => void selectChat(chat)} onDelete={() => setDeleteCandidate({ kind: "chat", chat })} detail={chatSubline(chat)} updatedAt={chat.updatedAt}
       icon={jumpNumber ? <span className="chatJumpKey" aria-hidden="true">{jumpNumber}</span> : connectionLabel ? <span className="chatConnectionIcon" role="img" aria-label={connectionLabel} title={connectionLabel}>
         {chat.modelEndpointMode === "server" ? <Cloud size={12} aria-hidden="true"/> : <Monitor size={12} aria-hidden="true"/>}
@@ -60,7 +63,7 @@ export function ChatArchiveContent({
   }
 
   return (
-    <section className="chatArchive">
+    <section className="chatArchive" aria-label="Conversations">
       <ChatArchiveToolbar query={query} onQueryChange={onQueryChange} disabled={busy} onNew={() => void newChat()} onAddFolder={() => void newProject()}/>
       <div className="chatList">
         {visibleGroups.length ? (
@@ -70,51 +73,13 @@ export function ChatArchiveContent({
             return (
               <ChatProjectSection key={group.key} name={group.name} path={group.path} collapsed={collapsed} disabled={busy} hasWorktrees={!!group.worktrees.length}
                 onToggle={() => toggleProjectGroup(group.key)} onNew={group.path ? () => void newChatForProject({ name: group.name, path: group.path }) : undefined}
-                actions={projectTarget ? (
-                    <div className="chatProjectActions">
-                      <button
-                        className="chatProjectActionButton"
-                        type="button"
-                        onClick={() => {
-                          setProjectActionMenuKey((current) => (current === group.key ? null : group.key));
-                        }}
-                        aria-expanded={projectActionMenuKey === group.key}
-                        aria-haspopup="menu"
-                        title={`Project actions for "${group.name}"`}
-                      >
-                        <Ellipsis size={14} />
-                      </button>
-                      {projectActionMenuKey === group.key ? (
-                        <div className="chatProjectMenu" role="menu">
-                          {projectTarget.chatCount > 0 ? (
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => {
-                                setProjectActionMenuKey(null);
-                                setDeleteCandidate({ kind: "projectChats", project: projectTarget });
-                              }}
-                            >
-                              <MessageSquareX size={14} />
-                              <span>Delete all chats</span>
-                            </button>
-                          ) : null}
-                          <button
-                            className="danger"
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                              setProjectActionMenuKey(null);
-                              setDeleteCandidate({ kind: "project", project: projectTarget });
-                            }}
-                          >
-                            <FolderX size={14} />
-                            <span>Delete project</span>
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                ) : null}>
+                actions={projectTarget && <ChatProjectMenu name={group.name} open={projectActionMenuKey === group.key}
+                  onOpenChange={open => setProjectActionMenuKey(open ? group.key : null)} actions={[
+                    ...(projectTarget.chatCount > 0 ? [{ id: "chats", label: "Delete all chats", icon: <MessageSquareX size={14}/>,
+                      onSelect: () => setDeleteCandidate({ kind: "projectChats", project: projectTarget }) }] : []),
+                    { id: "project", label: "Delete project", icon: <FolderX size={14}/>, danger: true,
+                      onSelect: () => setDeleteCandidate({ kind: "project", project: projectTarget }) },
+                  ]}/> }>
                     {group.chats.map((chat) => renderChatRow(chat))}
                     {group.worktrees.map((worktree) => {
                       const worktreeCollapsed = !search && collapsedWorktreeKeys.has(worktree.key);

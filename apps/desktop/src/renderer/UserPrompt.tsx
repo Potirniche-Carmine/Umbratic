@@ -8,11 +8,11 @@ export function UserPrompt({ text, files, feedback, onOpen, onCopy }: {
   text: string; files: ChatAttachment[]; feedback?: React.ReactNode; onOpen(file: ChatAttachment): void; onCopy(): void;
 }) {
   return <article className="timelineMessage userMessage">
-    <div className="userMessageBubble">
+    <AttachmentPreviewList files={files} mode="message" onOpen={onOpen}/>
+    {(text || feedback) && <div className="userMessageBubble">
       {text && <p className="userPromptText">{text}</p>}
       {feedback}
-      <AttachmentPreviewList files={files} mode="message" onOpen={onOpen}/>
-    </div>
+    </div>}
     <div className="messageActions"><button className="messageAction" type="button" onClick={onCopy} title="Copy prompt"><Copy size={14}/></button></div>
   </article>;
 }

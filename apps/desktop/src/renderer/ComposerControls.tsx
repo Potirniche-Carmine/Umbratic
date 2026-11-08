@@ -282,6 +282,7 @@ export function ComposerModelPicker({
   // leaves the composer with no answer to "what will answer this, and how do I
   // choose one" at exactly the moment the user has not chosen.
   const selectedLabel = selected?.label || selectedId || "Choose a model";
+  const effortLabel = selected && efforts.length > 0 ? reasoningEffortLabels[effort] : undefined;
   // Nothing chosen yet: the menu's only useful page is the list of models, and
   // making someone press "Choose a model" and then "Model ›" to reach it is two
   // clicks to answer a question the trigger already asked. With a model chosen
@@ -328,6 +329,7 @@ export function ComposerModelPicker({
         disabled={disabled}
         aria-expanded={open}
         aria-haspopup="menu"
+        aria-label={effortLabel ? `Model and reasoning: ${selectedLabel}, ${effortLabel}` : `Model: ${selectedLabel}`}
         title={disabled ? disabledReason ?? "" : `Model: ${selectedLabel}`}
         onClick={() => {
           setOpen((current) => {
@@ -337,6 +339,7 @@ export function ComposerModelPicker({
         }}
       >
         <span>{selectedLabel}</span>
+        {effortLabel && <span className="composerReasoningEffort">· {effortLabel}</span>}
         <ChevronDown size={12} aria-hidden="true" />
       </button>
       {open ? (

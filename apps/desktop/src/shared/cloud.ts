@@ -13,6 +13,7 @@ export type CloudProviderSettings = {
   roles: Record<CloudRole, CloudModelChoice>;
 };
 export type CloudSettings = {
+  browserVerification?: boolean;
   workspaceRepositoryIds?: string[];
   mode: AppMode;
   provider: CloudProvider;
@@ -35,10 +36,14 @@ export type CloudLimit = { id: string; label: string; usedPercent: number; reset
 export type CloudUsage = { limits: CloudLimit[]; fetchedAt: string };
 export type CloudImage = { id: string; name: string; mimeType: string; previewDataUrl: string; extension?: string; pending?: boolean };
 export type CloudImageInput = { name: string; dataUrl: string; mimeType?: string };
+export type CloudQueuedPrompt = { id: string; prompt: string; images: CloudImage[] };
+export type CloudFollowUpInput = { key: string; mode: "queue" | "steer"; prompt: string; imageIds?: string[]; queuedId?: string };
 export type CloudTool = { id: string; label: string; kind?: string; detail?: string; output?: string; status: "running" | "completed" | "failed" | "stopped" };
 export type CloudMessagePhase = "commentary" | "partial_answer" | "final_answer";
 export type CloudEntry = { id: string; kind: "instruction" | "answer" | "thinking" | "activity" | "context" | "error"; text: string; at: string; completedAt?: string; phase?: CloudMessagePhase; tool?: CloudTool; images?: CloudImage[] };
-export type CloudApproval = { id: string; title: string; detail: string; questions?: { id: string; question: string; options: string[] }[] };
+export type CloudCommandRequest = { command: string; cwd: string; context?: string };
+export type CloudAllowedCommand = CloudCommandRequest & { id: string; provider: CloudProvider; roots: string[]; account?: string; createdAt: string };
+export type CloudApproval = { command?: CloudCommandRequest; id: string; title: string; detail: string; questions?: { id: string; question: string; options: string[] }[] };
 export type CloudSession = {
   sessionId?: string;
   account?: string;
@@ -56,6 +61,7 @@ export type CloudWorkspace = {
   repositoryIds?: string[];
   provider: CloudProvider;
   path: string;
+  scratchPath?: string;
   paths?: string[];
   usage?: CloudUsage;
   sessionId?: string;
@@ -65,6 +71,7 @@ export type CloudWorkspace = {
   state: "idle" | "running" | "waiting";
   entries: CloudEntry[];
   approvals: CloudApproval[];
+  queuedPrompts?: CloudQueuedPrompt[];
   contextWindow?: number;
   inputTokens?: number;
   sessions?: Partial<Record<CloudProvider, CloudSession>>;
@@ -79,6 +86,9 @@ export type CloudChatRecord = Pick<CloudWorkspace, "key" | "provider" | "state">
   updatedAt: string;
 };
 export type CloudApi = {
+  installCloudBrowser(): Promise<void>;
+  listCloudAllowedCommands(): Promise<CloudAllowedCommand[]>;
+  revokeCloudAllowedCommand(input: { id: string }): Promise<void>;
   listCloudChats(input: { provider: CloudProvider }): Promise<CloudChatRecord[]>;
   createCloudChat(input: CloudWorkspaceInput): Promise<CloudWorkspace>;
   deleteCloudChat(input: { key: string; provider: CloudProvider }): Promise<void>;
@@ -94,9 +104,10 @@ export type CloudApi = {
   installCloudProvider(input: { provider: CloudProvider }): Promise<CloudConnection>;
   getCloudWorkspace(input: CloudWorkspaceInput): Promise<CloudWorkspace>;
   startCloudTurn(input: CloudWorkspaceInput & { prompt: string; imageIds?: string[] }): Promise<CloudWorkspace>;
+  sendCloudFollowUp(input: CloudFollowUpInput): Promise<CloudWorkspace>;
+  removeCloudQueuedPrompt(input: { key: string; id: string }): Promise<CloudWorkspace>;
   stopCloudTurn(input: { key: string }): Promise<void>;
-  resetCloudContext(input: { key: string }): Promise<CloudWorkspace>;
-  respondCloudApproval(input: { key: string; id: string; allow: boolean; answers?: Record<string, string> }): Promise<void>;
+  respondCloudApproval(input: { key: string; id: string; allow: boolean; remember?: boolean; answers?: Record<string, string> }): Promise<void>;
   onCloudWorkspace(callback: (workspace: CloudWorkspace) => void): () => void;
 };
 export const cloudRoleLabels: Record<CloudRole, string> = {
@@ -128,6 +139,7 @@ export function isCloudEffort(value: unknown): value is CloudEffort {
 }
 export function validateCloudSettings(value: CloudSettings): CloudSettings {
   if (!value || !["private", "cloud"].includes(value.mode) || !isCloudProvider(value.provider)) throw new Error("Invalid workspace mode.");
+  if (value.browserVerification !== undefined && typeof value.browserVerification !== "boolean") throw new Error("Invalid browser verification setting.");
   if (typeof value.subagents !== "boolean") throw new Error("Invalid workflow setting.");
   // Migrate the first 0.0.3 preview without losing provider or role choices.
   const legacy = value as CloudSettings & { dailyReset?: boolean };

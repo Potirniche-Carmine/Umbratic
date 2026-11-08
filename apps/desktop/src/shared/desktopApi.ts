@@ -3,6 +3,9 @@ import type { DesktopApi } from "./desktopApiTypes";
 export * from "./desktopApiTypes";
 
 export const desktopIpcChannels = {
+  installCloudBrowser: "umbratic:install-cloud-browser",
+  listCloudAllowedCommands: "umbratic:list-cloud-allowed-commands",
+  revokeCloudAllowedCommand: "umbratic:revoke-cloud-allowed-command",
   getCloudSettings: "umbratic:get-cloud-settings",
   saveCloudSettings: "umbratic:save-cloud-settings",
   inspectCloudProvider: "umbratic:inspect-cloud-provider",
@@ -18,8 +21,9 @@ export const desktopIpcChannels = {
   deleteCloudChat: "umbratic:delete-cloud-chat",
   getCloudWorkspace: "umbratic:get-cloud-workspace",
   startCloudTurn: "umbratic:start-cloud-turn",
+  sendCloudFollowUp: "umbratic:send-cloud-follow-up",
+  removeCloudQueuedPrompt: "umbratic:remove-cloud-queued-prompt",
   stopCloudTurn: "umbratic:stop-cloud-turn",
-  resetCloudContext: "umbratic:reset-cloud-context",
   respondCloudApproval: "umbratic:respond-cloud-approval",
 
   listProjects: "umbratic:list-projects",

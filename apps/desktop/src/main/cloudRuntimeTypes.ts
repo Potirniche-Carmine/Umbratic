@@ -11,7 +11,7 @@ export type CloudRuntimeSink = {
   usage(contextWindow?: number, inputTokens?: number): void;
   approval(request: Omit<CloudApproval, "id">): Promise<ApprovalAnswer>;
 };
-export type CloudRun = { done: Promise<void>; stop(): Promise<void> };
+export type CloudRun = { done: Promise<void>; stop(): Promise<void>; steer(prompt: string, images?: { path: string; mimeType: string }[]): Promise<void> };
 export type CloudRuntime = {
   inspect(settings: CloudSettings, cwd: string): Promise<CloudConnection>;
   signIn(settings: CloudSettings, cwd: string): Promise<{ message: string }>;

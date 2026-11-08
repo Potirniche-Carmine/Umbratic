@@ -182,7 +182,22 @@
 
 .userMessage > .messageAttachmentList {
   max-width: 100%;
-  margin: 0 0 6px auto;
+  gap: 10px;
+  margin: 0 0 10px auto;
+}
+
+.userMessage > .messageAttachmentList .attachmentPreview.imageAttachment {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: min(320px, 100%);
+  height: clamp(140px, 24vw, 200px);
+  border-radius: 14px;
+}
+
+.userMessage > .messageAttachmentList .imageAttachment img {
+  width: auto;
+  max-width: 100%;
+  object-fit: cover;
 }
 
 .userMessageBubble .markdownContent:only-child,

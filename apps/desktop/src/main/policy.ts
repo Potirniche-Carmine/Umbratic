@@ -17,6 +17,8 @@ export const pythonRuntimeVersion = "python-uv-venv-1";
 export const cmakeRuntimeVersion = "cmake-umbratic-build-1";
 
 const generatedRuntimePrefixes = [
+  "output/imagegen/",
+  "outputs/imagegen/",
   ".umbratic/runtime/",
   ".umbratic/build/",
   ".umbratic/tmp/",

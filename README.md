@@ -5,8 +5,8 @@
 <h1 align="center">Umbratic</h1>
 
 <p align="center">
-  <strong>AI for your code, files, and documents.</strong><br>
-  Run models locally or connect to your own server.
+  <strong>The desktop AI workspace I build and use.</strong><br>
+  Local models, your own server, ChatGPT, or Claude.
 </p>
 
 <p align="center">
@@ -16,18 +16,25 @@
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
-Umbratic is an open-source desktop AI harness. Give a model access to your project, work through changes in chat, and review the result in the app.
+I’m [Carmine Potirniche](https://carminepotirniche.com). Umbratic is my personal, open-source project and the desktop AI workspace I use for code, files, and documents. I’m building it around the work I do every day, from a first prompt to reviewing the changes.
 
-![Umbratic code review showing a side-by-side diff with an item quantity correction highlighted.](.github/assets/code-review.jpg)
+There are no Umbratic plans or subscriptions. The source is MIT licensed. Local models use your hardware; connected cloud providers use your own account and its limits.
+
+![The current Umbratic workspace with project navigation, a conversation, and the shared composer.](.github/assets/workspace.jpg)
+
+![Umbratic code review with compact feedback, layout controls, and a per-file editor menu.](.github/assets/code-review.jpg)
 
 ## Features
 
 - **Code and files.** Search your project, edit files, run commands, and review code changes side by side.
 - **Documents.** Create documents, spreadsheets, and presentations. Select text in a document and leave feedback for the next draft.
 - **Your models.** Download and run models on your device, or connect to a self-hosted Veil server for shared models and employee access.
-- **Cloud workspaces (0.0.3).** Use the official Codex or Claude Code runtime with your own subscription, choose an orchestrator and specialist models, and keep a continuous workspace with configurable context resets. See [Cloud runtime setup and limits](docs/cloud-runtimes.md).
+- **Cloud workspaces (0.0.3 development).** Use the official Codex or Claude Code runtime with your own subscription, choose an orchestrator and specialist models, and keep a continuous workspace with configurable context resets. See [Cloud runtime setup and limits](docs/cloud-runtimes.md).
 
-![Umbratic document review with a selected sentence and feedback requesting company sign-in.](.github/assets/document-feedback.jpg)
+The screenshots above show the current renderer with sample workspace content. They are development previews, not a promise that every feature is in the latest packaged release.
+
+- **Follow up while it works.** Enter steers an active response. Shift+Enter queues a follow-up. Image references appear above your sent message.
+- **Review in context.** Switch diff layouts, leave line feedback, and open the selected file in your editor from the review toolbar.
 
 **No usage analytics or automatic telemetry uploads.** Local history and diagnostics stay on your device unless you export them. Requests and logs on a company server are controlled by its administrator. See [signing and privacy](CODE_SIGNING_POLICY.md) for network activity and release details.
 

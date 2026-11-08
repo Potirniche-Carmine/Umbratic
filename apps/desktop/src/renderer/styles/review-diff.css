@@ -370,10 +370,6 @@
   font-weight: 680;
 }
 
-/* One button, so it sizes to its own label. This was a two-column grid with a
-   42px slot for a confirm button that no longer exists, and the leftover track
-   crushed "Leave feedback" into 42px: the label spilled out of its pill and
-   across the layout control beside it. */
 .reviewFeedbackSelectionControls {
   display: inline-flex;
   align-items: center;
@@ -535,7 +531,6 @@
    that labelled columns nobody could see. */
 @container review (max-width: 760px) {
   .reviewWorkspace { grid-template-columns: 154px minmax(0, 1fr); }
-  .reviewSegmentedControl span,
   .reviewControlButton:not(.reviewUndoAll) > span { display: none; }
   .reviewFeedbackTray { grid-template-columns: minmax(0, 1fr) auto; }
   .reviewFeedbackTray > div:first-child { display: none; }
@@ -548,3 +543,19 @@
   .documentReviewPreview { padding: 12px; }
   .documentReviewPaper { min-height: 100%; padding: 34px 28px 48px; }
 }
+
+/* Expanded review floats above the workspace, including its former clipping parent. */
+.reviewPanel.reviewExpanded { position: fixed; inset: 40px 12px 12px; z-index: 200; width: auto !important; height: auto !important; max-width: none; border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 20px 80px var(--shadow-color); background: var(--surface); }
+.reviewExpanded .reviewFileCanvas { min-width: 0; }
+.cloudReview { container: review / inline-size; }
+.reviewFileActions { flex-wrap: nowrap; }
+.reviewFileActions .idePicker { min-height: 30px; border-radius: 8px; }
+.cloudPermissionSettings > .cloudPermissionHint { margin: 5px 0 16px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.cloudCommandRule { padding: 14px 0; border-top: 1px solid var(--line); }
+.cloudCommandRule:last-child { padding-bottom: 0; }
+.cloudCommandRuleHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.cloudCommandRuleHeader > span { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; }
+.cloudCommandRuleHeader > button { padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; font-size: 11px; color: var(--muted); }
+.cloudCommandRuleHeader > button:hover:not(:disabled) { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--line)); }
+.cloudCommandRule pre { margin: 0 0 6px; padding: 9px 11px; border-radius: 8px; background: var(--surface-2); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cloudCommandRule small { display: block; overflow: hidden; color: var(--faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }

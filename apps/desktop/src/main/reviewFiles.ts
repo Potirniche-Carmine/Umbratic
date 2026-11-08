@@ -1,3 +1,4 @@
+import { relevantReviewPaths } from "./reviewPathFilter";
 import { taskUsesIsolatedWorktree } from "./worktreeOps";
 import { withoutGeneratedImages } from "../shared/generatedImages";
 import { emit, getTask, missingSnapshotValue, publicTask, saveTask } from "./mainRuntime";
@@ -74,8 +75,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, run: (item: T
 }
 
 export async function gitWorkspaceReviewFiles(repositoryPath: string, baseline: string): Promise<ReviewFile[]> {
-  const changed = (await getChangedFiles(repositoryPath, baseline))
-    .filter((file) => !isGeneratedRuntimePath(file))
+  const changed = (await relevantReviewPaths(repositoryPath, await getChangedFiles(repositoryPath, baseline)))
     .sort((a, b) => a.localeCompare(b));
   const reviews = await mapWithConcurrency(changed, gitReviewConcurrency, (file) =>
     gitWorkspaceReviewFile(repositoryPath, baseline, file),
@@ -103,8 +103,7 @@ export async function gitLocalReviewFiles(task: TaskRecord): Promise<ReviewFile[
   const baselineFiles = task.baselineFiles ?? {};
   const baselinePaths = new Set(Object.keys(baselineFiles));
   const currentPaths = await getChangedFiles(task.worktreePath, task.baseCommit);
-  const paths = Array.from(new Set([...baselinePaths, ...currentPaths]))
-    .filter((file) => !isGeneratedRuntimePath(file))
+  const paths = (await relevantReviewPaths(task.worktreePath, Array.from(new Set([...baselinePaths, ...currentPaths]))))
     .sort((left, right) => left.localeCompare(right));
   const reviews = await mapWithConcurrency(paths, gitReviewConcurrency, async (file) => {
     if (baselinePaths.has(file)) {

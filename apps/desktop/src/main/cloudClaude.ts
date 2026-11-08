@@ -1,9 +1,11 @@
+import { cloudBrowserServer } from "./cloudBrowser";
 import { claudeUsage, claudeModelLabel, optionalRuntimeRead, planLabel } from "./cloudUsage";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import type { AccountInfo, AgentDefinition, ModelInfo, Options, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk" with { "resolution-mode": "import" };
+import type { AccountInfo, AgentDefinition, ModelInfo, Options, Query } from "@anthropic-ai/claude-agent-sdk" with { "resolution-mode": "import" };
+import { PromptGate, claudePromptContent } from "./cloudClaudeInput";
 import type { CloudConnection, CloudSettings } from "../shared/cloud";
 import { cloudEnvironment, cloudWorkflowInstructions, cloudWorkspaceInstructions, enabledCloudRoles, roleInstructions, validateCloudConnection } from "./cloudPolicy";
 import type { CloudRuntime, CloudRuntimeSink } from "./cloudRuntimeTypes";
@@ -24,17 +26,6 @@ export function claudeExecutable(configured: string): string {
     const found = candidates.find(candidate => { try { fs.accessSync(candidate, fs.constants.X_OK); return fs.statSync(candidate).isFile(); } catch { return false; } });
     if (found) return found;
     throw new CloudRuntimeMissing("Claude Code is not installed.");
-  }
-}
-
-class PromptGate {
-  private resolve!: (value: SDKUserMessage["message"]["content"] | undefined) => void;
-  private next = new Promise<SDKUserMessage["message"]["content"] | undefined>(resolve => { this.resolve = resolve; });
-  send(text: SDKUserMessage["message"]["content"]): void { this.resolve(text); }
-  close(): void { this.resolve(undefined); }
-  async *messages(): AsyncGenerator<SDKUserMessage> {
-    const text = await this.next;
-    if (text !== undefined) yield { type: "user", session_id: "", parent_tool_use_id: null, message: { role: "user", content: text } };
   }
 }
 
@@ -157,19 +148,27 @@ export const claudeCloudRuntime: CloudRuntime = {
   run(settings, workspace, prompt, sink, images = []) {
     let query: Query | undefined; let stopped = false;
     const gate = new PromptGate();
+    const pendingInputs = new Set<string>();
+    let accepting = true; let hasSteered = false;
+    let readyResolve!: () => void; let readyReject!: (cause: unknown) => void;
+    const ready = new Promise<void>((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
+    void ready.catch(() => undefined);
     const done = (async () => {
       const sdk = await import("@anthropic-ai/claude-agent-sdk");
       if (stopped) return;
       const config = settings.providers.claude;
+      const browser = cloudBrowserServer(settings, workspace);
       query = sdk.query({ prompt: gate.messages(), options: {
-        ...options(settings, workspace.path), additionalDirectories: (workspace.paths || []).filter(root => root !== workspace.path), model: config.orchestrator.model,
-        systemPrompt: { type: "preset", preset: "claude_code", append: cloudWorkflowInstructions(settings, "claude") + "\n" + cloudWorkspaceInstructions(workspace.paths || [workspace.path]) },
+        mcpServers: browser ? { umbratic_browser: { command: browser.command, args: browser.args } } : {},
+        ...options(settings, workspace.path), env: { ...cloudEnvironment(), ...(workspace.scratchPath ? { TMPDIR: workspace.scratchPath, TMP: workspace.scratchPath, TEMP: workspace.scratchPath } : {}) }, additionalDirectories: [...new Set([...(workspace.paths || []), ...(workspace.scratchPath ? [workspace.scratchPath] : [])])].filter(root => root !== workspace.path), model: config.orchestrator.model,
+        systemPrompt: { type: "preset", preset: "claude_code", append: cloudWorkflowInstructions(settings, "claude") + "\n" + cloudWorkspaceInstructions(workspace.paths || [workspace.path], workspace.scratchPath) },
         effort: config.orchestrator.effort === "none" || config.orchestrator.effort === "minimal" || config.orchestrator.effort === "ultra" ? undefined : config.orchestrator.effort,
         agents: agentDefinitions(settings), resume: workspace.sessionId, enableFileCheckpointing: true,
         canUseTool: async (tool, input, details) => {
           const questions = tool === "AskUserQuestion" && Array.isArray(input.questions)
             ? input.questions.map((q: any) => ({ id: q.question, question: q.question, options: (q.options || []).map((option: any) => option.label) })) : undefined;
-          const answer = await sink.approval({ title: details.title || `Allow ${tool}?`, detail: JSON.stringify(input, null, 2), questions });
+          const answer = await sink.approval({ title: details.title || `Allow ${tool}?`, detail: JSON.stringify(input, null, 2), questions,
+            command: tool === "Bash" && typeof input.command === "string" ? { command: input.command, cwd: workspace.path, context: JSON.stringify(input) } : undefined });
           return answer.allow ? { behavior: "allow", updatedInput: questions ? { ...input, answers: answer.answers || {} } : input }
             : { behavior: "deny", message: "The user declined this action." };
         },
@@ -180,13 +179,22 @@ export const claudeCloudRuntime: CloudRuntime = {
         if (stopped) return;
         if (workspace.account && workspace.account !== connection.account && workspace.sessionId) throw new Error("The signed-in account changed. Clear context before continuing.");
         if (connection.usage) sink.limits?.(connection.usage);
-        gate.send(images.length ? [...(prompt ? [{ type: "text" as const, text: prompt }] : []), ...images.map(image => image.mimeType === "application/pdf" ? ({ type: "document" as const, source: { type: "base64" as const, media_type: "application/pdf" as const, data: fs.readFileSync(image.path).toString("base64") } }) : image.mimeType.startsWith("image/") ? ({ type: "image" as const,
-          source: { type: "base64" as const, media_type: "image/png" as const, data: fs.readFileSync(image.path).toString("base64") } }) : ({ type: "document" as const, source: { type: "text" as const, media_type: "text/plain" as const, data: fs.readFileSync(image.path, "utf8") } }))] : prompt);
+        pendingInputs.add(gate.send(claudePromptContent(prompt, images)));
+        readyResolve();
         let resultReceived = false;
         const stream = { messageId: "" };
         for await (const message of query) {
           consumeMessage(message, sink, connection.account || "Claude", stream);
+          if ((message.type === "assistant" || message.type === "stream_event" || message.type === "result") && !("parent_tool_use_id" in message && message.parent_tool_use_id)) {
+            for (const id of message.user_message_uuids || []) pendingInputs.delete(id);
+            if (message.user_message_uuid) pendingInputs.delete(message.user_message_uuid);
+          }
           if (message.type === "result") {
+            // A result for an earlier prompt may already be on stdout when steering is sent.
+            // Keep the input stream alive until the runtime consumes the latest message.
+            if (!hasSteered && !message.user_message_uuid && !message.user_message_uuids) pendingInputs.clear();
+            if (!message.is_error && (pendingInputs.size || (message.queued_turn_count || 0) > 0)) continue;
+            accepting = false;
             resultReceived = true;
             if (!message.is_error) sink.complete?.();
             const [context, usage] = await Promise.all([
@@ -205,9 +213,16 @@ export const claudeCloudRuntime: CloudRuntime = {
           }
         }
         if (!resultReceived && !stopped) throw new Error("Claude Code stopped before completing the turn.");
-      } finally { gate.close(); query.close(); }
+      } finally { accepting = false; gate.close(); query.close(); }
     })();
-    return { done, async stop() { stopped = true; gate.close(); try { await query?.interrupt(); } finally { query?.close(); } } };
+    void done.then(() => readyReject(new Error("This turn has finished.")), readyReject);
+    return { done, async steer(text, attachments = []) {
+      await ready;
+      if (stopped || !accepting) throw new Error("This turn has finished. Send the prompt as a new turn.");
+      const content = claudePromptContent(text, attachments);
+      hasSteered = true;
+      pendingInputs.add(gate.send(content, "now"));
+    }, async stop() { stopped = true; gate.close(); try { await query?.interrupt(); } finally { query?.close(); } } };
   },
 };
 

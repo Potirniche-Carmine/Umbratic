@@ -10,7 +10,7 @@ const group = { key: "project", name: "Project", path: "/workspace", chats: [cha
 
 function props(overrides = {}) {
   return {
-    chatProjectGroups: [group], activeChatId: chat.id, chatJumpKeysVisible: false,
+    query: "", onQueryChange() {}, chatProjectGroups: [group], activeChatId: chat.id, chatJumpKeysVisible: false,
     chatJumpNumbersById: new Map([[chat.id, 1]]), collapsedProjectKeys: new Set(), collapsedWorktreeKeys: new Set(),
     projectActionMenuKey: null, setProjectActionMenuKey() {}, setDeleteCandidate() {},
     chatProjectTarget: () => ({ id: "project", name: "Project", path: "/workspace", chatCount: 1 }),

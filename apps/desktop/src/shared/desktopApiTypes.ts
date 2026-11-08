@@ -867,6 +867,7 @@ export type DesktopApi = CloudApi & {
     decision: "allow" | "deny";
   }): Promise<void>;
   openRepositoryInIde(input: {
+    filePath?: string;
     repositoryId: string;
     ideId: string;
   }): Promise<{ ok: true } | { ok: false; message: string }>;

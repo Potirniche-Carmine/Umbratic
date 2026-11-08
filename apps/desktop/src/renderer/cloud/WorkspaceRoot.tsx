@@ -29,6 +29,7 @@ export function WorkspaceRoot({ api, renderPrivate }: { api: DesktopApi; renderP
   const [provider, setProvider] = useState<WorkspaceProvider>("local");
   const [visited, setVisited] = useState<Set<WorkspaceProvider>>(new Set());
   const [activity, setActivity] = useState<Record<WorkspaceProvider, WorkspaceActivity>>({ local: "idle", codex: "idle", claude: "idle" });
+  const [unread, setUnread] = useState<Partial<Record<WorkspaceProvider, boolean>>>({});
   const [settingsRequest, setSettingsRequest] = useState<{ id: number; tab: SettingsTab } | null>(null);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const codex = useCloudConnection(api, "codex", settings?.providers.codex.executable || "");
@@ -55,8 +56,9 @@ export function WorkspaceRoot({ api, renderPrivate }: { api: DesktopApi; renderP
     apply(); media.addEventListener("change", apply); window.addEventListener("umbratic:appearance-change", apply);
     return () => { media.removeEventListener("change", apply); window.removeEventListener("umbratic:appearance-change", apply); };
   }, [api]);
-  const reportActivity = useCallback((id: WorkspaceProvider, state: WorkspaceActivity) => {
+  const reportActivity = useCallback((id: WorkspaceProvider, state: WorkspaceActivity, hasUnread = false) => {
     setActivity(current => current[id] === state ? current : { ...current, [id]: state });
+    setUnread(current => !!current[id] === hasUnread ? current : { ...current, [id]: hasUnread });
   }, []);
   function select(id: WorkspaceProvider) {
     setProvider(id); setVisited(current => new Set([...current, id]));
@@ -65,15 +67,15 @@ export function WorkspaceRoot({ api, renderPrivate }: { api: DesktopApi; renderP
   async function save(next: CloudSettings) { setSettings(await api.saveCloudSettings(next)); }
   if (!settings) return <div className="cloudLoading" role="status">Opening your workspace…</div>;
   const controllers = { codex, claude };
-  const providerSettings = <CloudSettingsPanel settings={settings} controllers={controllers} busy={activity.codex !== "idle" || activity.claude !== "idle"} onSave={save}/>;
+  const providerSettings = <CloudSettingsPanel api={api} settings={settings} controllers={controllers} busy={activity.codex !== "idle" || activity.claude !== "idle"} onSave={save}/>;
   const openSettings = (tab: SettingsTab) => setSettingsRequest(current => ({ id: (current?.id || 0) + 1, tab }));
-  const navigation = <><WorkspaceNavigation provider={provider} activity={activity} onSelect={select}/><WorkspaceSidebarResize width={sidebarWidth} onChange={setSidebarWidth}/></>;
+  const navigation = <><WorkspaceNavigation provider={provider} activity={activity} unread={unread} onSelect={select}/><WorkspaceSidebarResize width={sidebarWidth} onChange={setSidebarWidth}/></>;
   return <div className="unifiedWorkspace" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-reserved-width": `${sidebarWidth}px` } as React.CSSProperties}>
     <div className="workspaceSurface" hidden={provider !== "local"} inert={provider !== "local"}>
-      {renderPrivate({ active: provider === "local", navigation, onActivity: state => reportActivity("local", state), settingsRequest, providerSettings, onSettingsVisibility: setSettingsVisible })}
+      {renderPrivate({ active: provider === "local", navigation, onActivity: (state, hasUnread) => reportActivity("local", state, hasUnread), settingsRequest, providerSettings, onSettingsVisibility: setSettingsVisible })}
     </div>
     {(["codex", "claude"] as const).filter(id => visited.has(id)).map(id => <div key={id} className="workspaceSurface" hidden={provider !== id} inert={provider !== id}>
-      <CloudWorkspace api={api} settings={{ ...settings, provider: id }} onSettings={save} controllers={controllers} settingsVisible={settingsVisible} cloudBusy={activity.codex !== "idle" || activity.claude !== "idle"} onOpenSettings={openSettings} active={provider === id} navigation={navigation} onActivity={state => reportActivity(id, state)}/>
+      <CloudWorkspace api={api} settings={{ ...settings, provider: id }} onSettings={save} controllers={controllers} settingsVisible={settingsVisible} cloudBusy={activity.codex !== "idle" || activity.claude !== "idle"} onOpenSettings={openSettings} active={provider === id} navigation={navigation} onActivity={(state, hasUnread) => reportActivity(id, state, hasUnread)}/>
     </div>)}
     {error && <div className="cloudRootError" role="alert">{error}<button onClick={() => setError("")}>Dismiss</button></div>}
   </div>;

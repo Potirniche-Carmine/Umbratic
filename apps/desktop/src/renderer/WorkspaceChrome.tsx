@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown, PanelRight, Settings } from "lucide-react";
 import type { IdeInfo } from "../shared/desktopApi";
 import { IdeIcon } from "./ideLogos";
@@ -23,14 +23,27 @@ export function WorkspaceReviewToggle({ open, closing = false, onClick }: { open
   return <ShortcutTooltip id="review.toggle" label={label} placement="bottom"><button className="chromeButton composerReviewToggle" type="button" onClick={onClick} aria-pressed={open && !closing} aria-label={label}><PanelRight size={15}/></button></ShortcutTooltip>;
 }
 
-export function WorkspaceIdePicker({ choices, selected, disabled, open, title, onOpen, onToggle, onSelect }: {
-  choices: IdeInfo[]; selected: IdeInfo; disabled: boolean; open: boolean; title: string;
-  onOpen(): void; onToggle(): void; onSelect(id: string): void;
+export function WorkspaceIdePicker({ choices, selected, disabled, title, onOpen, onSelect }: {
+  choices: IdeInfo[]; selected: IdeInfo; disabled: boolean; title: string;
+  onOpen(id: string): void; onSelect(id: string): void;
 }) {
-  return <div className={`idePicker ${disabled ? "isDisabled" : ""}`}>
-    <button className="idePickerOpen" type="button" onClick={onOpen} disabled={disabled} title={title}><IdeIcon icon={selected.icon}/></button>
-    <button className="idePickerToggle" type="button" onClick={onToggle} disabled={disabled} aria-expanded={open} aria-haspopup="menu" title={disabled ? title : "Choose editor"}><ChevronDown size={13}/></button>
-    {open && <div className="ideMenu" role="menu" onKeyDown={event => {
+  const [open, setOpen] = useState(false);
+  const picker = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => { if (!picker.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", closeOutside);
+    picker.current?.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [open]);
+  return <div ref={picker} className={`idePicker ${disabled ? "isDisabled" : ""}`} onKeyDown={event => {
+    if (event.key !== "Escape" || !open) return;
+    event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus();
+  }}>
+    <button ref={trigger} className="idePickerTrigger" type="button" onClick={() => setOpen(value => !value)} disabled={disabled} aria-label={title} aria-expanded={open && !disabled} aria-haspopup="menu" title={title}><IdeIcon icon={selected.icon}/><ChevronDown size={12}/></button>
+    {open && !disabled && <div className="ideMenu" role="menu" aria-label="Open file with" onKeyDown={event => {
       const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("[role='menuitem']"));
       const index = items.indexOf(document.activeElement as HTMLButtonElement);
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -38,7 +51,7 @@ export function WorkspaceIdePicker({ choices, selected, disabled, open, title, o
       } else if (event.key === "Home") { event.preventDefault(); items[0]?.focus(); }
       else if (event.key === "End") { event.preventDefault(); items.at(-1)?.focus(); }
     }}>
-      {choices.map(ide => <button className={ide.id === selected.id ? "active" : ""} key={ide.id} type="button" role="menuitem" onClick={() => onSelect(ide.id)}><IdeIcon icon={ide.icon}/><span>{ide.label}</span></button>)}
+      {choices.map(ide => <button className={ide.id === selected.id ? "active" : ""} key={ide.id} type="button" role="menuitem" onClick={() => { onSelect(ide.id); onOpen(ide.id); setOpen(false); trigger.current?.focus(); }}><IdeIcon icon={ide.icon}/><span>Open in {ide.label}</span></button>)}
     </div>}
   </div>;
 }

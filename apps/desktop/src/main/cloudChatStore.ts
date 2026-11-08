@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isCloudProvider, type CloudChatRecord, type CloudProvider, type CloudWorkspace } from "../shared/cloud";
+import { isCloudProvider, type CloudProvider, type CloudWorkspace } from "../shared/cloud";
 import { withAppDatabase } from "./storageDatabase";
 
 export function cloudWorkspaceKey(provider: CloudProvider | "shared", paths: string[], chatId?: string): string {
@@ -34,9 +34,4 @@ export function storedCloudWorkspaces(): CloudWorkspace[] {
   });
 }
 
-export function cloudChatRecord(workspace: CloudWorkspace): CloudChatRecord {
-  const prompt = workspace.entries.find(entry => entry.kind === "instruction")?.text.trim().replace(/\s+/g, " ");
-  return { key: workspace.key, provider: workspace.provider, state: workspace.state,
-    title: prompt ? prompt.slice(0, 100) : "New chat", paths: workspace.paths || [workspace.path], repositoryIds: workspace.repositoryIds,
-    updatedAt: workspace.lastActiveAt || workspace.entries.at(-1)?.at || "" };
-}
+export { cloudChatRecord } from "../shared/cloudChatRecord";

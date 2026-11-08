@@ -108,7 +108,7 @@
 .cloudApproval button { background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 14px; }
 .cloudAnswerOptions { display: flex; flex-wrap: wrap; gap: 8px; }
 .cloudAnswerOptions button[aria-pressed="true"] { border-color: var(--blue); }
-.cloudReview { width: min(48vw, 800px); min-width: 360px; border-left: 1px solid var(--line); position: relative; overflow: hidden; }
+.cloudReview { width: var(--cloud-review-width, min(48vw, 800px)); flex-shrink: 0; min-width: 360px; border-left: 1px solid var(--line); position: relative; overflow: hidden; }
 .cloudReview > .reviewPanel { height: 100%; width: 100%; }
 .cloudLoading { height: 100dvh; display: grid; place-items: center; color: var(--muted); }
 .cloudRootError { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); z-index: 200; }
@@ -259,12 +259,6 @@
 .attachmentPreviewOpen { width: 100%; height: 100%; padding: 0; border: 0; border-radius: inherit; overflow: hidden; background: transparent; color: inherit; font: inherit; }
 .attachmentPreviewOpen img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .cloudAttachmentStrip .fileAttachment { height: 58px; max-width: 190px; }
-.cloudAttachmentPreview { position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 50px; box-sizing: border-box; border: 0; background: transparent; color: var(--text); }
-.cloudAttachmentPreview[open] { display: grid; place-items: center; }
-.cloudAttachmentPreview::backdrop { background: rgba(0,0,0,.6); backdrop-filter: blur(8px); }
-.cloudAttachmentPreview > img { max-width: 100%; max-height: calc(100dvh - 100px); border-radius: 12px; object-fit: contain; box-shadow: 0 15px 60px rgba(0,0,0,.3); }
-.cloudAttachmentPreview > button { position: absolute; right: 20px; top: 20px; color: white; }
-.cloudAttachmentPreview > div { text-align: center; padding: 32px; background: var(--surface); border-radius: 16px; }
 .cloudContextBar { min-height: 38px; flex-wrap: wrap; gap: 6px; }
 .cloudContextBar > [role="status"] { flex: 1; }
 .cloudRunControls { display: inline-flex; align-items: center; gap: 3px; }
@@ -287,12 +281,6 @@
 .cloudRunControls .cloudSelectText { min-width: 48px; }
 .cloudContextBar .cloudSelectTrigger:hover { background: var(--control-hover); }
 .cloudFolderCheck { margin-left: auto; }
-.cloudResetDialog { width: min(360px, calc(100vw - 64px)); background: var(--modal-bg); border: 1px solid var(--line-strong); border-radius: 18px; color: var(--text); padding: 24px; box-shadow: 0 24px 80px var(--shadow-color); }
-.cloudResetDialog::backdrop { background: rgba(0,0,0,.3); backdrop-filter: blur(6px); }
-.cloudResetDialog > svg { color: var(--muted); }
-.cloudResetDialog h2 { font-size: 18px; font-weight: 600; letter-spacing: -.2px; text-transform: none; color: var(--text); margin: 16px 0 8px; }
-.cloudResetDialog p { font-size: 13px; line-height: 1.6; color: var(--muted); margin-bottom: 24px; }
-.cloudResetDialog > div { display: flex; justify-content: flex-end; gap: 8px; }
 .cloudEntry .messageAttachmentList { margin-top: 10px; justify-content: flex-end; }
 .cloudEntry .attachmentPreview.imageAttachment { width: 90px; height: 72px; border-radius: 9px; }
 .cloudEntry .attachmentPreview.imageAttachment img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
@@ -332,12 +320,11 @@
 /* Preferences stay with the prompt; the footer contains quiet app and context actions. */
 .cloudContextBar { flex-wrap: nowrap; justify-content: space-between; gap: 12px; min-height: 34px; padding: 6px 3px 0; }
 .cloudContextMetrics { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
-.cloudContextBar .cloudUsageTrigger { gap: 14px; padding: 4px 6px; min-height: 30px; }
-.cloudMiniUsage { gap: 5px; }
+.cloudContextBar .cloudUsageTrigger { display: inline-flex; align-items: center; gap: 20px; padding: 7px 12px; min-height: 34px; }
+.cloudMiniUsage { gap: 7px; white-space: nowrap; }
 .cloudMiniUsage > span:last-child { display: flex; flex-direction: row-reverse; align-items: baseline; gap: 5px; min-width: 0; font-size: 11px; color: var(--muted); }
 .cloudMiniUsage small { font-size: inherit; }
 .cloudUsageRing.isCompact { flex-basis: 16px; width: 16px; height: 16px; }
-.cloudContextBar .cloudResetButton { justify-content: center; width: 30px; height: 30px; padding: 0; border-radius: 8px; }
 .cloudContextBar button:hover:not(:disabled) { background: var(--control-hover); color: var(--text); }
 .cloudSettingsTitle { padding: 8px 10px 0; margin-bottom: 20px; }
 .cloudSettingsSectionLabel { margin: 26px 2px 10px; font-size: 12px; font-weight: 500; color: var(--muted); text-transform: none; letter-spacing: 0; }
@@ -345,7 +332,7 @@
 @media (max-width: 480px) {
   .cloudContextBar { gap: 6px; }
   .cloudContextMetrics { gap: 3px; }
-  .cloudContextBar .cloudUsageTrigger { gap: 9px; }
+  .cloudContextBar .cloudUsageTrigger { gap: 14px; padding: 7px 10px; }
   .cloudMiniUsage > span:last-child { gap: 3px; font-size: 10px; }
   .cloudSettingsLauncher > span { display: none; }
   .cloudSettingsSidebar nav { overflow-x: auto; }
@@ -357,7 +344,7 @@
 .cloudDock { container: cloud-composer / inline-size; }
 .cloudDock .cloudProviderPicker .cloudSelectTrigger { width: 42px; justify-content: center; gap: 4px; padding: 5px; }
 .cloudProviderPicker .cloudSelectTrigger > svg:last-child { width: 11px; }
-.cloudComposerModel { flex: 0 1 auto; min-width: 0; max-width: 210px; }
+.cloudComposerModel { flex: 0 1 auto; min-width: 0; max-width: 280px; }
 .cloudDock .cloudModelTrigger { display: flex; align-items: center; gap: 7px; max-width: 100%; min-height: 32px; padding: 5px 7px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: 13px; color: var(--text); }
 .cloudModelTrigger:hover:not(:disabled), .cloudModelTrigger[aria-expanded="true"] { background: var(--control-hover); }
 .cloudModelTrigger > svg { flex: 0 0 auto; color: var(--muted); }

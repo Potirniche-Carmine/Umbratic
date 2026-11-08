@@ -327,8 +327,8 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 	if modelClient.req.Messages[0].Role != "system" || modelClient.req.Messages[1].Role != "system" {
 		t.Fatalf("server prompts were not prepended: %#v", modelClient.req.Messages)
 	}
-	if !strings.Contains(modelClient.req.Messages[0].Content.(string), "Umbratic") {
-		t.Fatalf("global identity prompt was not included: %#v", modelClient.req.Messages)
+	if !strings.Contains(modelClient.req.Messages[0].Content.(string), "Complete the user's request") {
+		t.Fatalf("global workflow prompt was not included: %#v", modelClient.req.Messages)
 	}
 	if modelClient.req.Messages[2].Content != "draft this" {
 		t.Fatalf("missing user input: %#v", modelClient.req.Messages)

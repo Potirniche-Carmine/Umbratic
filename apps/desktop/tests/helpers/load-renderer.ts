@@ -3,9 +3,10 @@ import React from "react";
 import { loadTypeScriptModule } from "./load-ts-module.ts";
 
 const iconNames = [
-  "BookOpen", "FilePenLine", "Search", "Wrench", "AtSign", "BarChart3", "Brain", "Check", "ChevronDown", "ChevronRight", "CheckCircle2", "CircleDashed",
-  "Cloud", "Code", "Copy", "Ellipsis", "ExternalLink", "File", "FileText", "FolderOpen", "FolderPlus", "FolderX", "GitBranch", "Hand", "Loader2", "LogOut", "MessageSquareX",
-  "Monitor", "Moon", "PanelRight", "Paperclip", "Pencil", "Play", "Plus", "RefreshCw", "Send", "Settings", "Maximize2", "Minus", "Folder", "FileCode2", "ShieldOff", "Gauge", "Zap",
+  "Columns2", "Rows3", "MessageSquarePlus", "WrapText",
+  "BookOpen", "FilePenLine", "Search", "Wrench", "AtSign", "BarChart3", "Brain", "Check", "ChevronDown", "ChevronLeft", "ChevronRight", "CheckCircle2", "CircleDashed", "CornerUpRight", "MessageSquareText", "Square",
+  "Cloud", "Code", "Copy", "Ellipsis", "ExternalLink", "File", "FileText", "FolderOpen", "FolderPlus", "FolderX", "GitBranch", "Globe", "Hand", "Loader2", "LogOut", "MessageSquareX", "Mic",
+  "Monitor", "Moon", "PanelRight", "Paperclip", "Pencil", "Play", "Plus", "RefreshCw", "RotateCcw", "Send", "Settings", "Maximize2", "Minimize2", "Minus", "Folder", "FileCode2", "ShieldOff", "Gauge", "Zap",
   "ShieldCheck", "Sparkles", "SquarePen", "SquareTerminal", "Sun", "ThumbsDown", "ThumbsUp",
   "Trash2", "TriangleAlert", "Type", "Undo2", "User", "X",
 ];
@@ -47,7 +48,7 @@ function browserGlobals() {
   };
 }
 
-export function loadRendererModule(moduleUrl: URL) {
+export function loadRendererModule(moduleUrl: URL, mocks = {}) {
   const icon = (props) => React.createElement("svg", props);
   const lucide = Object.fromEntries(iconNames.map((name) => [name, icon]));
   return loadTypeScriptModule(moduleUrl, {
@@ -58,12 +59,13 @@ export function loadRendererModule(moduleUrl: URL) {
       "react-dom/client": {
         createRoot: () => ({ render() {} }),
       },
+      ...mocks,
     },
   });
 }
 
-export function loadRendererFile(file: string) {
-  return loadRendererModule(new URL(`../../src/renderer/${file}`, import.meta.url));
+export function loadRendererFile(file: string, mocks = {}) {
+  return loadRendererModule(new URL(`../../src/renderer/${file}`, import.meta.url), mocks);
 }
 
 export function loadRenderer() {

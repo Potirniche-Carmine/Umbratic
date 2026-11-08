@@ -10,6 +10,16 @@ test("shared prompt keyboard honors send preference and IME composition", () => 
   assert.equal(promptEnterAction(input("hello", { sendOnEnter: false })), null);
   assert.equal(promptEnterAction(input("hello", { sendOnEnter: false, metaKey: true })).type, "send");
 });
+test("active runs use Enter to steer and Shift Enter to queue for either send preference", () => {
+  for (const sendOnEnter of [true, false]) {
+    for (const value of ["Next instruction", "1. Check tests", "- [x] Done"]) {
+      assert.deepEqual(promptEnterAction(input(value, { running: true, sendOnEnter })), { type: "steer" });
+      assert.deepEqual(promptEnterAction(input(value, { running: true, sendOnEnter, shiftKey: true })), { type: "queue" });
+    }
+  }
+  assert.equal(promptEnterAction(input("Next instruction", { running: true, isComposing: true })), null);
+  assert.equal(promptEnterAction(input("Next instruction", { running: true, key: "Escape" })), null);
+});
 test("Shift Enter continues numbered, bullet and task lists and exits an empty bullet", () => {
   for (const [from, to] of [["1. First", "1. First\n2. "], ["- First", "- First\n- "], ["  * First", "  * First\n  * "], ["- [x] Done", "- [x] Done\n- [ ] "], ["- ", ""]]) {
     const action = promptEnterAction(input(from, { shiftKey: true }));

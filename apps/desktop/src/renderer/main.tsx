@@ -12,6 +12,8 @@ import { GeneratedImages } from "./GeneratedImages";
 import { withoutGeneratedImages } from "../shared/generatedImages";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { trackPanelResize } from "./panelResize";
+import { ConfirmationDialog } from "./ConfirmationDialog";
+import { AttachmentPreviewDialog } from "./AttachmentPreviewDialog";
 import { ChatArchive } from "./ChatArchive";
 import { useSkillSettings } from "./useSkillSettings";
 import type {
@@ -86,15 +88,14 @@ import {
 } from "./ComposerControls";
 import { insertTranscript, useDictation } from "./dictation";
 import {
-  chatJumpFromEvent,
-  chatJumpLimit,
-  chatJumpModifierHeld,
   setShortcutOverrides,
-  shortcutForEvent,
-  type ShortcutId,
   type ShortcutOverrides,
 } from "./keyboardShortcuts";
 import { ShortcutTooltip } from "./Tooltip";
+import { useChatJumpShortcuts } from "./useChatJumpShortcuts";
+import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts";
+import { localChatActivity } from "./ChatActivityIndicator";
+import { useChatReadState } from "./useChatReadState";
 import { KeyboardSettingsPanel } from "./KeyboardSettings";
 import { AboutSettingsPanel } from "./AboutSettings";
 import { createPortal, flushSync } from "react-dom";
@@ -108,10 +109,8 @@ import {
   Copy,
   File,
   Folder,
-  FolderX,
   FolderOpen,
   Loader2,
-  MessageSquareX,
   MessageSquareText,
   Mic,
   MicOff,
@@ -123,7 +122,6 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
-  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -210,7 +208,7 @@ import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
 import { ConnectionNotice } from "./connectionNotice";
 import { ErrorToast } from "./errorToast";
-import { WorkspaceHeader, WorkspaceIdePicker, WorkspaceReviewToggle, WorkspaceSettingsButton } from "./WorkspaceChrome";
+import { WorkspaceHeader, WorkspaceReviewToggle, WorkspaceSettingsButton } from "./WorkspaceChrome";
 
 export const streamingMarkdownRenderBatchIntervalMs = 50;
 const maxCachedTaskEventGroups = 24;
@@ -296,13 +294,13 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   const [promptScrollTop, setPromptScrollTop] = useState(0);
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<DeleteCandidate | null>(null);
+  useEffect(() => { setDeleteError(""); }, [deleteCandidate]);
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => new Set());
   const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
-  // True while the modifier that jumps to a chat is held down, which is when
-  // the sidebar wears its numbers. Holding the key is how the shortcut is
-  // discovered at all: the rows say nothing about it the rest of the time.
-  const [chatJumpKeysVisible, setChatJumpKeysVisible] = useState(false);
+  const [chatQuery, setChatQuery] = useState("");
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(previewEnvironment?.events ?? []);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
@@ -372,7 +370,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
   const skillSettings = useSkillSettings(api);
   const { skills, skillsEnabled, loadSkills } = skillSettings;
   const [localLogsBusy, setLocalLogsBusy] = useState(false);
-  const [ideMenuOpen, setIdeMenuOpen] = useState<"composer" | "review" | null>(null);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
@@ -461,15 +458,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
   const activityBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const activityFollowScrollRef = useRef<Map<string, boolean>>(new Map());
   const activityScrollInputRef = useRef<Set<string>>(new Set());
-  // What each keyboard shortcut does, and whether any of them may fire. Refs
-  // rather than effect dependencies: see where they are filled in below.
-  const shortcutActionsRef = useRef<Partial<Record<ShortcutId, () => void>>>({});
-  // The numbered rows, read by the one key listener below. Same reason as the
-  // action table beside it: the listener subscribes once and the sidebar is
-  // rebuilt on every chat that arrives.
-  const chatJumpTargetsRef = useRef<ChatRecord[]>([]);
-  const shortcutsBlockedRef = useRef(false);
-  const settingsToggleAllowedRef = useRef(false);
   const visibleTaskIdRef = useRef<string | null>(previewEnvironment?.task.id ?? null);
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
   const latestTaskId = task?.id;
@@ -617,7 +605,7 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
     : busy || isGenerating
       ? "Another action is still finishing."
       : `This turn's work has already been ${task.state === "merged" ? "merged" : task.state === "rejected" ? "rejected" : "approved"}.`;
-  const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
+  const canOpenIde = !!repository || !!task && !["merged", "rejected", "completed"].includes(task.state);
   const approvalPending = task?.state === "awaiting_worktree_approval" || !!pendingPermission;
   const reviewEmptyLabel = !task
     ? "No active review"
@@ -810,8 +798,8 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
   // order — one is what the sidebar draws while the modifier is down, the other
   // is what a number press lands on, and they cannot be allowed to disagree.
   const visibleChats = useMemo(
-    () => visibleChatOrder(chatProjectGroups, collapsedProjectKeys, collapsedWorktreeKeys),
-    [chatProjectGroups, collapsedProjectKeys, collapsedWorktreeKeys],
+    () => visibleChatOrder(chatProjectGroups, collapsedProjectKeys, collapsedWorktreeKeys, chatQuery),
+    [chatProjectGroups, collapsedProjectKeys, collapsedWorktreeKeys, chatQuery],
   );
   const chatJumpNumbersById = useMemo(() => chatJumpNumbers(visibleChats), [visibleChats]);
   const layoutStyle = {
@@ -1090,10 +1078,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
     }
   }, [availableIdes, selectedIdeId]);
 
-  useEffect(() => {
-    if (!canOpenIde && ideMenuOpen === "review") setIdeMenuOpen(null);
-  }, [canOpenIde, ideMenuOpen]);
-
   useEffect(
     () => () => {
       if (reviewAnimationRef.current !== null) window.cancelAnimationFrame(reviewAnimationRef.current);
@@ -1157,21 +1141,8 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
     void loadSkills();
   }
 
-  /**
-   * The app's own keyboard shortcuts.
-   *
-   * One document-level listener dispatching off the same table the Keyboard
-   * settings page prints and the tooltips advertise, so a chord that fires and
-   * a chord that is documented cannot drift apart. It runs on capture, because
-   * the composer textarea holds focus almost all the time and a chord caught
-   * there would never reach the window.
-   */
-  // Rewritten every render and read through a ref, so the one listener below
-  // can subscribe once and still call today's closures. A dependency list here
-  // would have to name everything these actions read — the draft, the
-  // attachments, the run — and the day it missed one, a shortcut would quietly
-  // act on a stale copy of the composer.
-  shortcutActionsRef.current = {
+  const chatJumpKeysVisible = useChatJumpShortcuts(visibleChats, chat => void selectChat(chat), modalOpen || !active);
+  useWorkspaceShortcuts({
     "dictation.toggle": toggleDictation,
     "chat.new": () => void newChat(),
     // Raises the same confirmation the sidebar's trash button does rather than
@@ -1186,76 +1157,10 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
     // while the first stop is still landing would read as the key doing
     // nothing rather than as the run already ending.
     "run.stop": () => { if (isGenerating && !stopPending) void stopTask(); },
-  };
-  chatJumpTargetsRef.current = visibleChats.slice(0, chatJumpLimit);
-  // Read the same way, so a chord cannot reach past a dialog to a window the
-  // user cannot currently see.
-  shortcutsBlockedRef.current = modalOpen || !active;
-  // Settings and Keyboard shortcuts remain available inside Settings.
-  // Other dialogs keep every app action out.
-  settingsToggleAllowedRef.current = settingsOpen && !(active && nonSettingsModalOpen);
-
-  useEffect(() => {
-    const runShortcut = (event: KeyboardEvent) => {
-      // Never on the auto-repeat of a held key, and never mid-IME sequence.
-      if (event.repeat || event.isComposing) return;
-      if (!surfaceActive.current && !settingsToggleAllowedRef.current) return;
-      if (shortcutsBlockedRef.current) {
-        // Settings can close itself or show Keyboard. Every other modal
-        // keeps app shortcuts out.
-        const blockedShortcut = shortcutForEvent(event);
-        if ((blockedShortcut?.id === "app.settings" || blockedShortcut?.id === "app.shortcuts") && settingsToggleAllowedRef.current) {
-          event.preventDefault();
-          shortcutActionsRef.current[blockedShortcut.id]?.();
-        }
-        return;
-      }
-      // The number keys first: they are nine chords for one gesture, so they
-      // are matched by position rather than looked up in the table. A number
-      // with no chat under it is left alone rather than swallowed.
-      const jumpPosition = chatJumpFromEvent(event);
-      const jumpTarget = jumpPosition ? chatJumpTargetsRef.current[jumpPosition - 1] : undefined;
-      if (jumpTarget) {
-        event.preventDefault();
-        // The badges stay up: the modifier is still down, and somebody who just
-        // pressed 3 is as likely as not about to press 4.
-        void selectChat(jumpTarget);
-        return;
-      }
-      const shortcut = shortcutForEvent(event);
-      const action = shortcut && shortcutActionsRef.current[shortcut.id];
-      if (!action) return;
-      event.preventDefault();
-      action();
-    };
-    document.addEventListener("keydown", runShortcut, true);
-    return () => document.removeEventListener("keydown", runShortcut, true);
-  }, []);
-
-  /**
-   * The numbers on the sidebar rows, raised and dropped with the modifier.
-   *
-   * Both events carry the modifier state, so holding it and letting it go are
-   * the same handler rather than a pair that can fall out of step — and a chord
-   * that starts with the modifier and ends somewhere else takes the badges down
-   * on its own way through.
-   */
-  useEffect(() => {
-    const sync = (event: KeyboardEvent) => {
-      setChatJumpKeysVisible(!shortcutsBlockedRef.current && chatJumpModifierHeld(event));
-    };
-    const clear = () => setChatJumpKeysVisible(false);
-    document.addEventListener("keydown", sync, true);
-    document.addEventListener("keyup", sync, true);
-    // A modifier let go of while another window has focus never reaches this
-    // one, and the badges would still be up when the user came back to it.
-    window.addEventListener("blur", clear);
-    return () => {
-      document.removeEventListener("keydown", sync, true);
-      document.removeEventListener("keyup", sync, true);
-      window.removeEventListener("blur", clear);
-    };
-  }, []);
+  }, { mode: "private", blocked: modalOpen || !active,
+    allowSettings: settingsOpen && !(active && nonSettingsModalOpen),
+    onEscape: () => { if (reviewOpen) closeReviewPanel(); },
+  });
 
   useEffect(() => {
     const isOpen = modalOpen;
@@ -1359,7 +1264,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
       if (!target) return;
       if (!target.closest(".branchControl")) setBranchMenuOpen(false);
       if (!target.closest(".permissionControl")) setPermissionMenuOpen(false);
-      if (!target.closest(".idePicker")) setIdeMenuOpen(null);
       if (!target.closest(".chatProjectActions")) setProjectActionMenuKey(null);
       if (!target.closest(".attachmentMenu")) setMention(null);
     };
@@ -1367,7 +1271,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
       if (event.key !== "Escape") return;
       setBranchMenuOpen(false);
       setPermissionMenuOpen(false);
-      setIdeMenuOpen(null);
       setProjectActionMenuKey(null);
       setMention(null);
     };
@@ -2313,6 +2216,12 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
     }
   }
 
+  function steerCurrentPrompt() {
+    if (!canQueue) return;
+    const submission = currentComposerSubmission();
+    if (submission) void steerSubmission(submission);
+  }
+
   async function steerSubmission(submission: ComposerSubmission, queuedId?: string) {
     if (!task || task.state !== "running" || steerPending) return;
     const steeredPrompt = appendReviewFeedback(submission.prompt, submission.reviewFeedback).trim();
@@ -2424,37 +2333,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
     } finally {
       setLocalLogsBusy(false);
     }
-  }
-
-  async function openIde(ideId: string) {
-    if (!repository) return;
-    setIdeMenuOpen(null);
-    const result = await api.openRepositoryInIde({ repositoryId: repository.id, ideId });
-    if (!result.ok) setError(result.message);
-  }
-
-  function toggleIdeMenu(owner: "composer" | "review") {
-    setIdeMenuOpen((open) => {
-      const next = open === owner ? null : owner;
-      if (next) {
-        setBranchMenuOpen(false);
-        setPermissionMenuOpen(false);
-      }
-      return next;
-    });
-  }
-
-  function renderIdePicker(owner: "composer" | "review") {
-    const canOpen = owner === "composer" ? !!repository : canOpenIde;
-    const expanded = ideMenuOpen === owner && canOpen;
-    const disabledTitle = owner === "composer" ? "Select a folder first" : "No review folder yet";
-    const openTitle =
-      owner === "composer"
-        ? `Open ${repository?.name ?? "folder"} in ${selectedIde.label}`
-        : `Use ${selectedIde.label} for changed files`;
-    return <WorkspaceIdePicker choices={availableIdes} selected={selectedIde} disabled={!canOpen} open={expanded}
-      title={canOpen ? openTitle : disabledTitle} onOpen={() => void openIde(selectedIde.id)} onToggle={() => toggleIdeMenu(owner)}
-      onSelect={id => { setSelectedIdeId(id); setIdeMenuOpen(null); }}/>;
   }
 
   function reviewMaxWidth() {
@@ -2597,10 +2475,13 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [reviewOpen, reviewClosing]);
 
-  async function openReviewFile(filePath: string) {
-    if (!canOpenIde || !task) return;
+  async function openReviewFile(filePath: string, ideId = selectedIde.id) {
+    if (!canOpenIde) return;
     setError(null);
-    const result = await api.openTaskInIde({ taskId: task.id, ideId: selectedIde.id, filePath });
+    const result = task && !["merged", "rejected", "completed"].includes(task.state)
+      ? await api.openTaskInIde({ taskId: task.id, ideId, filePath })
+      : repository ? await api.openRepositoryInIde({ repositoryId: repository.id, ideId, filePath }) : null;
+    if (!result) return;
     if (!result.ok) setError(result.message);
   }
 
@@ -2690,7 +2571,6 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
   async function undoReviewChanges(filePath?: string) {
     if (!task || !canUndoFile) return;
     setBusy(true);
-    setIdeMenuOpen(null);
     try {
       const next = await api.undoTaskChanges({ taskId: task.id, ...(filePath ? { path: filePath } : {}) });
       if (!next) return;
@@ -2984,14 +2864,15 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
       }
     }
     const target = event.currentTarget;
-    const action = promptEnterAction({ key: event.key, isComposing: event.nativeEvent.isComposing, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, sendOnEnter, value: target.value, start: target.selectionStart, end: target.selectionEnd });
+    const action = promptEnterAction({ key: event.key, isComposing: event.nativeEvent.isComposing, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, sendOnEnter, running: isGenerating, value: target.value, start: target.selectionStart, end: target.selectionEnd });
     if (!action) return;
     event.preventDefault();
     if (action.type === "insert") {
       followComposerScrollRef.current = true;
       setPrompt(action.insertion.value); setMention(null); setFileMatches([]); setSelectedFileIndex(0); setSelectedSkillIndex(0);
       window.requestAnimationFrame(() => textareaRef.current?.setSelectionRange(action.insertion.caret, action.insertion.caret));
-    } else if (isGenerating) queueCurrentPrompt();
+    } else if (action.type === "queue") void queueCurrentPrompt();
+    else if (action.type === "steer") steerCurrentPrompt();
     else void startTask();
   }
 
@@ -3240,9 +3121,9 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
   }
 
   async function confirmDeleteCandidate() {
-    if (!deleteCandidate) return;
+    if (!deleteCandidate || deletePending) return;
     const target = deleteCandidate;
-    setDeleteCandidate(null);
+    setDeletePending(true); setDeleteError("");
     try {
       if (target.kind === "chat") {
         await api.deleteChat({ chatId: target.chat.id });
@@ -3260,9 +3141,10 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
           setRepository(null);
         }
       }
+      setDeleteCandidate(null);
     } catch (cause) {
-      setError(String(cause instanceof Error ? cause.message : cause));
-    }
+      setDeleteError(String(cause instanceof Error ? cause.message : cause));
+    } finally { setDeletePending(false); }
   }
 
   function beginReviewResize(event: React.PointerEvent<HTMLDivElement>) {
@@ -3286,7 +3168,11 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
   }
 
 
-  useEffect(() => { onActivity(pendingPermission ? "waiting" : isGenerating ? "running" : "idle"); }, [pendingPermission, isGenerating, onActivity]);
+  const chatActivity = chats.filter(chat => chat.taskState).map(chat => ({ id: chat.id, updatedAt: chat.updatedAt,
+    state: localChatActivity(chat.id === task?.chatId ? task.state : chat.taskState, !!pendingPermission && chat.id === task?.chatId) }));
+  const unreadChatIds = useChatReadState("local", chatActivity, activeChatId, active && !settingsOpen && task?.chatId === activeChatId);
+  const providerActivity = chatActivity.some(chat => chat.state === "waiting") ? "waiting" : chatActivity.some(chat => chat.state === "running") ? "running" : localChatActivity(task?.state, !!pendingPermission);
+  useEffect(() => { onActivity(providerActivity, unreadChatIds.size > 0); }, [providerActivity, unreadChatIds.size, onActivity]);
 
   return (
     <div
@@ -3308,7 +3194,9 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
         {navigation}
         <div className="sidebarStack">
           <ChatArchive
-            chatProjectGroups={chatProjectGroups} activeChatId={activeChatId}
+            chatProjectGroups={chatProjectGroups} activeChatId={activeChatId} query={chatQuery} onQueryChange={setChatQuery}
+            waitingChatId={pendingPermission ? task?.chatId ?? activeChatId : null}
+            unreadChatIds={unreadChatIds}
             chatJumpKeysVisible={chatJumpKeysVisible} chatJumpNumbersById={chatJumpNumbersById}
             collapsedProjectKeys={collapsedProjectKeys} collapsedWorktreeKeys={collapsedWorktreeKeys}
             projectActionMenuKey={projectActionMenuKey} setProjectActionMenuKey={setProjectActionMenuKey}
@@ -3339,8 +3227,7 @@ function App({ startupSettings, active, navigation, onActivity, settingsRequest,
         <section className="workArea">
           <section className="composerPanel">
             <WorkspaceHeader title={composerHeaderTitle} meta={<><span>{composerHeaderMeta}</span>{remoteBadge ? <RemoteChatBadge name={remoteBadge.name} directory={remoteBadge.directory}/> : null}</>} indexing={indexingThisWorkspace}>
-              {renderIdePicker("composer")}
-              <WorkspaceReviewToggle open={reviewOpen} closing={reviewClosing} onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}/>
+              {(!reviewOpen || reviewClosing) && <WorkspaceReviewToggle open={reviewOpen} closing={reviewClosing} onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}/>}
             </WorkspaceHeader>
             <div
               className="composerBody"
@@ -3856,13 +3743,13 @@ item.reviewFeedback.length ? (
                     </button>
                   </ShortcutTooltip>
                 ) : isGenerating ? (
-                  <ShortcutTooltip id="composer.send" sendOnEnter={sendOnEnter} label="Queue prompt">
+                  <ShortcutTooltip id="composer.send" label="Steer with prompt">
                     <button
-                      className="sendButton queueButton"
+                      className="sendButton"
                       type="button"
-                      onClick={queueCurrentPrompt}
+                      onClick={steerCurrentPrompt}
                       disabled={!canQueue}
-                      aria-label="Queue prompt"
+                      aria-label="Send prompt"
                     >
                       <Send aria-hidden="true" size={16} />
                     </button>
@@ -3896,6 +3783,9 @@ item.reviewFeedback.length ? (
           canUndoFile={canUndoFile}
           undoUnavailableReason={undoUnavailableReason}
           selectedIdeLabel={selectedIde.label}
+          availableIdes={availableIdes}
+          selectedIde={selectedIde}
+          onSelectIde={setSelectedIdeId}
           onClose={closeReviewPanel}
           onUndoFile={(filePath) => void undoReviewChanges(filePath)}
           onUndoAll={() => void undoReviewChanges()}
@@ -4019,68 +3909,10 @@ item.reviewFeedback.length ? (
         </div>, document.body
       ) : null}
 
-      {previewAttachment?.previewDataUrl ? (
-        <div className="modalScrim imagePreviewScrim" role="presentation" onClick={() => setPreviewAttachment(null)}>
-          <section
-            ref={modalRef}
-            tabIndex={-1}
-            className="imagePreviewDialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label={attachmentLabel(previewAttachment)}
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => { if (event.key === "Escape") setPreviewAttachment(null); }}
-          >
-            <div className="imagePreviewHeader">
-              <strong>{attachmentLabel(previewAttachment)}</strong>
-              <button className="messageAction" type="button" onClick={() => setPreviewAttachment(null)} aria-label="Close preview" title="Close preview">
-                <X size={15} />
-              </button>
-            </div>
-            <div className="imagePreviewCanvas">
-              <img alt={attachmentLabel(previewAttachment)} src={previewAttachment.previewDataUrl} />
-            </div>
-          </section>
-        </div>
-      ) : null}
-
-      {deleteCandidate ? (
-        <div className="modalScrim" role="presentation">
-          <section ref={modalRef} tabIndex={-1} className="riskDialog deleteDialog" role="dialog" aria-modal="true" aria-labelledby="delete-title" onKeyDown={(event) => { if (event.key === "Escape") setDeleteCandidate(null); }}>
-            <div className="dialogIcon deleteIcon">
-              {deleteCandidate.kind === "project" ? (
-                <FolderX size={18} />
-              ) : deleteCandidate.kind === "projectChats" ? (
-                <MessageSquareX size={18} />
-              ) : (
-                <Trash2 size={18} />
-              )}
-            </div>
-            <div>
-              <h3 id="delete-title">{deleteCandidateTitle(deleteCandidate)}</h3>
-              <p>{deleteCandidateDescription(deleteCandidate)}</p>
-            </div>
-            <div className="dialogActions">
-              <button className="secondaryAction" type="button" onClick={() => setDeleteCandidate(null)}>
-                Cancel
-              </button>
-              {/* The dialog was raised by asking to delete, so Enter answers the
-                  question that was asked. Cancel is still one Tab away and
-                  Escape still leaves without doing anything. */}
-              <button className="dangerAction" type="button" data-modal-autofocus onClick={confirmDeleteCandidate}>
-                {deleteCandidate.kind === "project" ? (
-                  <FolderX size={14} />
-                ) : deleteCandidate.kind === "projectChats" ? (
-                  <MessageSquareX size={14} />
-                ) : (
-                  <Trash2 size={14} />
-                )}
-                {deleteCandidateActionLabel(deleteCandidate)}
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+      {active && previewAttachment?.previewDataUrl && <AttachmentPreviewDialog name={attachmentLabel(previewAttachment)} imageUrl={previewAttachment.previewDataUrl} onClose={() => setPreviewAttachment(null)}/>}
+      {active && deleteCandidate && <ConfirmationDialog kind={deleteCandidate.kind === "projectChats" ? "chats" : deleteCandidate.kind}
+        title={deleteCandidateTitle(deleteCandidate)} description={deleteCandidateDescription(deleteCandidate)} actionLabel={deleteCandidateActionLabel(deleteCandidate)}
+        busy={deletePending} error={deleteError} onCancel={() => setDeleteCandidate(null)} onConfirm={() => void confirmDeleteCandidate()}/>}
 
       {showElevatedPermissionsDialog ? (
         <div className="modalScrim" role="presentation">

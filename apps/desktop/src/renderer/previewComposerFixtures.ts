@@ -1,4 +1,5 @@
 import type { DocumentReviewSnapshot } from "../shared/documentReview";
+import { showcaseTask } from "./previewShowcase";
 import {
   buildTextDiff,
   normalizeReviewFile,
@@ -558,17 +559,18 @@ const previewUpdateStatus: AppUpdateStatus = {
   state: { phase: "unsupported" },
 };
 
+  const showcase = composerTestParams.has("showcase") ? showcaseTask(composerTestTask) : null;
   return {
     composerTestParams,
-    composerTestAttachments,
-    composerTestPrompt,
+    composerTestAttachments: showcase ? [] : composerTestAttachments,
+    composerTestPrompt: showcase ? "" : composerTestPrompt,
     composerTestRepository,
-    composerTestVisibleEvents,
+    composerTestVisibleEvents: showcase?.events ?? composerTestVisibleEvents,
     composerTestDocumentPath,
     composerTestDocumentPreview,
     composerTestReviewFiles,
     composerTestWholeDiffFiles,
-    composerTestTask,
+    composerTestTask: showcase ?? composerTestTask,
     previewChatModel,
     previewUpdateStatus,
   };

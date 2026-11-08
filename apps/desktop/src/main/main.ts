@@ -1,6 +1,8 @@
+import { installCloudBrowser } from "./cloudBrowser";
+import { listCloudAllowedCommands, revokeCloudAllowedCommand } from "./cloudCommandRules";
 import { saveCloudImages } from "./cloudImages";
 import { pickCloudFolders } from "./repositoryOps";
-import { listCloudChats, createCloudChat, deleteCloudChat, readCloudFile, getCloudSettings, saveCloudSettings, inspectCloudProvider, disconnectCloudProvider, cancelCloudSignIn, signInCloudProvider, installCloudProvider, getCloudWorkspace, startCloudTurn, stopCloudTurn, resetCloudContext, respondCloudApproval, stopCloudService } from "./cloudService";
+import { cloudProjectChats, listCloudChats, createCloudChat, deleteCloudChat, readCloudFile, getCloudSettings, saveCloudSettings, inspectCloudProvider, disconnectCloudProvider, cancelCloudSignIn, signInCloudProvider, installCloudProvider, getCloudWorkspace, startCloudTurn, sendCloudFollowUp, removeCloudQueuedPrompt, stopCloudTurn, respondCloudApproval, stopCloudService } from "./cloudService";
 import { readGeneratedImage } from "./generatedImage";
 import { imageRuntimeBinary } from "./localImage";
 import { readImageModelSetting, writeImageModelSetting } from "./settingsStorage";
@@ -361,6 +363,9 @@ async function createWindow() {
 
 function desktopIpcHandlers(): DesktopIpcHandlers {
   return {
+    installCloudBrowser: async () => installCloudBrowser(),
+    listCloudAllowedCommands: async () => listCloudAllowedCommands(),
+    revokeCloudAllowedCommand: async input => revokeCloudAllowedCommand(input),
     getCloudSettings: async () => getCloudSettings(),
     saveCloudSettings: async (input) => saveCloudSettings(input),
     inspectCloudProvider: async (input) => inspectCloudProvider(input),
@@ -376,8 +381,9 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     deleteCloudChat: async (input) => deleteCloudChat(input),
     getCloudWorkspace: async (input) => getCloudWorkspace(input),
     startCloudTurn: async (input) => startCloudTurn(input),
+    sendCloudFollowUp: async (input) => sendCloudFollowUp(input),
+    removeCloudQueuedPrompt: async (input) => removeCloudQueuedPrompt(input),
     stopCloudTurn: async (input) => stopCloudTurn(input),
-    resetCloudContext: async (input) => resetCloudContext(input),
     respondCloudApproval: async (input) => respondCloudApproval(input),
 
     listProjects: () => readProjects(),
@@ -390,7 +396,12 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     clearUnsavedDraft: (input) => clearUnsavedDraft(input),
     deleteChat: (input) => deleteChat(input),
     deleteProjectChats: (input) => deleteProjectChats(input),
-    deleteProject: (input) => deleteProject(input),
+    deleteProject: (input) => {
+      const chats = cloudProjectChats(input.projectId);
+      const result = deleteProject(input);
+      for (const chat of chats) deleteCloudChat({ key: chat.key, provider: chat.provider });
+      return result;
+    },
     getNotes: () => getNotes(),
     updateNotes: (input) => updateNotes(input),
     getTask: (input) => publicTaskById(input),

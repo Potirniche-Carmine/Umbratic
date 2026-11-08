@@ -16,12 +16,16 @@ function fixture() {
     connection: undefined,
     async inspect() { return runtime.connection; },
     async signOut() {},
-    run(settings, workspace, prompt, sink) {
+    run(settings, workspace, prompt, sink, images) {
       let resolve; let reject;
       const done = new Promise((yes, no) => { resolve = yes; reject = no; });
-      const call = { settings, workspace, prompt, sink, resolve, reject };
+      const call = { settings, workspace, prompt, sink, images, resolve, reject, steers: [] };
       calls.push(call);
-      return { done, stop: async () => reject(new Error("Interrupted")) };
+      return { done, stop: async () => reject(new Error("Interrupted")), async steer(prompt, images) {
+        if (runtime.steerError) throw runtime.steerError;
+        if (runtime.steerWait) await runtime.steerWait;
+        call.steers.push({ prompt, images });
+      } };
     },
   };
   const service = loadTypeScriptModule(new URL("../src/main/cloudService.ts", import.meta.url), {
@@ -37,6 +41,139 @@ function fixture() {
   return { service, calls, events, db, loginStops, runtime, close: () => { service.stopCloudService(); db.close(); fs.rmSync(directory, { recursive: true, force: true }); } };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+for (const provider of ["codex", "claude"]) {
+  test(`${provider} runs saved follow-ups in order with the latest settings and their attachments`, async () => {
+    const f = fixture();
+    try {
+      const workspace = f.service.startCloudTurn({ provider, repositoryIds: ["project"], prompt: "First" });
+      f.calls[0].sink.session("native-session", "account");
+      const root = path.join(workspace.path, "cloud", "images"); fs.mkdirSync(root, { recursive: true });
+      const image = { id: randomUUID(), name: "shot.png", mimeType: "image/png", previewDataUrl: "data:image/png;base64,AA==" };
+      fs.writeFileSync(path.join(root, `${image.id}.png`), "image");
+      fs.writeFileSync(path.join(root, `${image.id}.json`), JSON.stringify(image));
+      await f.service.sendCloudFollowUp({ key: workspace.key, mode: "queue", prompt: "Second", imageIds: [image.id] });
+      await f.service.sendCloudFollowUp({ key: workspace.key, mode: "queue", prompt: "Third" });
+      assert.equal(f.calls.length, 1);
+      const stored = JSON.parse(f.db.prepare("SELECT payload FROM settings WHERE key = ?").get(`cloud:workspace:${workspace.key}`).payload);
+      assert.deepEqual(stored.queuedPrompts.map(item => item.prompt), ["Second", "Third"]);
+      assert.deepEqual(stored.entries.map(item => item.text), ["First"]);
+      const settings = f.service.getCloudSettings();
+      settings.providers[provider].orchestrator = { model: "next-model", effort: "high" };
+      settings.providers[provider].approvalMode = "auto"; settings.subagents = false;
+      f.service.saveCloudSettings(settings);
+      assert.notEqual(f.calls[0].settings.providers[provider].orchestrator.model, "next-model");
+      f.calls[0].resolve(); await tick();
+      assert.equal(f.calls.length, 2); assert.equal(f.calls[1].prompt, "Second");
+      assert.equal(f.calls[1].workspace.sessionId, "native-session");
+      assert.equal(f.calls[1].settings.providers[provider].orchestrator.model, "next-model");
+      assert.equal(f.calls[1].settings.providers[provider].approvalMode, "auto");
+      assert.equal(f.calls[1].settings.subagents, false);
+      assert.equal(f.calls[1].images[0].image.id, image.id);
+      assert.equal(f.service.getCloudWorkspace({ provider, key: workspace.key }).entries.at(-1).images[0].id, image.id);
+      f.calls[1].resolve(); await tick();
+      assert.equal(f.calls.length, 3); assert.equal(f.calls[2].prompt, "Third");
+      f.calls[2].resolve(); await tick();
+      const finished = f.service.getCloudWorkspace({ provider, key: workspace.key });
+      assert.equal(finished.state, "idle"); assert.deepEqual(finished.queuedPrompts, []);
+      assert.ok(finished.entries.filter(entry => entry.kind === "instruction").every(entry => entry.completedAt));
+    } finally { f.close(); }
+  });
+
+  test(`${provider} steers the active native run and retracts an accepted queued message exactly once`, async () => {
+    const f = fixture();
+    try {
+      const workspace = f.service.startCloudTurn({ provider, prompt: "First" });
+      f.calls[0].sink.text("same-message", "Before steering", false);
+      await f.service.sendCloudFollowUp({ key: workspace.key, mode: "steer", prompt: "Focus on tests" });
+      f.calls[0].sink.text("same-message", " and after", true);
+      let timeline = f.service.getCloudWorkspace({ provider, key: workspace.key }).entries;
+      assert.equal(timeline.at(-1).text, "Before steering and after");
+      assert.equal(timeline.at(-2).text, "Focus on tests");
+      assert.equal(timeline.filter(entry => entry.kind === "answer").length, 1);
+      const queued = await f.service.sendCloudFollowUp({ key: workspace.key, mode: "queue", prompt: "Then check lint" });
+      const id = queued.queuedPrompts[0].id;
+      await f.service.sendCloudFollowUp({ key: workspace.key, mode: "steer", prompt: "Ignored replacement", queuedId: id });
+      assert.deepEqual(f.calls[0].steers.map(item => item.prompt), ["Focus on tests", "Then check lint"]);
+      const current = f.service.getCloudWorkspace({ provider, key: workspace.key });
+      assert.deepEqual(current.entries.filter(entry => entry.kind === "instruction").map(entry => entry.text), ["First", "Focus on tests", "Then check lint"]);
+      assert.deepEqual(current.queuedPrompts, []); assert.equal(f.calls.length, 1);
+      f.calls[0].sink.complete(); f.calls[0].resolve(); await tick();
+      assert.equal(f.calls.length, 1);
+      await assert.rejects(f.service.sendCloudFollowUp({ key: workspace.key, mode: "steer", prompt: "Late" }), /finished/);
+    } finally { f.close(); }
+  });
+
+  test(`${provider} keeps queued messages after stopping or failure and can resume a selected prompt`, async () => {
+    const f = fixture();
+    try {
+      const workspace = f.service.startCloudTurn({ provider, prompt: "First" });
+      f.calls[0].sink.session("native-session", "account");
+      const queued = await f.service.sendCloudFollowUp({ key: workspace.key, mode: "queue", prompt: "Second" });
+      await f.service.sendCloudFollowUp({ key: workspace.key, mode: "queue", prompt: "Third" });
+      await f.service.stopCloudTurn({ key: workspace.key }); await tick();
+      assert.equal(f.calls.length, 1);
+      assert.equal(f.service.getCloudWorkspace({ provider, key: workspace.key }).queuedPrompts.length, 2);
+      await f.service.sendCloudFollowUp({ key: workspace.key, mode: "steer", prompt: "Second", queuedId: queued.queuedPrompts[0].id });
+      assert.equal(f.calls[1].prompt, "Second");
+      f.calls[1].reject(new Error("Offline")); await tick();
+      assert.equal(f.calls.length, 2);
+      const stopped = f.service.getCloudWorkspace({ provider, key: workspace.key });
+      assert.equal(stopped.state, "idle"); assert.deepEqual(stopped.queuedPrompts.map(item => item.prompt), ["Third"]);
+      f.service.removeCloudQueuedPrompt({ key: workspace.key, id: stopped.queuedPrompts[0].id });
+      assert.deepEqual(f.service.getCloudWorkspace({ provider, key: workspace.key }).queuedPrompts, []);
+    } finally { f.close(); }
+  });
+}
+
+test("rejected steering retains the queued prompt and removes the unaccepted timeline message", async () => {
+  const f = fixture();
+  try {
+    const workspace = f.service.startCloudTurn({ provider: "codex", prompt: "First" });
+    const queued = await f.service.sendCloudFollowUp({ key: workspace.key, mode: "queue", prompt: "Keep this" });
+    f.runtime.steerError = new Error("The turn has already finished");
+    await assert.rejects(f.service.sendCloudFollowUp({ key: workspace.key, mode: "steer", prompt: "", queuedId: queued.queuedPrompts[0].id }), /already finished/);
+    const current = f.service.getCloudWorkspace({ provider: "codex", key: workspace.key });
+    assert.equal(current.entries.filter(entry => entry.kind === "instruction").length, 1);
+    assert.equal(current.queuedPrompts[0].prompt, "Keep this");
+    await f.service.stopCloudTurn({ key: workspace.key }); await tick();
+  } finally { f.close(); }
+});
+
+test("completion waits for in-flight steering before advancing the remaining queue", async () => {
+  const f = fixture();
+  try {
+    const workspace = f.service.startCloudTurn({ provider: "claude", prompt: "First" });
+    f.calls[0].sink.session("native-session", "account");
+    const queued = await f.service.sendCloudFollowUp({ key: workspace.key, mode: "queue", prompt: "Steer this" });
+    await f.service.sendCloudFollowUp({ key: workspace.key, mode: "queue", prompt: "Afterwards" });
+    let release; f.runtime.steerWait = new Promise(resolve => { release = resolve; });
+    const sending = f.service.sendCloudFollowUp({ key: workspace.key, mode: "steer", prompt: "", queuedId: queued.queuedPrompts[0].id });
+    f.calls[0].resolve(); await tick(); assert.equal(f.calls.length, 1);
+    release(); await sending; await tick();
+    assert.equal(f.calls.length, 2); assert.equal(f.calls[1].prompt, "Afterwards");
+    f.calls[1].resolve(); await tick();
+  } finally { f.close(); }
+});
+
+for (const provider of ["codex", "claude"]) {
+  test(`${provider} keeps empty chats out of storage and saves the first submitted prompt`, async () => {
+    const f = fixture();
+    try {
+      const draft = f.service.createCloudChat({ provider, repositoryIds: ["project"] });
+      assert.deepEqual(f.service.listCloudChats({ provider }), []);
+      assert.equal(f.db.prepare("SELECT count(*) AS count FROM settings WHERE key LIKE 'cloud:workspace:%'").get().count, 0);
+      assert.equal(f.events.length, 0);
+      assert.throws(() => f.service.startCloudTurn({ provider, key: draft.key, prompt: "  " }), /Enter an instruction/);
+      assert.deepEqual(f.service.listCloudChats({ provider }), []);
+      const sent = f.service.startCloudTurn({ provider, repositoryIds: ["project"], chatId: randomUUID(), prompt: "First prompt" });
+      const rows = f.service.listCloudChats({ provider });
+      assert.equal(rows.length, 1); assert.equal(rows[0].key, sent.key); assert.equal(rows[0].title, "First prompt");
+      assert.equal(f.db.prepare("SELECT count(*) AS count FROM settings WHERE key LIKE 'cloud:workspace:%'").get().count, 1);
+      f.calls[0].resolve(); await tick();
+    } finally { f.close(); }
+  });
+}
 
 test("cached quotas survive an empty fetch but do not cross provider or account boundaries", async () => {
   const f = fixture();
@@ -77,7 +214,6 @@ test("provider and chat boundaries preserve native sessions without replaying ot
   try {
     const input = { provider: "codex", repositoryId: "project" };
     const first = f.service.startCloudTurn({ ...input, prompt: "First instruction" });
-    assert.throws(() => f.service.resetCloudContext({ key: first.key }), /Stop/);
     f.calls[0].sink.session("native-1", "account"); f.calls[0].sink.text("answer", "A completed result", false);
     f.calls[0].resolve(); await tick();
     const other = f.service.getCloudWorkspace({ provider: "claude", repositoryId: "project" });
@@ -99,8 +235,7 @@ test("provider and chat boundaries preserve native sessions without replaying ot
     assert.equal(f.service.listCloudChats({ provider: "claude" }).length, 1);
     assert.throws(() => f.service.getCloudWorkspace({ provider: "claude", key: first.key }), /different provider/);
     assert.throws(() => f.service.deleteCloudChat({ provider: "claude", key: first.key }), /no longer available/);
-    f.service.resetCloudContext({ key: first.key });
-    assert.deepEqual(f.service.getCloudWorkspace(input).entries, []);
+    assert.equal(f.service.getCloudWorkspace(input).sessionId, "native-1");
     assert.equal(f.service.getCloudWorkspace({ provider: "claude", key: other.key }).sessionId, "claude-native");
     assert.equal(f.service.getCloudWorkspace({ provider: "codex", key: newChat.key }).entries[0].text, "Separate task");
     f.service.deleteCloudChat({ provider: "codex", key: newChat.key });
@@ -212,29 +347,32 @@ test("tool completion updates one row and keeps its original description", async
   } finally { f.close(); }
 });
 
-test("reset deletes only its own history and unreferenced attachments", () => {
+test("chat deletion removes only its own history and unreferenced attachments", () => {
   const f = fixture();
   try {
     const first = f.service.getCloudWorkspace({ provider: "codex", repositoryId: "project" });
     const second = f.service.getCloudWorkspace({ provider: "claude", repositoryId: "project" });
     const imageRoot = path.join(first.path, "cloud", "images"); fs.mkdirSync(imageRoot, { recursive: true });
-    const unique = randomUUID(); const shared = randomUUID(); const draft = randomUUID();
-    for (const id of [unique, shared, draft]) {
+    const unique = randomUUID(); const shared = randomUUID(); const draft = randomUUID(); const queuedImage = randomUUID();
+    for (const id of [unique, shared, draft, queuedImage]) {
       fs.writeFileSync(path.join(imageRoot, `${id}.txt`), "Attachment contents");
       fs.writeFileSync(path.join(imageRoot, `${id}.json`), JSON.stringify({ id, extension: ".txt" }));
     }
     const entry = (id, images) => ({ id, kind: "instruction", text: "Saved conversation", at: "2026-11-03T00:00:00Z", images: images.map(id => ({ id })) });
     const insert = f.db.prepare("INSERT OR REPLACE INTO settings (key, payload) VALUES (?, ?)");
-    insert.run(`cloud:workspace:${first.key}`, JSON.stringify({ ...first, entries: [entry("old", [unique, shared])] }));
-    insert.run(`cloud:workspace:${second.key}`, JSON.stringify({ ...second, entries: [entry("other", [shared])] }));
-    assert.deepEqual(f.service.resetCloudContext({ key: first.key }).entries, []);
+    insert.run(`cloud:workspace:${first.key}`, JSON.stringify({ ...first, entries: [entry("old", [unique, shared, queuedImage])] }));
+    insert.run(`cloud:workspace:${second.key}`, JSON.stringify({ ...second, entries: [entry("other", [shared])], queuedPrompts: [{ id: "queued", prompt: "Later", images: [{ id: queuedImage }] }] }));
+    f.service.deleteCloudChat({ key: first.key, provider: "codex" });
+    assert.throws(() => f.service.getCloudWorkspace({ key: first.key, provider: "codex" }), /no longer available/);
     assert.equal(fs.existsSync(path.join(imageRoot, `${unique}.txt`)), false);
     assert.equal(fs.existsSync(path.join(imageRoot, `${unique}.json`)), false);
     assert.equal(fs.existsSync(path.join(imageRoot, `${shared}.txt`)), true);
+    assert.equal(fs.existsSync(path.join(imageRoot, `${queuedImage}.txt`)), true);
     assert.equal(fs.existsSync(path.join(imageRoot, `${draft}.txt`)), true);
     assert.match(f.db.prepare("SELECT payload FROM settings WHERE key = ?").get(`cloud:workspace:${second.key}`).payload, /Saved conversation/);
-    f.service.resetCloudContext({ key: second.key });
+    f.service.deleteCloudChat({ key: second.key, provider: "claude" });
     assert.equal(fs.existsSync(path.join(imageRoot, `${shared}.txt`)), false);
+    assert.equal(fs.existsSync(path.join(imageRoot, `${queuedImage}.txt`)), false);
   } finally { f.close(); }
 });
 
@@ -320,5 +458,63 @@ test("failed sign-out preserves saved sessions; late inspections cannot restore 
     release({ provider: "codex", state: "ready", account: "account", models: [], usage: { fetchedAt: new Date().toISOString(), limits: [{ id: "weekly", usedPercent: 50 }] } });
     assert.equal((await inspection).state, "sign_in");
     assert.equal(f.db.prepare("SELECT count(*) AS n FROM settings WHERE key GLOB 'cloud:usage:codex:*'").get().n, 0);
+  } finally { f.close(); }
+});
+
+
+test("independent provider chats run concurrently; stop, approval and queue remain chat-scoped", async () => {
+  const f = fixture();
+  try {
+    const a = f.service.startCloudTurn({ provider: "codex", chatId: "a", repositoryId: "project", prompt: "A" });
+    const b = f.service.startCloudTurn({ provider: "codex", chatId: "b", repositoryId: "project", prompt: "B" });
+    const c = f.service.startCloudTurn({ provider: "claude", chatId: "c", repositoryId: "second", prompt: "C" });
+    assert.equal(f.calls.length, 3);
+    assert.throws(() => f.service.startCloudTurn({ provider: "codex", key: a.key, prompt: "duplicate" }), /this chat/);
+    const waiting = f.calls[0].sink.approval({ title: "Command", detail: "needs approval" });
+    await f.service.sendCloudFollowUp({ key: b.key, mode: "queue", prompt: "B followup" });
+    await f.service.stopCloudTurn({ key: a.key }); await tick(); assert.equal((await waiting).allow, false);
+    assert.equal(f.service.getCloudWorkspace({ provider: "codex", key: b.key }).state, "running");
+    assert.equal(f.service.getCloudWorkspace({ provider: "claude", key: c.key }).state, "running");
+    f.calls[1].resolve(); await tick(); assert.match(f.calls[3].prompt, /B followup$/);
+    f.calls[2].resolve(); f.calls[3].resolve(); await tick();
+  } finally { f.close(); }
+});
+
+test("chat scratch directories are separate from projects and from each other", async () => {
+  const f = fixture();
+  try {
+    const a = f.service.getCloudWorkspace({ provider: "codex", chatId: "a" });
+    const b = f.service.getCloudWorkspace({ provider: "codex", chatId: "b" });
+    const project = f.service.getCloudWorkspace({ provider: "claude", chatId: "project-chat", repositoryId: "project" });
+    assert.deepEqual(a.repositoryIds, []); assert.equal(a.path, a.scratchPath);
+    assert.notEqual(a.scratchPath, b.scratchPath); assert.notEqual(project.path, project.scratchPath);
+    assert.equal(f.service.getCloudWorkspace({ provider: "codex", key: a.key }).path, a.path);
+    fs.writeFileSync(path.join(project.scratchPath, "check.txt"), "verification");
+    assert.equal(f.service.readCloudFile({ key: project.key, path: path.join(project.scratchPath, "check.txt") }).text, "verification");
+    f.service.deleteCloudChat({ provider: "codex", key: a.key });
+    assert.equal(fs.existsSync(a.scratchPath), false); assert.equal(fs.existsSync(b.scratchPath), true);
+  } finally { f.close(); }
+});
+
+test("always allow persists exact command scope and revoke takes effect on the next request", async () => {
+  const f = fixture();
+  try {
+    const a = f.service.startCloudTurn({ provider: "codex", chatId: "approved", repositoryId: "project", prompt: "Build" });
+    const request = { title: "Run?", detail: "npm test", command: { command: "npm test", cwd: a.path, context: "standard" } };
+    const first = f.calls[0].sink.approval(request);
+    const id = f.service.getCloudWorkspace({ provider: "codex", key: a.key }).approvals[0].id;
+    f.service.respondCloudApproval({ key: a.key, id, allow: true, remember: true }); assert.equal((await first).allow, true);
+    assert.equal(f.db.prepare("SELECT count(*) AS n FROM settings WHERE key GLOB 'cloud:command-rule:*'").get().n, 1);
+    assert.equal((await f.calls[0].sink.approval(request)).allow, true);
+    assert.equal(f.service.getCloudWorkspace({ provider: "codex", key: a.key }).approvals.length, 0);
+    for (const command of [{ ...request.command, command: "npm test && delete-files" }, { ...request.command, context: "extra permissions" }, { ...request.command, cwd: path.join(a.path, "second") }]) {
+      const pending = f.calls[0].sink.approval({ ...request, command });
+      const approval = f.service.getCloudWorkspace({ provider: "codex", key: a.key }).approvals[0]; assert.ok(approval);
+      f.service.respondCloudApproval({ key: a.key, id: approval.id, allow: false }); assert.equal((await pending).allow, false);
+    }
+    f.db.prepare("DELETE FROM settings WHERE key GLOB 'cloud:command-rule:*'").run();
+    const pending = f.calls[0].sink.approval(request);
+    assert.equal(f.service.getCloudWorkspace({ provider: "codex", key: a.key }).approvals.length, 1);
+    await f.service.stopCloudTurn({ key: a.key }); await tick(); assert.equal((await pending).allow, false);
   } finally { f.close(); }
 });

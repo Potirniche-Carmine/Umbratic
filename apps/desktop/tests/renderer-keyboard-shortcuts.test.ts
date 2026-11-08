@@ -132,25 +132,13 @@ test("shortcuts are spelled for the machine that reads them", () => {
 
 test("the shortcuts that fire and the shortcuts that are documented are one table", () => {
   const main = ["main.tsx", "WorkspaceChrome.tsx", "ChatArchive.tsx", "ChatArchivePrimitives.tsx"].map(file => fs.readFileSync(new URL(`../src/renderer/${file}`, import.meta.url), "utf8")).join("\n");
-  // One listener dispatching by id, not a pile of key literals that drift.
-  assert.match(main, /const shortcut = shortcutForEvent\(event\)/);
-  assert.doesNotMatch(main, /event\.key === "k"/);
-  // On capture, because the composer textarea has focus almost all the time.
-  assert.match(main, /addEventListener\("keydown", runShortcut, true\)/);
-  // Never past a dialog to a window the user cannot see, and never on the
-  // auto-repeat of a held key. The one exception: the settings chord still
-  // lands behind the settings dialog itself, where it toggles the dialog
-  // closed.
-  assert.match(main, /if \(event\.repeat \|\| event\.isComposing\) return/);
-  assert.match(main, /if \(shortcutsBlockedRef\.current\) \{/);
-  assert.match(main, /blockedShortcut\?\.id === "app\.settings" \|\| blockedShortcut\?\.id === "app\.shortcuts"/);
-  assert.match(main, /\|\| reviewFeedbackDialogOpen/);
-  assert.match(main, /shortcutsBlockedRef\.current = modalOpen/);
-  // The actions are read through a ref and rewritten every render, so the one
-  // listener always calls today's closures rather than the render it
-  // subscribed on — a stale one would act on an old copy of the composer.
-  assert.match(main, /shortcutActionsRef\.current\[shortcut\.id\]/);
-  assert.match(main, /document\.addEventListener\("keydown", runShortcut, true\);\r?\n    return \(\) => document\.removeEventListener\("keydown", runShortcut, true\);\r?\n  \}, \[\]\)/);
+  // Both workspaces wire the same dispatcher, tested with real key events in
+  // renderer-chat-jumps.test.ts and cloud-shortcuts.test.ts.
+  const cloud = fs.readFileSync(new URL("../src/renderer/cloud/CloudWorkspace.tsx", import.meta.url), "utf8");
+  assert.match(main, /useWorkspaceShortcuts\(\{/);
+  assert.match(cloud, /useWorkspaceShortcuts\(\{/);
+  assert.match(main, /allowSettings: settingsOpen/);
+  assert.match(main, /blocked: modalOpen \|\| !active/);
   // Each installed chord has something to run.
   for (const id of ["dictation.toggle", "chat.new", "app.settings", "app.shortcuts", "review.toggle", "composer.focus", "run.stop"]) {
     assert.ok(main.includes(`"${id}":`), `main.tsx should handle ${id}`);

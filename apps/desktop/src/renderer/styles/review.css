@@ -638,25 +638,18 @@
   cursor: default;
 }
 
-.idePickerOpen,
-.idePickerToggle {
-  display: grid;
-  place-items: center;
+.idePickerTrigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 0 7px;
+  border-radius: inherit;
   color: var(--text);
 }
 
-.idePickerOpen {
-  width: 36px;
-}
-
-.idePickerToggle {
-  width: 26px;
-  border-left: 1px solid var(--line);
-  color: var(--muted);
-}
-
-.idePickerOpen:hover:not(:disabled),
-.idePickerToggle:hover:not(:disabled),
+.idePickerTrigger:hover:not(:disabled),
 .idePicker:not(.isDisabled):focus-within {
   background: var(--control-hover);
 }

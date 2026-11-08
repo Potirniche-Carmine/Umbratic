@@ -51,9 +51,15 @@
 .workspaceProvider:hover { background: var(--control-hover-soft); color: var(--text); }
 .workspaceProvider.isSelected { color: var(--text); background: var(--workspace-glass); border-color: var(--line); box-shadow: inset 0 1px 0 var(--workspace-edge), 0 3px 9px color-mix(in srgb, var(--shadow-color) 25%, transparent); }
 .workspaceProviderNote { margin: 12px 12px 0; font-size: 11px; line-height: 1.55; color: var(--faint); }
-.workspaceActivity { display: inline-block; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.workspaceActivity { display: inline-flex; align-items: center; justify-content: center; gap: 2px; flex: 0 0 16px; width: 16px; height: 14px; color: var(--faint); }
+.workspaceActivity > i { display: block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.workspaceActivity.is-running > i { width: 3px; height: 3px; animation: chatActivityPulse 1.2s ease-in-out infinite; }
+.workspaceActivity.is-running > i:nth-child(2) { animation-delay: .15s; }
+.workspaceActivity.is-running > i:nth-child(3) { animation-delay: .3s; }
 .workspaceProvider > .workspaceActivity { margin-left: auto; }
-.workspaceActivity.is-waiting { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 12%, transparent); }
+.workspaceActivity.is-waiting { color: var(--amber); }
+@keyframes chatActivityPulse { 0%, 70%, 100% { opacity: .35; } 35% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .workspaceActivity.is-running > i { animation: none; } }
 .workspaceArchiveActions { display: flex; align-items: center; gap: 5px; padding: 0 3px 12px; }
 .workspaceNewChat { display: flex; gap: 9px; align-items: center; min-height: 34px; flex: 1; padding: 7px 9px; border-radius: 8px; font-size: 12px; font-weight: 500; text-align: left; }
 .workspaceArchiveActions > .shortcutTooltip { flex: 1; }
@@ -209,12 +215,9 @@
 .unifiedWorkspace .composerAttachmentList .attachmentPreview.imageAttachment { flex: 0 0 48px; width: 48px; height: 48px; border-radius: 8px; }
 .unifiedWorkspace .composerAttachmentList .attachmentPreview.fileAttachment { height: 36px; max-width: 190px; }
 .unifiedWorkspace .attachmentPreviewFileName { font-size: 12px; }
-.unifiedWorkspace .messageAttachmentList .attachmentPreview.imageAttachment { flex: 0 0 64px; width: 64px; height: 48px; border-radius: 8px; }
 .unifiedWorkspace .userMessage { width: fit-content; max-width: min(760px, 88%); margin: 0 0 24px auto; }
 .unifiedWorkspace .userMessageBubble { padding: 12px 16px; border: 1px solid var(--line); border-radius: 18px 18px 5px 18px; box-shadow: none; }
 .unifiedWorkspace .userPromptText { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 15px/1.6 var(--app-font); letter-spacing: 0; }
-.unifiedWorkspace .userMessageBubble .messageAttachmentList { margin-top: 10px; }
-.unifiedWorkspace .userMessageBubble .messageAttachmentList:first-child { margin-top: 0; }
 .unifiedWorkspace .promptControls .workspaceControl { min-height: 30px; gap: 7px; font-size: 12px; padding: 4px 6px; }
 .unifiedWorkspace .promptControls .workspaceControl strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
 .unifiedWorkspace .promptControls .remoteTrigger { border-color: transparent; background: transparent; box-shadow: none; }
@@ -234,3 +237,17 @@
 .cloudFoldersMenu:popover-open { display: flex; flex-direction: column; }
 .cloudFoldersMenu .cloudFolderList { min-height: 0; }
 .unifiedWorkspace .chatProjectChats:empty { display: none; }
+
+/* Native dialogs share the same surface and backdrop across every provider. */
+.confirmationDialog { color: var(--text); max-height: calc(100vh - 48px); }
+.confirmationDialog:not([open]), .sharedAttachmentPreview:not([open]) { display: none; }
+.confirmationDialog::backdrop, .sharedAttachmentPreview::backdrop {
+  background: rgba(8, 12, 18, .24);
+  backdrop-filter: blur(8px);
+}
+.confirmationDialog .confirmationError { grid-column: 1 / -1; color: var(--red); }
+.sharedAttachmentPreview { width: min(920px, calc(100vw - 36px)); height: min(720px, calc(100vh - 36px)); padding: 0; color: var(--text); }
+.attachmentFilePlaceholder { text-align: center; color: var(--muted); overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) {
+  .confirmationDialog::backdrop, .sharedAttachmentPreview::backdrop { backdrop-filter: none; background: rgba(0, 0, 0, .65); }
+}

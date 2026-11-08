@@ -76,7 +76,7 @@ func TestGlobalPromptOnlyDescribesDeclaredTools(t *testing.T) {
 	}
 	// Conduct is not tool mechanics, so none of it depends on the tool array.
 	for _, kept := range []string{
-		"private and confidential AI assistant",
+		"Complete the user's request",
 		"Follow protected system and route instructions",
 		"Your final response is the one with no tool calls",
 	} {
@@ -113,7 +113,7 @@ func TestGlobalPromptOnlyDescribesDeclaredTools(t *testing.T) {
 	if strings.Contains(bare, "Public web:") {
 		t.Fatal("an empty tool array must not render public-web guidance")
 	}
-	if !strings.Contains(bare, "private and confidential AI assistant") {
+	if !strings.Contains(bare, "Complete the user's request") {
 		t.Fatal("identity survives a request with no tools")
 	}
 
@@ -148,7 +148,7 @@ func TestBuildAddsGlobalAndRoutePrompts(t *testing.T) {
 func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 	globalPrompt := GlobalSystemPrompt(allWorkspaceTools())
 	global := strings.ToLower(globalPrompt)
-	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "emit them together in one response", "save what you found for the final response", "your final response is the one with no tool calls", "user rejected", "never guess a workspace filename", "one exact file path, not a glob or directory", "never invent a domain"} {
+	for _, want := range []string{"complete the user's request", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "emit them together in one response", "save what you found for the final response", "your final response is the one with no tool calls", "user rejected", "never guess a workspace filename", "one exact file path, not a glob or directory", "never invent a domain"} {
 		if !strings.Contains(global, want) {
 			t.Fatalf("global prompt missing %q: %q", want, globalPrompt)
 		}

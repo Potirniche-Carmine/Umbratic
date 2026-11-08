@@ -41,12 +41,18 @@
   place-items: center;
   width: 26px;
   height: 26px;
+  padding: 0;
+  line-height: 0;
   border-radius: 6px;
   color: var(--muted);
   transition:
     background 140ms ease,
     color 140ms ease,
     transform 140ms ease;
+}
+
+.chromeButton > svg {
+  display: block;
 }
 
 .chromeButton:hover,
@@ -665,8 +671,9 @@
 
 .chatDeleteButton {
   position: absolute;
-  top: 5px;
+  top: 50%;
   right: 5px;
+  transform: translateY(-50%);
   display: grid;
   place-items: center;
   width: 22px;

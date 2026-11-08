@@ -1,8 +1,10 @@
-import React, { useState } from "react";
-import { Ellipsis, MessageSquareX } from "lucide-react";
+import React, { useLayoutEffect, useState } from "react";
+import { FolderX, MessageSquareX } from "lucide-react";
 import type { CloudChatRecord } from "../../shared/cloud";
 import type { RepositoryInfo } from "../../shared/desktopApi";
-import { relativeChatAge } from "../chatListPresentation";
+import { chatJumpNumbers, relativeChatAge } from "../chatListPresentation";
+import { useChatJumpShortcuts } from "../useChatJumpShortcuts";
+import { ChatProjectMenu } from "../ChatProjectMenu";
 import { ChatArchiveToolbar, ChatProjectSection, ChatArchiveRow } from "../ChatArchivePrimitives";
 import { cloudProviderIcons } from "./CloudProviderIcon";
 import { workspaceProviderLabels } from "../WorkspaceNavigation";
@@ -24,35 +26,50 @@ export function cloudArchiveGroups(chats: CloudChatRecord[], projects: Repositor
 
 type Props = {
   chats: CloudChatRecord[]; projects: RepositoryInfo[]; activeKey?: string; disabled: boolean; loading: boolean;
+  shortcutsBlocked: boolean;
+  unreadChatIds?: ReadonlySet<string>;
+  onVisibleChatsChange?(chats: CloudChatRecord[]): void;
+  onDeleteProject?(project: RepositoryInfo): void;
   onSelect(key: string): void; onNew(repositoryIds?: string[]): void; onAddFolder(): void; onDelete(chats: CloudChatRecord[]): void;
 };
+export function visibleCloudChats(groups: CloudArchiveGroup[], collapsed: ReadonlySet<string>, query: string): CloudChatRecord[] {
+  const visible = groups.filter(group => query.trim() || !collapsed.has(group.key)).flatMap(group => group.chats);
+  return [...new Map(visible.map(chat => [chat.key, chat])).values()];
+}
 export function CloudChatArchive(props: Props) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(new Set<string>());
   const [menu, setMenu] = useState<string | null>(null);
+  const visible = visibleCloudChats(cloudArchiveGroups(props.chats, props.projects, query), collapsed, query);
+  useLayoutEffect(() => { props.onVisibleChatsChange?.(visible); });
+  const jumpKeysVisible = useChatJumpShortcuts(visible, chat => props.onSelect(chat.key), props.shortcutsBlocked || props.disabled || menu !== null);
   return <CloudChatArchiveContent {...props} query={query} onQueryChange={setQuery} collapsed={collapsed} menu={menu} onMenu={setMenu}
+    jumpKeysVisible={jumpKeysVisible}
     onToggle={key => setCollapsed(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; })}/>;
 }
-export function CloudChatArchiveContent({ chats, projects, activeKey, disabled, loading, onSelect, onNew, onAddFolder, onDelete, query, onQueryChange, collapsed, onToggle, menu, onMenu }: Props & {
+export function CloudChatArchiveContent({ chats, projects, activeKey, disabled, loading, unreadChatIds, onSelect, onNew, onAddFolder, onDelete, onDeleteProject, query, onQueryChange, collapsed, onToggle, menu, onMenu, jumpKeysVisible }: Props & {
   query: string; onQueryChange(query: string): void; collapsed: Set<string>; onToggle(key: string): void; menu: string | null; onMenu(key: string | null): void;
+  jumpKeysVisible?: boolean;
 }) {
   const groups = cloudArchiveGroups(chats, projects, query);
+  const numbers = chatJumpNumbers(visibleCloudChats(groups, collapsed, query).map(chat => ({ id: chat.key })));
   return <section className="chatArchive" aria-label="Conversations">
     <ChatArchiveToolbar query={query} onQueryChange={onQueryChange} disabled={disabled} onNew={() => onNew()} onAddFolder={onAddFolder}/>
     <div className="chatList">
       {groups.map(group => <ChatProjectSection key={group.key} name={group.name} path={group.path} collapsed={!query.trim() && collapsed.has(group.key)}
         disabled={disabled} onToggle={() => onToggle(group.key)} onNew={group.ids.length ? () => onNew(group.ids) : undefined}
-        actions={group.path && <div className="chatProjectActions">
-          <button className="chatProjectActionButton" type="button" aria-expanded={menu === group.key} aria-haspopup="menu" title={`Project actions for "${group.name}"`} onClick={() => onMenu(menu === group.key ? null : group.key)}><Ellipsis size={14}/></button>
-          {menu === group.key && <div className="chatProjectMenu" role="menu">
-            <button type="button" role="menuitem" disabled={disabled || !group.chats.length || group.chats.some(chat => chat.state !== "idle")}
-              onClick={() => { onMenu(null); onDelete(group.chats); }}><MessageSquareX size={14}/><span>Delete all chats</span></button>
-          </div>}
-        </div>}>
+        actions={group.path && <ChatProjectMenu name={group.name} open={menu === group.key}
+          onOpenChange={open => onMenu(open ? group.key : null)} actions={[
+            { id: "chats", label: "Delete all chats", icon: <MessageSquareX size={14}/>,
+              disabled: disabled || !group.chats.length || group.chats.some(chat => chat.state !== "idle"), onSelect: () => onDelete(group.chats) },
+            ...(onDeleteProject ? [{ id: "project", label: "Delete project", icon: <FolderX size={14}/>, danger: true, disabled: disabled || group.chats.some(chat => chat.state !== "idle"), onSelect: () => onDeleteProject(projects.find(project => project.id === group.key)!) }] : []),
+          ]}/> }>
         {group.chats.map(chat => <ChatArchiveRow key={chat.key} title={chat.title} active={chat.key === activeKey} disabled={disabled} deleteDisabled={chat.state !== "idle"}
           detail={chat.updatedAt ? relativeChatAge(chat.updatedAt) : ""} updatedAt={chat.updatedAt}
-          icon={<span className="chatConnectionIcon" role="img" aria-label={workspaceProviderLabels[chat.provider]}>{cloudProviderIcons[chat.provider]}</span>}
-          status={chat.state !== "idle" && <span className={`workspaceActivity is-${chat.state}`} aria-label={chat.state === "waiting" ? "Needs your attention" : "Working"}/>}
+          icon={jumpKeysVisible && numbers.has(chat.key) ? <span className="chatJumpKey" aria-hidden="true">{numbers.get(chat.key)}</span>
+            : <span className="chatConnectionIcon" role="img" aria-label={workspaceProviderLabels[chat.provider]}>{cloudProviderIcons[chat.provider]}</span>}
+          status={chat.state}
+          unread={unreadChatIds?.has(chat.key)}
           onSelect={() => onSelect(chat.key)} onDelete={() => onDelete([chat])}/>)}
       </ChatProjectSection>)}
       {!groups.length && (loading || query) && <div className="workspaceArchiveEmpty" role="status">{loading ? "Loading chats…" : "No matching chats"}</div>}

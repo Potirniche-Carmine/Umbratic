@@ -66,7 +66,9 @@ export function CloudModelMenu({ value, models, disabled, onChange }: {
       popoverTarget={id} popoverTargetAction="toggle" onKeyDown={event => {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); menu.current?.showPopover(); }
       }}>
-      <span className="cloudModelName">{label}</span><ChevronDown size={13} aria-hidden="true"/>
+      <span className="cloudModelName">{label}</span>
+      {!!selected?.efforts.length && <span className="composerReasoningEffort">· {effort}</span>}
+      <ChevronDown size={13} aria-hidden="true"/>
     </button>
     <div ref={menu} id={id} popover="auto" className="cloudModelMenu" role="dialog" aria-labelledby={`${id}-heading`}
       onToggle={event => {

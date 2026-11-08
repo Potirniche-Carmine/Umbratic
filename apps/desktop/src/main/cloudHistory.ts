@@ -3,12 +3,13 @@ import { deleteCloudImages } from "./cloudImages";
 import { withAppDatabase } from "./storageDatabase";
 
 /** Remove only this chat. Other providers and chats may still reference its attachments. */
-export function deleteCloudHistory(workspace: CloudWorkspace, liveWorkspaces: Iterable<CloudWorkspace>, pendingImageIds: string[] = []): void {
+export function deleteCloudHistory(workspace: CloudWorkspace, liveWorkspaces: Iterable<CloudWorkspace>): void {
   const keys = new Set([`cloud:workspace:${workspace.key}`]);
   const removed = new Set<string>();
-  const retained = new Set<string>(pendingImageIds);
-  function collect(value: Pick<CloudWorkspace, "entries">, into: Set<string>): void {
+  const retained = new Set<string>();
+  function collect(value: Pick<CloudWorkspace, "entries" | "queuedPrompts">, into: Set<string>): void {
     for (const entry of value.entries || []) for (const image of entry.images || []) into.add(image.id);
+    for (const prompt of value.queuedPrompts || []) for (const image of prompt.images || []) into.add(image.id);
   }
   collect(workspace, removed);
   for (const other of liveWorkspaces) if (other.key !== workspace.key) collect(other, retained);

@@ -9,9 +9,15 @@ const [archive, workspaceRoot] = process.argv.slice(2);
 app.setPath("userData", path.join(workspaceRoot, "electron-data"));
 app.whenReady().then(async () => {
   try {
-    const { installBundledSystemSkills } = require(path.join(archive, "dist-electron/main/skills.js"));
+    const { installBundledSystemSkills, listSkills } = require(path.join(archive, "dist-electron/main/skills.js"));
     const skills = path.join(workspaceRoot, "skills");
     installBundledSystemSkills(skills);
+    // Listing reads both installed files and bundled originals for checksums.
+    // Installation alone does not catch descriptor reads that fail inside ASAR.
+    const listing = await listSkills(skills, {});
+    const { systemSkillIds } = require(path.join(archive, "dist-electron/shared/harnessSkills.js"));
+    assert.deepEqual(listing.skills.filter(skill => skill.source === "system").map(skill => skill.id).sort(), [...systemSkillIds].sort());
+    assert.ok(listing.skills.filter(skill => skill.source === "system").every(skill => skill.checksumStatus === "known_good"));
     for (const id of ["documents", "presentations", "spreadsheets", "pdf"]) {
       for (const resource of ["spec.md", "ops.md"]) {
         assert.ok(fs.readFileSync(path.join(skills, "system", `umbratic-${id}`, "references", resource), "utf8").length > 100);

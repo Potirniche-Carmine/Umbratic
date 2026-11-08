@@ -1,3 +1,4 @@
+import { codexBrowserConfig } from "./cloudBrowser";
 import { codexStreamConsumer } from "./cloudCodexStream";
 import { codexUsage, optionalRuntimeRead, planLabel } from "./cloudUsage";
 import * as fs from "node:fs";
@@ -28,10 +29,10 @@ export function codexExecutable(configured: string): string {
   return found;
 }
 
-async function connect(settings: CloudSettings, cwd: string): Promise<CloudRpc> {
+async function connect(settings: CloudSettings, cwd: string, scratchPath?: string): Promise<CloudRpc> {
   const rpc = new CloudRpc(codexExecutable(settings.providers.codex.executable), ["app-server",
     "-c", "analytics.enabled=false", "-c", "otel.exporter=\"none\"", "-c", "otel.metrics_exporter=\"none\"",
-    "-c", "features.memories=false", "-c", "model_provider=\"openai\""], cwd, cloudEnvironment());
+    "-c", "features.memories=false", "-c", "model_provider=\"openai\""], cwd, { ...cloudEnvironment(), ...(scratchPath ? { TMPDIR: scratchPath, TMP: scratchPath, TEMP: scratchPath } : {}) });
   try {
     await rpc.request("initialize", { clientInfo: { name: "umbratic", title: "Umbratic", version: "0.0.3" } });
     rpc.send({ method: "initialized" });
@@ -97,8 +98,12 @@ export const codexCloudRuntime: CloudRuntime = {
     let rpc: CloudRpc | undefined;
     let threadId = ""; let turnId = ""; let stopped = false;
     let finish: (() => void) | undefined;
+    let accepting = true;
+    let readyResolve!: () => void; let readyReject!: (cause: unknown) => void;
+    const ready = new Promise<void>((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
+    void ready.catch(() => undefined);
     const done = (async () => {
-      rpc = await connect(settings, workspace.path);
+      rpc = await connect(settings, workspace.path, workspace.scratchPath);
       try {
         const connection = await inspect(rpc);
         validateCloudConnection(connection, settings);
@@ -106,14 +111,15 @@ export const codexCloudRuntime: CloudRuntime = {
         if (stopped) return;
         if (workspace.account && workspace.account !== connection.account && workspace.sessionId) throw new Error("The signed-in account changed. Clear context before continuing.");
         const config = settings.providers.codex;
-        const access = codexAccess(config.approvalMode, workspace.paths || [workspace.path]);
+        const roots = [...new Set([...(workspace.paths || [workspace.path]), ...(workspace.scratchPath ? [workspace.scratchPath] : [])])];
+        const access = codexAccess(config.approvalMode, roots);
         if (config.serviceTier !== "default" && !connection.models.find(model => model.id === config.orchestrator.model)?.serviceTiers?.some(tier => tier.id === config.serviceTier)) throw new Error("This model no longer offers the selected speed. Choose Standard or another available speed.");
         const result = await rpc.request(workspace.sessionId ? "thread/resume" : "thread/start", {
           ...(workspace.sessionId ? { threadId: workspace.sessionId, excludeTurns: true } : {}),
           cwd: workspace.path, model: config.orchestrator.model, modelProvider: "openai",
           sandbox: access.sandbox, approvalPolicy: access.approvalPolicy, approvalsReviewer: access.approvalsReviewer, serviceTier: config.serviceTier,
-          developerInstructions: cloudWorkflowInstructions(settings, "codex") + "\n" + cloudWorkspaceInstructions(workspace.paths || [workspace.path]),
-          config: { "sandbox_workspace_write.writable_roots": workspace.paths || [workspace.path], "features.memories": false, "agents.enabled": settings.subagents, "skills.include_instructions": false, "skills.bundled.enabled": false },
+          developerInstructions: cloudWorkflowInstructions(settings, "codex") + "\n" + cloudWorkspaceInstructions(workspace.paths || [workspace.path], workspace.scratchPath),
+          config: { ...codexBrowserConfig(settings, workspace), "sandbox_workspace_write.writable_roots": roots, "features.memories": false, "agents.enabled": settings.subagents, "skills.include_instructions": false, "skills.bundled.enabled": false },
         });
         threadId = result.thread.id;
         sink.session(threadId, connection.account || "ChatGPT");
@@ -133,6 +139,7 @@ export const codexCloudRuntime: CloudRuntime = {
             if (message.method === "account/rateLimits/updated") sink.limits?.(codexUsage(params));
             if (message.method === "thread/tokenUsage/updated") sink.usage(params.tokenUsage?.modelContextWindow, params.tokenUsage?.last?.inputTokens);
             if (message.method === "turn/completed") {
+              accepting = false;
               if (params.turn?.status === "failed") reject(new Error(params.turn.error?.message || "Codex could not complete this turn."));
               else { sink.complete?.(); resolve(); }
             }
@@ -146,13 +153,22 @@ export const codexCloudRuntime: CloudRuntime = {
           sandboxPolicy: access.sandboxPolicy, approvalPolicy: access.approvalPolicy, approvalsReviewer: access.approvalsReviewer, serviceTier: config.serviceTier,
           input: [...(prompt ? [{ type: "text", text: prompt, text_elements: [] }] : []), ...images.map(image => image.mimeType.startsWith("image/") ? ({ type: "localImage", path: image.path }) : ({ type: "text", text: `Attached file: ${image.path}\nRead it with native tools as needed.`, text_elements: [] }))] });
         turnId = turn.turn.id;
+        readyResolve();
         if (stopped) { await rpc.request("turn/interrupt", { threadId, turnId }); finish?.(); }
         await completion;
         const usage = await optionalRuntimeRead(rpc.request("account/rateLimits/read", {}));
         if (usage) sink.limits?.(codexUsage(usage));
-      } finally { if (rpc) { rpc.onClose = () => undefined; rpc.close(); } }
+      } finally { accepting = false; if (rpc) { rpc.onClose = () => undefined; rpc.close(); } }
     })();
-    return { done, async stop() {
+    void done.then(() => readyReject(new Error("This turn has finished.")), readyReject);
+    return { done, async steer(text, attachments = []) {
+      await ready;
+      if (stopped || !accepting || !rpc) throw new Error("This turn has finished. Send the prompt as a new turn.");
+      await rpc.request("turn/steer", { threadId, expectedTurnId: turnId,
+        input: [...(text ? [{ type: "text", text, text_elements: [] }] : []), ...attachments.map(image => image.mimeType.startsWith("image/")
+          ? ({ type: "localImage", path: image.path })
+          : ({ type: "text", text: `Attached file: ${image.path}\nRead it with native tools as needed.`, text_elements: [] }))] });
+    }, async stop() {
       stopped = true;
       try { if (rpc && threadId && turnId) await rpc.request("turn/interrupt", { threadId, turnId }); }
       finally { finish?.(); rpc?.close(); }
@@ -170,7 +186,8 @@ async function answerRequest(rpc: CloudRpc, message: RpcMessage, sink: Parameter
   const params = message.params || {};
   if (message.method === "item/commandExecution/requestApproval" || message.method === "item/fileChange/requestApproval") {
     const answer = await sink.approval({ title: message.method.includes("commandExecution") ? "Run this command?" : "Allow these file changes?",
-      detail: [params.reason, params.command, params.cwd, params.grantRoot].filter(Boolean).join("\n") });
+      detail: [params.reason, params.command, params.cwd, params.grantRoot].filter(Boolean).join("\n"),
+      command: message.method === "item/commandExecution/requestApproval" && (!params.kind || params.kind === "command") && typeof params.command === "string" && typeof params.cwd === "string" ? { command: params.command, cwd: params.cwd, context: JSON.stringify({ kind: params.kind || "command", environmentId: params.environmentId, additionalPermissions: params.additionalPermissions, networkApprovalContext: params.networkApprovalContext, grantRoot: params.grantRoot }) } : undefined });
     rpc.send({ id: message.id, result: { decision: answer.allow ? "accept" : "decline" } });
   } else if (message.method === "item/permissions/requestApproval") {
     const answer = await sink.approval({ title: "Allow additional access for this turn?", detail: JSON.stringify(params.permissions, null, 2) });
