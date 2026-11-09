@@ -3,6 +3,29 @@ import type { DesktopApi } from "./desktopApiTypes";
 export * from "./desktopApiTypes";
 
 export const desktopIpcChannels = {
+  installCloudBrowser: "umbratic:install-cloud-browser",
+  listCloudAllowedCommands: "umbratic:list-cloud-allowed-commands",
+  revokeCloudAllowedCommand: "umbratic:revoke-cloud-allowed-command",
+  getCloudSettings: "umbratic:get-cloud-settings",
+  saveCloudSettings: "umbratic:save-cloud-settings",
+  inspectCloudProvider: "umbratic:inspect-cloud-provider",
+  cancelCloudSignIn: "umbratic:cancel-cloud-sign-in",
+  signInCloudProvider: "umbratic:sign-in-cloud-provider",
+  disconnectCloudProvider: "umbratic:disconnect-cloud-provider",
+  installCloudProvider: "umbratic:install-cloud-provider",
+  pickCloudFolders: "umbratic:pick-cloud-folders",
+  readCloudFile: "umbratic:read-cloud-file",
+  saveCloudImages: "umbratic:save-cloud-images",
+  listCloudChats: "umbratic:list-cloud-chats",
+  createCloudChat: "umbratic:create-cloud-chat",
+  deleteCloudChat: "umbratic:delete-cloud-chat",
+  getCloudWorkspace: "umbratic:get-cloud-workspace",
+  startCloudTurn: "umbratic:start-cloud-turn",
+  sendCloudFollowUp: "umbratic:send-cloud-follow-up",
+  removeCloudQueuedPrompt: "umbratic:remove-cloud-queued-prompt",
+  stopCloudTurn: "umbratic:stop-cloud-turn",
+  respondCloudApproval: "umbratic:respond-cloud-approval",
+
   listProjects: "umbratic:list-projects",
   listChats: "umbratic:list-chats",
   createChat: "umbratic:create-chat",
@@ -114,7 +137,7 @@ export const desktopIpcChannels = {
   setAutomaticAppUpdates: "umbratic:set-automatic-app-updates",
   installAppUpdate: "umbratic:install-app-update",
 } as const satisfies Record<
-  Exclude<keyof DesktopApi, "onBackendEvent" | "onWorkspaceIndex" | "onDictationEvent" | "onModelDownloadEvent" | "onAppUpdateStatus">,
+  Exclude<keyof DesktopApi, "onCloudWorkspace" | "onBackendEvent" | "onWorkspaceIndex" | "onDictationEvent" | "onModelDownloadEvent" | "onAppUpdateStatus">,
   string
 >;
 

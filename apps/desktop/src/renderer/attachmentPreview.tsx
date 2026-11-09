@@ -26,7 +26,7 @@ export function AttachmentPreviewList({
         const key = file.storedPath || file.path;
         const label = attachmentLabel(file);
         const image = isImageAttachment(file) && file.previewDataUrl;
-        const interactive = !!onOpen && !onRemove;
+        const interactive = !!onOpen;
         const previewContent = image ? (
           <img alt={label} src={file.previewDataUrl} />
         ) : (
@@ -42,13 +42,13 @@ export function AttachmentPreviewList({
         }`;
         return (
           <React.Fragment key={key}>
-            {interactive ? (
+            {interactive && !onRemove ? (
               <button className={className} type="button" onClick={() => onOpen(file)} title={label}>
                 {previewContent}
               </button>
             ) : (
               <div className={className} title={label}>
-                {previewContent}
+                {interactive ? <button className="attachmentPreviewOpen" type="button" aria-label={`Preview ${label}`} onClick={() => onOpen?.(file)}>{previewContent}</button> : previewContent}
                 {onRemove ? (
                   <button className="attachmentPreviewRemove" type="button" onClick={() => onRemove(file)} title={`Remove ${label}`}>
                     <X size={13} />

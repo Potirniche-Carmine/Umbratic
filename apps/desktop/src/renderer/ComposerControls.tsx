@@ -170,9 +170,7 @@ export function DictationControl({
             onClick={toggleDeviceMenu}
             onKeyDown={(event) => { if (event.key === "Escape") setMenuAt(null); }}
           >
-            <svg width="8" height="5" viewBox="0 0 8 5" aria-hidden="true">
-              <path fill="currentColor" d="M0.8 0.6h6.4L4 4.4z" />
-            </svg>
+            <ChevronDown size={12} strokeWidth={1.8} aria-hidden="true"/>
           </button>
         </Tooltip>
         {menuAt ? createPortal(
@@ -284,6 +282,7 @@ export function ComposerModelPicker({
   // leaves the composer with no answer to "what will answer this, and how do I
   // choose one" at exactly the moment the user has not chosen.
   const selectedLabel = selected?.label || selectedId || "Choose a model";
+  const effortLabel = selected && efforts.length > 0 ? reasoningEffortLabels[effort] : undefined;
   // Nothing chosen yet: the menu's only useful page is the list of models, and
   // making someone press "Choose a model" and then "Model ›" to reach it is two
   // clicks to answer a question the trigger already asked. With a model chosen
@@ -330,6 +329,7 @@ export function ComposerModelPicker({
         disabled={disabled}
         aria-expanded={open}
         aria-haspopup="menu"
+        aria-label={effortLabel ? `Model and reasoning: ${selectedLabel}, ${effortLabel}` : `Model: ${selectedLabel}`}
         title={disabled ? disabledReason ?? "" : `Model: ${selectedLabel}`}
         onClick={() => {
           setOpen((current) => {
@@ -339,6 +339,7 @@ export function ComposerModelPicker({
         }}
       >
         <span>{selectedLabel}</span>
+        {effortLabel && <span className="composerReasoningEffort">· {effortLabel}</span>}
         <ChevronDown size={12} aria-hidden="true" />
       </button>
       {open ? (

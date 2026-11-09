@@ -150,14 +150,11 @@ test("pressing the microphone while dictation is off says so, and offers the way
   assert.match(renderer, /setSettingsTab\("voice"\)/);
 });
 
-test("the live transcript is muted text in the prompt box, never in the rail", () => {
+test("both composers keep speech hypotheses separate from the editable draft", () => {
   const renderer = read("../src/renderer/main.tsx");
-  // Drawn in the highlight layer under the textarea, so the value — and the
-  // caret in it — is left alone until the final text arrives.
-  assert.match(renderer, /className="promptDictationGhost"/);
-  assert.match(renderer, /dictation\.status\.preview \? \(/);
-  // And the placeholder stands down rather than printing under it.
-  assert.match(renderer, /dictation\.status\.preview\s+\?\s+""/);
+  assert.match(renderer, /dictation=\{dictation.status\} previewCaret=/);
+  assert.match(read("../src/renderer/cloud/CloudWorkspace.tsx"), /dictation=\{dictation.status\} previewCaret=/);
+  assert.doesNotMatch(renderer, /className="promptDictationGhost"/);
   // A failure is a notice above the box, not a caption that resizes the rail —
   // and it is a pill about one press rather than a bar across the composer, so
   // it does not borrow the connection notice's full-width shape.
@@ -183,7 +180,7 @@ test("choosing a microphone cannot undo the chosen dictation model", () => {
 test("local dictation needs its own model and nothing else", () => {
   const dictationMain = read("../src/main/dictation.ts");
   const local = dictationMain.slice(
-    dictationMain.indexOf('if (settings.mode === "local") {'),
+    dictationMain.indexOf('if (input.localOnly === true || settings.mode === "local") {'),
     dictationMain.indexOf("// Security-semantic gate"),
   );
   // Veil will not start without a chat model, so routing local dictation
@@ -197,7 +194,7 @@ test("local dictation needs its own model and nothing else", () => {
   // The Veil feature gate still guards the server path, and only that path.
   assert.ok(
     dictationMain.indexOf("connectedVeilSupports(veilFeature.speechTranscribe)")
-    > dictationMain.indexOf('if (settings.mode === "local") {'),
+    > dictationMain.indexOf('if (input.localOnly === true || settings.mode === "local") {'),
   );
 
   // And the button is live whenever the weights are on disk — waiting for a
@@ -370,7 +367,7 @@ test("the microphone and its device chevron are one control", () => {
     return styles.slice(at, styles.indexOf("\n}", at));
   };
   const capsule = rule(".dictationControl");
-  assert.match(capsule, /border: 1px solid var\(--line\)/);
+  assert.match(capsule, /border: 1px solid var\(--menu-edge\)/);
   assert.match(capsule, /border-radius: 999px/);
   const mic = rule(".dictationButton");
   assert.match(mic, /border: 0/);
@@ -384,7 +381,7 @@ test("the microphone and its device chevron are one control", () => {
   assert.match(seam, /top: 10px/);
   assert.match(seam, /bottom: 10px/);
   // Recording lights the whole capsule, since the whole capsule is the control.
-  assert.match(styles, /\.dictationControl\.isRecording \{[\s\S]{0,160}border-color: var\(--red\)/);
+  assert.match(styles, /\.dictationControl\.isRecording \{[\s\S]{0,160}border-color: color-mix\(in srgb, var\(--red\)/);
   assert.match(styles, /\.dictationControl\.isRecording \.dictationDeviceTrigger \{/);
   assert.match(styles, /\.dictationControl\.isRecording \.dictationDeviceTrigger::before \{/);
 });

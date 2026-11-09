@@ -1,3 +1,4 @@
+import type { CloudSettings, CloudWorkspace, CloudWorkspaceInput, CloudProvider, CloudFollowUpInput } from "../shared/cloud";
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 import type { BackendUiEvent } from "../shared/backendEvents";
 import type {
@@ -52,6 +53,34 @@ function invoke(channel: string, ...args: unknown[]): Promise<any> {
 }
 
 const umbraticApi = {
+  installCloudBrowser: () => invoke("umbratic:install-cloud-browser"),
+  listCloudAllowedCommands: () => invoke("umbratic:list-cloud-allowed-commands"),
+  revokeCloudAllowedCommand: (input: { id: string }) => invoke("umbratic:revoke-cloud-allowed-command", input),
+  getCloudSettings: () => invoke("umbratic:get-cloud-settings"),
+  saveCloudSettings: (input: CloudSettings) => invoke("umbratic:save-cloud-settings", input),
+  inspectCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:inspect-cloud-provider", input),
+  cancelCloudSignIn: (input: { provider: CloudProvider }) => invoke("umbratic:cancel-cloud-sign-in", input),
+  signInCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:sign-in-cloud-provider", input),
+  disconnectCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:disconnect-cloud-provider", input),
+  installCloudProvider: (input: { provider: CloudProvider }) => invoke("umbratic:install-cloud-provider", input),
+  pickCloudFolders: () => invoke("umbratic:pick-cloud-folders"),
+  readCloudFile: (input: { key: string; path: string }) => invoke("umbratic:read-cloud-file", input),
+  saveCloudImages: (input: { files: import("../shared/cloud").CloudImageInput[] }) => invoke("umbratic:save-cloud-images", input),
+  listCloudChats: (input: { provider: CloudProvider }) => invoke("umbratic:list-cloud-chats", input),
+  createCloudChat: (input: CloudWorkspaceInput) => invoke("umbratic:create-cloud-chat", input),
+  deleteCloudChat: (input: { key: string; provider: CloudProvider }) => invoke("umbratic:delete-cloud-chat", input),
+  getCloudWorkspace: (input: CloudWorkspaceInput) => invoke("umbratic:get-cloud-workspace", input),
+  startCloudTurn: (input: CloudWorkspaceInput & { prompt: string; imageIds?: string[] }) => invoke("umbratic:start-cloud-turn", input),
+  sendCloudFollowUp: (input: CloudFollowUpInput) => invoke("umbratic:send-cloud-follow-up", input),
+  removeCloudQueuedPrompt: (input: { key: string; id: string }) => invoke("umbratic:remove-cloud-queued-prompt", input),
+  stopCloudTurn: (input: { key: string }) => invoke("umbratic:stop-cloud-turn", input),
+  respondCloudApproval: (input: { key: string; id: string; allow: boolean; remember?: boolean; answers?: Record<string, string> }) => invoke("umbratic:respond-cloud-approval", input),
+  onCloudWorkspace: (callback: (workspace: CloudWorkspace) => void) => {
+    const listener = (_event: IpcRendererEvent, value: CloudWorkspace) => callback(value);
+    ipcRenderer.on("umbratic:cloud-workspace", listener);
+    return () => ipcRenderer.removeListener("umbratic:cloud-workspace", listener);
+  },
+
   listProjects: () => invoke("umbratic:list-projects"),
   listChats: () => invoke("umbratic:list-chats"),
   createChat: (input?: ChatInput) => invoke("umbratic:create-chat", input ?? {}),
@@ -203,7 +232,7 @@ const umbraticApi = {
   setWindowChromeTheme: (theme: "dark" | "light") => invoke("umbratic:set-window-chrome-theme", theme),
   openExternal: (input: { url: string }) => invoke("umbratic:open-external", input),
   requestMicrophoneAccess: () => invoke("umbratic:request-microphone-access", undefined),
-  startDictation: (input: { language?: string }) => invoke("umbratic:start-dictation", input),
+  startDictation: (input: { language?: string; localOnly?: boolean }) => invoke("umbratic:start-dictation", input),
   sendDictationAudio: (input: { chunk: Uint8Array }) => invoke("umbratic:send-dictation-audio", input),
   stopDictation: () => invoke("umbratic:stop-dictation", undefined),
   cancelDictation: () => invoke("umbratic:cancel-dictation", undefined),

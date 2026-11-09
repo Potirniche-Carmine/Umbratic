@@ -1,12 +1,12 @@
 [package]
 name = "umbratic-artifacts"
-version = "0.0.2"
+version = "0.0.3"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-calamine = "=0.37.0"
+calamine = "=0.38.0"
 rust_xlsxwriter = { version = "=0.102.0", default-features = false }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"

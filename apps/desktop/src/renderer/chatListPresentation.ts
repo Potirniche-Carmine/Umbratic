@@ -55,17 +55,27 @@ export function visibleChatOrder(
   groups: readonly ChatProjectGroup[],
   collapsedProjects: ReadonlySet<string>,
   collapsedWorktrees: ReadonlySet<string>,
+  query = "",
 ): ChatRecord[] {
   const visible: ChatRecord[] = [];
-  for (const group of groups) {
-    if (collapsedProjects.has(group.key)) continue;
+  for (const group of filterChatProjectGroups(groups, query)) {
+    if (!query.trim() && collapsedProjects.has(group.key)) continue;
     visible.push(...group.chats);
     for (const worktree of group.worktrees) {
-      if (collapsedWorktrees.has(worktree.key)) continue;
+      if (!query.trim() && collapsedWorktrees.has(worktree.key)) continue;
       visible.push(...worktree.chats);
     }
   }
   return visible;
+}
+
+/** Rendering and numbered navigation must search the same rows. */
+export function filterChatProjectGroups(groups: readonly ChatProjectGroup[], query: string): ChatProjectGroup[] {
+  const search = query.trim().toLowerCase();
+  return groups.map(group => !search || group.name.toLowerCase().includes(search) ? group : ({ ...group,
+    chats: group.chats.filter(chat => chatDisplayTitle(chat).toLowerCase().includes(search)),
+    worktrees: group.worktrees.map(tree => ({ ...tree, chats: tree.chats.filter(chat => chatDisplayTitle(chat).toLowerCase().includes(search)) })).filter(tree => tree.chats.length),
+  })).filter(group => !search || group.name.toLowerCase().includes(search) || group.chats.length || group.worktrees.length);
 }
 
 /**
@@ -77,11 +87,11 @@ export function visibleChatOrder(
  * of the doomed rows rather than landing on one of them. Null means nothing
  * survived nearby and the composer is all that is left.
  */
-export function chatAfterDeletion(
-  visible: readonly ChatRecord[],
+export function chatAfterDeletion<T extends { id: string }>(
+  visible: readonly T[],
   activeChatId: string | null,
   deleted: ReadonlySet<string>,
-): ChatRecord | null {
+): T | null {
   const index = visible.findIndex((chat) => chat.id === activeChatId);
   if (index === -1) return null;
   for (let below = index + 1; below < visible.length; below += 1) {
@@ -94,7 +104,7 @@ export function chatAfterDeletion(
 }
 
 /** The number each of the first nine visible chats answers to, by chat id. */
-export function chatJumpNumbers(visible: readonly ChatRecord[], limit = chatJumpLimit): Map<string, number> {
+export function chatJumpNumbers(visible: readonly Pick<ChatRecord, "id">[], limit = chatJumpLimit): Map<string, number> {
   const numbers = new Map<string, number>();
   for (const [index, chat] of visible.slice(0, limit).entries()) numbers.set(chat.id, index + 1);
   return numbers;

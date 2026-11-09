@@ -1,0 +1,4 @@
+/* Identical token palette in responses, file previews, and both diff layouts. */
+.sourceToken { color: var(--syntax-dark, inherit); }
+:root[data-theme="light"] .sourceToken { color: var(--syntax-light, inherit); }
+@media (forced-colors: active) { .sourceToken { color: inherit !important; } }

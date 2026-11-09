@@ -1,12 +1,29 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { loadRendererFile } from "./helpers/load-renderer.ts";
 
 const controls = readFileSync(new URL("../src/renderer/ComposerControls.tsx", import.meta.url), "utf8");
 const combobox = readFileSync(new URL("../src/renderer/Combobox.tsx", import.meta.url), "utf8");
 const main = readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/renderer/styles/model-controls.css", import.meta.url), "utf8");
 const stylesIndex = readFileSync(new URL("../src/renderer/styles.css", import.meta.url), "utf8");
+
+test("the prompt box shows the current reasoning effort beside cloud and local model names", () => {
+  const { CloudModelMenu } = loadRendererFile("cloud/CloudModelMenu.tsx");
+  const { ComposerModelPicker } = loadRendererFile("ComposerControls.tsx");
+  const trigger = (component, props, className) => renderToStaticMarkup(React.createElement(component, props))
+    .match(new RegExp(`<button[^>]*class="${className}"[\\s\\S]*?</button>`))?.[0] || "";
+  const cloud = { value: { model: "gpt-6.1-sol", effort: "xhigh" }, models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: ["medium", "xhigh"] }], onChange() {} };
+  assert.match(trigger(CloudModelMenu, cloud, "cloudModelTrigger"), /class="composerReasoningEffort">· Extra high<\/span>/);
+  assert.doesNotMatch(trigger(CloudModelMenu, { ...cloud, models: [{ ...cloud.models[0], efforts: [] }] }, "cloudModelTrigger"), /composerReasoningEffort/);
+  const local = { models: [{ id: "local", label: "Local model" }], selectedId: "local", efforts: ["off", "on"], effort: "on", disabled: false, onSelect() {}, onSelectEffort() {} };
+  assert.match(trigger(ComposerModelPicker, local, "modelTrigger"), /class="composerReasoningEffort">· Thinking<\/span>/);
+  assert.match(trigger(ComposerModelPicker, { ...local, effort: "off" }, "modelTrigger"), /· No thinking/);
+  assert.doesNotMatch(trigger(ComposerModelPicker, { ...local, efforts: [] }, "modelTrigger"), /composerReasoningEffort/);
+});
 
 function declarations(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -122,9 +139,10 @@ test("controls this chat can never use are gone, not greyed out", () => {
   const remote = readFileSync(new URL("../src/renderer/RemoteControls.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(remote, /locked/);
   assert.doesNotMatch(remote, /Lock/);
-  // A run is different: it lifts in a moment, and a control that vanished for
-  // its length would move every other control in the row twice.
-  assert.match(main, /className="workspaceControl"[\s\S]*?disabled=\{busy\}/);
+  // The shared picker preserves the folder label after a run locks its scope.
+  assert.match(main, /<WorkspaceFolderPicker[\s\S]*?disabled=\{busy \|\| !!task\}/);
+  const folders = readFileSync(new URL("../src/renderer/WorkspaceFolderPicker.tsx", import.meta.url), "utf8");
+  assert.match(folders, /className="workspaceControl"[\s\S]*?disabled=\{disabled\}/);
 });
 
 test("the model name carries no icon and no context window", () => {

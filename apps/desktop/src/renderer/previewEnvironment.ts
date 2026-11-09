@@ -1,3 +1,4 @@
+import { createPreviewCloudApi } from "./cloud/previewCloudApi";
 import {
   DEFAULT_CONTEXT_LENGTH,
   normalizeContextLength,
@@ -103,7 +104,10 @@ function createPreviewApi(): DesktopApi {
 let previewLocalMtp = true;
 
   const previewApi: DesktopApi = {
-  listProjects: async () => readPreviewProjects(),
+    ...createPreviewCloudApi(),
+  listProjects: async () => new URLSearchParams(window.location.search).get("cloudTest") === "source"
+    ? [{ id: "preview-source", name: "Monitor", rootPath: "/preview", kind: "git", originalBranch: "main", baseCommit: "preview", dirty: true, statusSummary: "Preview" }, ...readPreviewProjects()]
+    : readPreviewProjects(),
   listChats: async () => readPreviewChats(),
   createChat: async (input) => {
     const now = new Date().toISOString();

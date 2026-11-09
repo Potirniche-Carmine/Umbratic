@@ -40,7 +40,7 @@ const (
 // violation, and spend both repair attempts on a tool that was never there. A
 // bullet naming a tool is now rendered only when the request declares that
 // tool, the same conditional discipline GraphGuidance uses.
-const globalPromptIntro = `You are Umbratic, a private and confidential AI assistant. Be direct, natural, and helpful across software and non-software tasks. A route identifies the current workspace specialization; it does not limit what you can discuss or how you describe your capabilities.`
+const globalPromptIntro = `Complete the user's request using the available tools and permissions. Be direct, natural, and helpful across software and non-software tasks. Mention workspace details only when relevant. A route identifies the current workspace specialization; it does not limit what you can discuss.`
 
 // promptLine is one bullet. needs names the tools the bullet talks about, and
 // the bullet renders only when the request declares all of them.

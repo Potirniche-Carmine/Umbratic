@@ -95,3 +95,16 @@ test("deleting the open chat lands on the row below it", () => {
   // A chat inside a collapsed group is not on screen to have a neighbour.
   assert.equal(presentation.chatAfterDeletion(chats, "hidden", new Set(["hidden"])), null);
 });
+
+test("search results, jump numbers, and deletion order include the same visible local chats", () => {
+  const chat = (id, title) => ({ id, title });
+  const groups = [
+    { key: "a", name: "App", chats: [chat("hidden", "Update docs"), chat("match", "Fix login")], worktrees: [{ key: "w", chats: [chat("worktree", "Fix logout")] }] },
+    { key: "b", name: "Notes", chats: [chat("other", "Release notes")], worktrees: [] },
+  ];
+  const rows = presentation.visibleChatOrder(groups, new Set(["a"]), new Set(["w"]), "fix");
+  assert.deepEqual(Array.from(rows, row => row.id), ["match", "worktree"]);
+  assert.deepEqual(Array.from(presentation.chatJumpNumbers(rows), ([id, n]) => [id, n]), [["match", 1], ["worktree", 2]]);
+  assert.equal(presentation.chatAfterDeletion(rows, "match", new Set(["match"])).id, "worktree");
+  assert.equal(presentation.visibleChatOrder(groups, new Set(), new Set(), "no match").length, 0);
+});

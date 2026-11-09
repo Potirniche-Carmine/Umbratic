@@ -6,6 +6,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { loadRenderer, loadRendererFile } from "./helpers/load-renderer.ts";
 
+test("workspace file links render their labels while unsafe URL schemes remain inert", () => {
+  const { MarkdownContent } = loadRendererFile("markdownContent.tsx");
+  const html = renderToStaticMarkup(React.createElement(MarkdownContent, {
+    content: "Read [greeting.ts](/private/tmp/App/greeting.ts:12) and [notes](</private/tmp/My Notes/brief.txt>). [unsafe](javascript:alert(1))",
+    onLocalFileClick: () => undefined,
+  }));
+  assert.match(html, /class="inlineFileLink"[^>]*><span class="inlineFileName">greeting.ts<\/span><span class="inlineFileLine">\(12\)<\/span><\/button>/);
+  assert.match(html, /title="\/private\/tmp\/My Notes\/brief.txt"[^>]*><span class="inlineFileName">notes<\/span><\/button>/);
+  assert.doesNotMatch(html, /href="javascript:/);
+  assert.match(html, /\[unsafe\]\(javascript:alert\(1\)\)/);
+});
+
 test("MarkdownContent renders real markdown while escaping raw HTML and scripts", () => {
   const { MarkdownContent } = loadRendererFile("markdownContent.tsx");
   const content = [
@@ -135,10 +147,9 @@ test("feedback dialog and prompt controls do not allow horizontal growth", () =>
   assert.match(actionRailRule, /background:\s*transparent/);
   assert.doesNotMatch(actionRailRule, /backdrop-filter/);
   assert.doesNotMatch(actionRailRule, /linear-gradient/);
-  // And the controls in it are borderless, so nothing inside the box outlines
-  // itself against the box's own outline.
+  // Model and permission controls retain their compact borderless layout.
   const railControlsRule = composerCss.match(
-    /\.promptActionRail \.permissionControl \.permissionTrigger,\r?\n\.promptActionRail \.modelControl \.modelTrigger,\r?\n\.promptActionRail \.dictationControl \{[^}]+\}/s,
+    /\.promptActionRail \.permissionControl \.permissionTrigger,\r?\n\.promptActionRail \.modelControl \.modelTrigger \{[^}]+\}/s,
   )?.[0] ?? "";
   assert.match(railControlsRule, /border:\s*0/);
   assert.match(railControlsRule, /background:\s*transparent/);
@@ -586,4 +597,11 @@ test("only the prose nothing follows is the turn's answer", () => {
   const answers = twoTurns.filter((item) => item.type === "assistant");
   assert.deepEqual(answers.map((item) => item.final), [undefined, true, true]);
   assert.equal(answers[1].text, "This is a website project.");
+});
+
+test("Mermaid fences use the shared diagram renderer while ordinary code remains code", () => {
+  const { MarkdownContent } = loadRendererFile("markdownContent.tsx");
+  const html = renderToStaticMarkup(React.createElement(MarkdownContent, { content: "```mermaid\nflowchart LR\nA --> B\n```\n\n```js\nconst x = 1;\n```" }));
+  assert.match(html, /markdownDiagram/); assert.match(html, /Show diagram source/);
+  assert.match(html, /Rendering diagram/); assert.match(html, /const x = 1/);
 });

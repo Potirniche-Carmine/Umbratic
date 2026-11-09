@@ -117,8 +117,8 @@
           "package": "undici",
           "version": "6.25.0",
           "id": "GHSA-vxpw-j846-p89q",
-          "modified": "2026-09-10T03:50:12.291121Z",
-          "reason": "The action does not construct WebSocket clients or process WebSocket frames/subprotocols."
+          "modified": "2026-11-04T03:45:10.197249Z",
+          "reason": "Re-reviewed 2026-11-08 against the November 4 advisory revision: the affected input remains fragmented WebSocket messages, including WebSocketStream. The exact checksum-verified attestation bundle and its workflow controls are unchanged; the action does not construct WebSocket clients or process WebSocket frames/subprotocols."
         },
         {
           "package": "undici",
@@ -152,8 +152,8 @@
           "package": "minimatch",
           "version": "10.2.5",
           "id": "GHSA-g3hv-75wg-m249",
-          "modified": "2026-10-30T23:15:07.420159Z",
-          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided glob expression is accepted."
+          "modified": "2026-11-04T17:01:25.850114Z",
+          "reason": "Re-reviewed 2026-11-08 against the November 4 advisory revision: amplification requires an attacker-controlled glob pattern with optimizationLevel >= 2. Both workflows still supply the fixed literal target/release/upload/* after complete-file validation; no attacker-provided pattern is accepted. The exact action bundle and applicability controls are unchanged."
         },
         {
           "package": "@sigstore/core",
@@ -173,8 +173,8 @@
           "package": "minimatch",
           "version": "10.2.6",
           "id": "GHSA-g3hv-75wg-m249",
-          "modified": "2026-10-30T23:15:07.420159Z",
-          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided glob expression is accepted."
+          "modified": "2026-11-04T17:01:25.850114Z",
+          "reason": "Re-reviewed 2026-11-08 against the November 4 advisory revision: amplification requires an attacker-controlled glob pattern with optimizationLevel >= 2. Both workflows still supply the fixed literal target/release/upload/* after complete-file validation; no attacker-provided pattern is accepted. The exact action bundle and applicability controls are unchanged."
         },
         {
           "package": "csv-parse",
@@ -215,8 +215,8 @@
           "package": "minimatch",
           "version": "9.0.9",
           "id": "GHSA-g3hv-75wg-m249",
-          "modified": "2026-10-30T23:15:07.420159Z",
-          "reason": "Subject-path is a fixed literal upload-directory glob, after complete-file validation; no attacker-provided glob expression is accepted."
+          "modified": "2026-11-04T17:01:25.850114Z",
+          "reason": "Re-reviewed 2026-11-08 against the November 4 advisory revision: amplification requires an attacker-controlled glob pattern with optimizationLevel >= 2. Both workflows still supply the fixed literal target/release/upload/* after complete-file validation; no attacker-provided pattern is accepted. The exact action bundle and applicability controls are unchanged."
         },
         {
           "package": "ip-address",
@@ -316,13 +316,6 @@
           "id": "GHSA-rgw5-rvv9-x895",
           "modified": "2026-09-10T03:51:14.535270Z",
           "reason": "The cache path is the fixed literal apps/desktop/.llama-cache, without braces or attacker-controlled glob expressions; these expansion and recursion paths receive no untrusted pattern."
-        },
-        {
-          "package": "minimatch",
-          "version": "3.1.5",
-          "id": "GHSA-g3hv-75wg-m249",
-          "modified": "2026-10-30T23:15:07.420159Z",
-          "reason": "The cache path is the fixed literal apps/desktop/.llama-cache; no attacker-controlled glob expression or optimization-level input is accepted."
         },
         {
           "package": "undici",

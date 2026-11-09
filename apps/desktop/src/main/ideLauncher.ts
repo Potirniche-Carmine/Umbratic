@@ -163,7 +163,14 @@ export async function openRepositoryInIde(input: unknown): Promise<IdeOpenResult
   if (!fs.existsSync(project.rootPath)) {
     return { ok: false, message: "Selected folder no longer exists." };
   }
-  const result = await openPathInIde(ideId, project.rootPath, "folder");
+  let target = project.rootPath;
+  if (input.filePath !== undefined) {
+    if (typeof input.filePath !== "string" || !input.filePath || path.isAbsolute(input.filePath)) throw new Error("Choose a project file.");
+    target = fs.realpathSync(path.resolve(project.rootPath, input.filePath));
+    const relative = path.relative(fs.realpathSync(project.rootPath), target);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !fs.statSync(target).isFile()) throw new Error("Choose a file inside this project.");
+  }
+  const result = await openPathInIde(ideId, target, input.filePath ? "file" : "folder", project.rootPath);
   return result;
 }
 

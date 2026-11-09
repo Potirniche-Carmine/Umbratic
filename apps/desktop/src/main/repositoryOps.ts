@@ -79,6 +79,16 @@ export async function pickRepository(): Promise<{ canceled: true } | { canceled:
   return { canceled: false, repository: await inspectRepository(result.filePaths[0]) };
 }
 
+export async function pickCloudFolders(): Promise<RepositoryInfo[]> {
+  const options: OpenDialogOptions = { title: "Add workspace folders", properties: ["openDirectory", "multiSelections"] };
+  const window = getMainWindow();
+  const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+  if (result.canceled) return [];
+  const repositories: RepositoryInfo[] = [];
+  for (const directory of result.filePaths.slice(0, 16)) repositories.push(await inspectRepository(directory));
+  return repositories;
+}
+
 /**
  * Where the attach dialog opens when the chat has no folder.
  *

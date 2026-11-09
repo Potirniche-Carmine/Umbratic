@@ -347,3 +347,27 @@
   line-height: 1.55;
 }
 
+
+.markdownContent table { table-layout: auto; }
+.markdownContent th:first-child { width: auto; }
+.markdownContent td .inlineFileLink, .markdownContent td code { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
+.markdownDiagram { position: relative; margin: 16px 0; padding: 36px 16px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: auto; }
+.markdownDiagramViewport { overflow: auto; max-height: 480px; padding: 10px 0; }
+.markdownDiagramViewport img { display: block; max-width: none; height: auto; margin: auto; }
+.markdownDiagramActions { position: absolute; top: 6px; right: 8px; display: flex; gap: 2px; }
+.markdownDiagramActions button { display: grid; place-items: center; width: 28px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
+.markdownDiagramActions button:hover { background: var(--control-hover); color: var(--text); }
+.markdownDiagramPending { min-height: 120px; }
+.markdownDiagramError { font-size: 12px; color: var(--muted); }
+.mermaidMeasure { position: fixed; top: 0; left: -10000px; width: 760px; visibility: hidden; pointer-events: none; }
+
+.diagramExpanded { width: min(1280px, calc(100vw - 64px)); height: min(900px, calc(100dvh - 80px)); padding: 0; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px var(--shadow-color); overflow: hidden; }
+.diagramExpanded[open] { display: flex; flex-direction: column; }
+.diagramExpanded::backdrop { background: rgba(0,0,0,.3); backdrop-filter: blur(5px); }
+.diagramExpanded header { display: flex; align-items: center; gap: 4px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.diagramExpanded header > span { flex: 1; font-size: 13px; font-weight: 550; }
+.diagramExpanded button { display: grid; place-items: center; height: 30px; min-width: 30px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
+.diagramExpanded button:hover { background: var(--control-hover); color: var(--text); }
+.diagramExpanded .diagramZoom { font-size: 12px; min-width: 50px; font-variant-numeric: tabular-nums; }
+.diagramExpandedCanvas { flex: 1; min-height: 0; overflow: auto; padding: 28px; align-content: center; }
+.diagramExpandedCanvas img { display: block; max-width: none; margin: auto; }

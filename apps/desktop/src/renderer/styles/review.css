@@ -89,22 +89,6 @@
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-.reviewFeedbackDialog header small {
-  display: inline-flex;
-  box-sizing: border-box;
-  min-width: 18px;
-  height: 18px;
-  align-items: center;
-  justify-content: center;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 13%, transparent);
-  font-size: 9px;
-  line-height: 1;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-
 .composerReviewFeedbackChevron {
   color: var(--faint);
   transition: transform 160ms ease-out, color 160ms ease;
@@ -115,94 +99,37 @@
   transform: translateX(1px);
 }
 
-.reviewFeedbackDialog header,
-.reviewFeedbackDialog header > span,
-.reviewFeedbackDialog article > div,
-.reviewFeedbackDialog footer {
-  display: flex;
-  align-items: center;
-}
-
-.reviewFeedbackScrim {
-  z-index: 120;
-}
-
+.reviewFeedbackScrim { z-index: 120; }
 .reviewFeedbackDialog {
-  width: min(560px, calc(100vw - 32px));
-  max-height: min(640px, calc(100vh - 48px));
+  width: min(480px, calc(100vw - 32px));
+  max-height: min(600px, calc(100dvh - 48px));
   overflow: hidden;
   border: 1px solid var(--line-strong);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--surface) 97%, transparent);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+  border-radius: 18px;
+  background: var(--modal-bg);
+  box-shadow: 0 20px 64px var(--shadow-color);
 }
-
-.reviewFeedbackDialog header {
-  justify-content: space-between;
-  min-height: 48px;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--line);
+.reviewFeedbackDialog header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px 20px; }
+.reviewFeedbackDialog header > strong { font-size: 13px; font-weight: 600; }
+.reviewFeedbackActions { display: flex; gap: 2px; }
+.reviewFeedbackDialog header button, .reviewFeedbackRemove {
+  display: grid; place-items: center; width: 30px; height: 30px;
+  padding: 0; border: 0; border-radius: 8px; color: var(--muted); background: transparent;
 }
-
-.reviewFeedbackDialog header > span { gap: 7px; }
-.reviewFeedbackDialog header button,
-.reviewFeedbackDialog article > button {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border-radius: 7px;
-  color: var(--muted);
-}
-
-.reviewFeedbackDialog > div {
-  display: grid;
-  gap: 8px;
-  max-height: 480px;
-  overflow-y: auto;
-  padding: 12px;
-}
-
-.reviewFeedbackDialog article {
-  position: relative;
-  display: grid;
-  gap: 7px;
-  padding: 11px 40px 11px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--control-bg);
-}
-
-.reviewFeedbackDialog article > div { gap: 8px; }
-.reviewFeedbackFileLink {
-  min-width: 0;
-  padding: 2px 4px;
-  margin: -2px -4px;
-  overflow: hidden;
-  border-radius: 5px;
-  color: color-mix(in srgb, var(--accent) 74%, var(--text));
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.reviewFeedbackFileLink:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.reviewFeedbackFileLink:active { transform: scale(0.98); }
-.reviewFeedbackFileLink:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.reviewFeedbackDialog article small {
-  padding: 2px 6px;
-  border-radius: 999px;
-  color: color-mix(in srgb, var(--accent) 72%, var(--text));
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  font-weight: 680;
-}
-.reviewFeedbackDialog article p { margin: 0; }
-.reviewFeedbackDialog article p { color: var(--text); font-size: 12px; line-height: 1.45; }
-.reviewFeedbackDialog article > button { position: absolute; top: 7px; right: 7px; }
-.reviewFeedbackDialog footer {
-  justify-content: flex-end;
-  gap: 7px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--line);
-}
+.reviewFeedbackDialog header button:hover, .reviewFeedbackRemove:hover { background: var(--control-hover); color: var(--text); }
+.reviewFeedbackComments { max-height: min(480px, calc(100dvh - 130px)); overflow-y: auto; padding: 0 20px 12px; }
+.reviewFeedbackDialog article { position: relative; padding: 14px 30px 16px 0; }
+.reviewFeedbackDialog article + article { border-top: 1px solid var(--line); }
+.reviewFeedbackDialog article > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.reviewFeedbackFileLink { min-width: 0; max-width: 100%; padding: 2px 0; border: 0; background: transparent; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.reviewFeedbackFileLink strong { font-size: 13px; font-weight: 550; }
+.reviewFeedbackFileLink:hover { text-decoration: underline; text-underline-offset: 3px; }
+.reviewFeedbackDialog article small { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.reviewFeedbackDialog article p { margin: 7px 0 0; color: var(--text); font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.reviewFeedbackRemove { position: absolute; top: 10px; right: -8px; opacity: 0; }
+.reviewFeedbackDialog article:hover .reviewFeedbackRemove, .reviewFeedbackRemove:focus-visible { opacity: 1; }
+.reviewFeedbackDialog button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (hover: none) { .reviewFeedbackRemove { opacity: 1; } }
 
 .reviewResizeHandle {
   position: absolute;
@@ -711,25 +638,18 @@
   cursor: default;
 }
 
-.idePickerOpen,
-.idePickerToggle {
-  display: grid;
-  place-items: center;
+.idePickerTrigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 0 7px;
+  border-radius: inherit;
   color: var(--text);
 }
 
-.idePickerOpen {
-  width: 36px;
-}
-
-.idePickerToggle {
-  width: 26px;
-  border-left: 1px solid var(--line);
-  color: var(--muted);
-}
-
-.idePickerOpen:hover:not(:disabled),
-.idePickerToggle:hover:not(:disabled),
+.idePickerTrigger:hover:not(:disabled),
 .idePicker:not(.isDisabled):focus-within {
   background: var(--control-hover);
 }

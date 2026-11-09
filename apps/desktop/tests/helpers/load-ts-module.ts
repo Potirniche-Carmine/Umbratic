@@ -19,7 +19,7 @@ function resolveSourceModule(specifier, parentFile) {
   // Vite's `?url` import yields the asset's URL as a string rather than its
   // contents. Under test there is no bundler to emit the asset, and no caller
   // fetches it, so the specifier itself stands in for the URL.
-  if (specifier.endsWith("?url")) return "__asset_url__";
+  if (specifier.endsWith("?url") || specifier.endsWith("?worker&url")) return "__asset_url__";
   if (/\.(css|scss|sass|less)$/i.test(specifier)) return "__style__";
   const base = path.resolve(path.dirname(parentFile), specifier);
   const candidates = [

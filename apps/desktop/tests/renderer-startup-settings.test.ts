@@ -9,7 +9,8 @@ test("renderer loads SQLite startup settings before its first app render", () =>
   // And the stored chords are in force before that first paint, so no tooltip
   // is ever drawn advertising a key the user rebound.
   assert.match(source, /setShortcutOverrides\(await api\.getKeyBindings\(\)/);
-  assert.match(source, /render\(<App startupSettings=\{startupSettings\} \/>/);
+  assert.match(source, /render\(<WorkspaceRoot api=\{api\}/);
+  assert.match(source, /renderPrivate=\{surface => <App startupSettings=\{startupSettings\} \{\.\.\.surface\}/);
   assert.doesNotMatch(source, /useState<PermissionMode>\("normal"\)/);
 });
 
@@ -113,9 +114,9 @@ test("the composer shell gives the prompt room to write in", () => {
   // picked it is zero-height and the box grows upward only once there is a chip
   // to hold. The editor track holds more than one line at rest and grows with
   // what is typed — a box that scrolled from the second line would hide what
-  // had already been written. The rail is only as tall as the 26px controls it
-  // carries, so the shell's own minimum is the two tracks together.
-  assert.match(shell, /grid-template-rows: auto minmax\(56px, auto\) 36px/);
+  // had already been written. Remaining rows fit the optional speech preview
+  // and control rail without putting speech underneath the editable draft.
+  assert.match(shell, /grid-template-rows: auto minmax\(56px, auto\) auto/);
   assert.match(shell, /min-height: 92px/);
 });
 

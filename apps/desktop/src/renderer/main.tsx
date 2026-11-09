@@ -1,8 +1,19 @@
+import { fileToPastedAttachment } from "./pastedAttachments";
+import { UserPrompt } from "./UserPrompt";
+import { WorkspaceFolderPicker } from "./WorkspaceFolderPicker";
+import { ComposerActionRail } from "./ComposerActionRail";
+import { ReviewFeedbackChip, ReviewFeedbackDialog } from "./review/ReviewFeedbackDialog";
+import { PromptTextarea } from "./PromptTextarea";
+import { promptEnterAction } from "./promptKeyboard";
+import type { LocalWorkspaceSurfaceProps } from "./WorkspaceNavigation";
+import { WorkspaceRoot } from "./cloud/WorkspaceRoot";
 import { ImageSettings } from "./ImageSettings";
 import { GeneratedImages } from "./GeneratedImages";
 import { withoutGeneratedImages } from "../shared/generatedImages";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { trackPanelResize } from "./panelResize";
+import { ConfirmationDialog } from "./ConfirmationDialog";
+import { AttachmentPreviewDialog } from "./AttachmentPreviewDialog";
 import { ChatArchive } from "./ChatArchive";
 import { useSkillSettings } from "./useSkillSettings";
 import type {
@@ -77,18 +88,17 @@ import {
 } from "./ComposerControls";
 import { insertTranscript, useDictation } from "./dictation";
 import {
-  chatJumpFromEvent,
-  chatJumpLimit,
-  chatJumpModifierHeld,
   setShortcutOverrides,
-  shortcutForEvent,
-  type ShortcutId,
   type ShortcutOverrides,
 } from "./keyboardShortcuts";
 import { ShortcutTooltip } from "./Tooltip";
+import { useChatJumpShortcuts } from "./useChatJumpShortcuts";
+import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts";
+import { localChatActivity } from "./ChatActivityIndicator";
+import { useChatReadState } from "./useChatReadState";
 import { KeyboardSettingsPanel } from "./KeyboardSettings";
 import { AboutSettingsPanel } from "./AboutSettings";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
   AtSign,
@@ -99,14 +109,11 @@ import {
   Copy,
   File,
   Folder,
-  FolderX,
   FolderOpen,
   Loader2,
-  MessageSquareX,
   MessageSquareText,
   Mic,
   MicOff,
-  PanelRight,
   Paperclip,
   Play,
   RotateCw,
@@ -115,14 +122,12 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
-  Trash2,
   X,
 } from "lucide-react";
 import {
   attachmentLabel,
   attachmentMention,
   composerPromptForSend,
-  continueNumberedList,
   insertPastedComposerText,
   promptMentionsAttachment,
   rankSkillMatches,
@@ -203,7 +208,7 @@ import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
 import { ConnectionNotice } from "./connectionNotice";
 import { ErrorToast } from "./errorToast";
-import { IdeIcon } from "./ideLogos";
+import { WorkspaceHeader, WorkspaceReviewToggle, WorkspaceSettingsButton } from "./WorkspaceChrome";
 
 export const streamingMarkdownRenderBatchIntervalMs = 50;
 const maxCachedTaskEventGroups = 24;
@@ -251,21 +256,18 @@ export function takeBatchedBackendEvents(pendingEvents: BackendUiEvent[]): Backe
   return pendingEvents.splice(0);
 }
 
-const sidebarDefaultWidth = 230;
-const sidebarMinWidth = 168;
-const sidebarMaxWidth = 230;
 const reviewMinWidth = 360;
 const reviewDefaultWidth = 440;
 const reviewOpenWidthRatio = 0.65;
 const reviewMaxWidthRatio = 0.95;
-const sidebarMaxRatio = 0.28;
 /// Every control that opens the review panel. A pointerdown on one of these is
 /// not a click away from the panel: the button's own click lands after the
 /// pointerdown, so closing here would only make it reopen what had just
 /// started sliding out.
 const reviewOpeningControls = ".composerReviewToggle, .reviewSummaryCard, .documentResponseLink, .reviewReferenceToken";
 
-function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
+function App({ startupSettings, active, navigation, onActivity, settingsRequest, providerSettings, onSettingsVisibility }: { startupSettings: DesktopStartupSettings } & LocalWorkspaceSurfaceProps) {
+  const surfaceActive = useRef(active); surfaceActive.current = active;
   const initialHarnessProfile = isHarnessProfileId(startupSettings.harnessProfile) ? startupSettings.harnessProfile : defaultHarnessProfileId;
   const initialContextLength = normalizeContextLength(startupSettings.contextLength);
   const [backend, setBackend] = useState<BackendStatus | null>(null);
@@ -292,13 +294,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   const [promptScrollTop, setPromptScrollTop] = useState(0);
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<DeleteCandidate | null>(null);
+  useEffect(() => { setDeleteError(""); }, [deleteCandidate]);
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => new Set());
   const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
-  // True while the modifier that jumps to a chat is held down, which is when
-  // the sidebar wears its numbers. Holding the key is how the shortcut is
-  // discovered at all: the rows say nothing about it the rest of the time.
-  const [chatJumpKeysVisible, setChatJumpKeysVisible] = useState(false);
+  const [chatQuery, setChatQuery] = useState("");
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(previewEnvironment?.events ?? []);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
@@ -329,6 +331,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // The dictation offer, raised by pressing a microphone that is not set up.
   const [dictationSetupOffer, setDictationSetupOffer] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  useEffect(() => { if (settingsRequest) { setSettingsTab(settingsRequest.tab); setSettingsOpen(true); setAppearanceSettings(readAppearanceSettings()); } }, [settingsRequest]);
+  useEffect(() => { onSettingsVisibility(settingsOpen); }, [settingsOpen, onSettingsVisibility]);
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [contextLength, setContextLength] = useState(initialContextLength);
@@ -366,11 +370,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const skillSettings = useSkillSettings(api);
   const { skills, skillsEnabled, loadSkills } = skillSettings;
   const [localLogsBusy, setLocalLogsBusy] = useState(false);
-  const [ideMenuOpen, setIdeMenuOpen] = useState<"composer" | "review" | null>(null);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
-  const [sidebarWidth, setSidebarWidth] = useState(sidebarDefaultWidth);
   const [reviewWidth, setReviewWidth] = useState(reviewDefaultWidth);
   const [reviewHasSessionWidth, setReviewHasSessionWidth] = useState(false);
   const [showElevatedPermissionsDialog, setShowElevatedPermissionsDialog] = useState(false);
@@ -424,7 +426,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       promptCaretRef.current = next.caret;
       return next.prompt;
     });
-    textareaRef.current?.focus();
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      const caret = promptCaretRef.current;
+      if (caret !== null) textareaRef.current?.setSelectionRange(caret, caret);
+    });
   });
   // What the server advertises, or — locally — a downloaded dictation model. Not whether one is loaded: the mic press loads it.
   const dictationAvailable = backend?.veilFeatures.includes("speech.transcribe") === true || backend?.localDictationReady === true;
@@ -452,15 +458,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const activityBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const activityFollowScrollRef = useRef<Map<string, boolean>>(new Map());
   const activityScrollInputRef = useRef<Set<string>>(new Set());
-  // What each keyboard shortcut does, and whether any of them may fire. Refs
-  // rather than effect dependencies: see where they are filled in below.
-  const shortcutActionsRef = useRef<Partial<Record<ShortcutId, () => void>>>({});
-  // The numbered rows, read by the one key listener below. Same reason as the
-  // action table beside it: the listener subscribes once and the sidebar is
-  // rebuilt on every chat that arrives.
-  const chatJumpTargetsRef = useRef<ChatRecord[]>([]);
-  const shortcutsBlockedRef = useRef(false);
-  const settingsToggleAllowedRef = useRef(false);
   const visibleTaskIdRef = useRef<string | null>(previewEnvironment?.task.id ?? null);
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
   const latestTaskId = task?.id;
@@ -608,7 +605,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     : busy || isGenerating
       ? "Another action is still finishing."
       : `This turn's work has already been ${task.state === "merged" ? "merged" : task.state === "rejected" ? "rejected" : "approved"}.`;
-  const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
+  const canOpenIde = !!repository || !!task && !["merged", "rejected", "completed"].includes(task.state);
   const approvalPending = task?.state === "awaiting_worktree_approval" || !!pendingPermission;
   const reviewEmptyLabel = !task
     ? "No active review"
@@ -747,7 +744,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       if (!existing) {
         existing = {
           key,
-          name: chat.repositoryName || folderName(chat.repositoryPath),
+          name: chat.repositoryName || (chat.repositoryPath ? folderName(chat.repositoryPath) : "Chats"),
           path: chat.repositoryPath,
           chats: [],
           worktrees: [],
@@ -801,14 +798,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   // order — one is what the sidebar draws while the modifier is down, the other
   // is what a number press lands on, and they cannot be allowed to disagree.
   const visibleChats = useMemo(
-    () => visibleChatOrder(chatProjectGroups, collapsedProjectKeys, collapsedWorktreeKeys),
-    [chatProjectGroups, collapsedProjectKeys, collapsedWorktreeKeys],
+    () => visibleChatOrder(chatProjectGroups, collapsedProjectKeys, collapsedWorktreeKeys, chatQuery),
+    [chatProjectGroups, collapsedProjectKeys, collapsedWorktreeKeys, chatQuery],
   );
   const chatJumpNumbersById = useMemo(() => chatJumpNumbers(visibleChats), [visibleChats]);
   const layoutStyle = {
-    "--sidebar-width": `${sidebarWidth}px`,
-    "--sidebar-reserved-width": `${sidebarDefaultWidth}px`,
-    "--sidebar-visual-gap": `${Math.max(0, sidebarDefaultWidth - sidebarWidth)}px`,
     "--review-width": `${reviewWidth}px`,
   } as React.CSSProperties;
   const reviewLayoutOpen = reviewOpen || reviewClosing;
@@ -900,6 +894,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }, [repository?.rootPath]);
 
   useEffect(() => {
+    if (!active && !settingsOpen) return;
     writeAppearanceSettings(appearanceSettings);
     document.documentElement.dataset.theme = effectiveTheme;
     document.documentElement.style.colorScheme = effectiveTheme;
@@ -913,6 +908,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     );
     void api.setWindowChromeTheme(effectiveTheme);
   }, [appearanceSettings, effectiveTheme]);
+  useEffect(() => { if (active) { setAppearanceSettings(readAppearanceSettings()); void loadProjects(); } }, [active]);
 
   useEffect(() => {
     const media = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -1082,10 +1078,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
   }, [availableIdes, selectedIdeId]);
 
-  useEffect(() => {
-    if (!canOpenIde && ideMenuOpen === "review") setIdeMenuOpen(null);
-  }, [canOpenIde, ideMenuOpen]);
-
   useEffect(
     () => () => {
       if (reviewAnimationRef.current !== null) window.cancelAnimationFrame(reviewAnimationRef.current);
@@ -1121,8 +1113,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     !!previewAttachment?.previewDataUrl
     || !!deleteCandidate
     || showElevatedPermissionsDialog
+    || reviewFeedbackDialogOpen
     || approvalPending;
-  const modalOpen = settingsOpen || nonSettingsModalOpen;
+  const modalOpen = settingsOpen || (active && nonSettingsModalOpen);
 
   /** Opens the microphone, or offers the way in when dictation is not set up. */
   function toggleDictation() {
@@ -1148,21 +1141,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     void loadSkills();
   }
 
-  /**
-   * The app's own keyboard shortcuts.
-   *
-   * One document-level listener dispatching off the same table the Keyboard
-   * settings page prints and the tooltips advertise, so a chord that fires and
-   * a chord that is documented cannot drift apart. It runs on capture, because
-   * the composer textarea holds focus almost all the time and a chord caught
-   * there would never reach the window.
-   */
-  // Rewritten every render and read through a ref, so the one listener below
-  // can subscribe once and still call today's closures. A dependency list here
-  // would have to name everything these actions read — the draft, the
-  // attachments, the run — and the day it missed one, a shortcut would quietly
-  // act on a stale copy of the composer.
-  shortcutActionsRef.current = {
+  const chatJumpKeysVisible = useChatJumpShortcuts(visibleChats, chat => void selectChat(chat), modalOpen || !active);
+  useWorkspaceShortcuts({
     "dictation.toggle": toggleDictation,
     "chat.new": () => void newChat(),
     // Raises the same confirmation the sidebar's trash button does rather than
@@ -1177,75 +1157,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     // while the first stop is still landing would read as the key doing
     // nothing rather than as the run already ending.
     "run.stop": () => { if (isGenerating && !stopPending) void stopTask(); },
-  };
-  chatJumpTargetsRef.current = visibleChats.slice(0, chatJumpLimit);
-  // Read the same way, so a chord cannot reach past a dialog to a window the
-  // user cannot currently see.
-  shortcutsBlockedRef.current = modalOpen;
-  // The one exception: the settings chord keeps working while the settings
-  // dialog itself is what is open, so the key that opened it closes it.
-  settingsToggleAllowedRef.current = settingsOpen && !nonSettingsModalOpen;
-
-  useEffect(() => {
-    const runShortcut = (event: KeyboardEvent) => {
-      // Never on the auto-repeat of a held key, and never mid-IME sequence.
-      if (event.repeat || event.isComposing) return;
-      if (shortcutsBlockedRef.current) {
-        // Behind the settings dialog the settings chord still lands — it
-        // toggles the dialog closed. Every other modal keeps every chord out.
-        const blockedShortcut = shortcutForEvent(event);
-        if (blockedShortcut?.id === "app.settings" && settingsToggleAllowedRef.current) {
-          event.preventDefault();
-          shortcutActionsRef.current["app.settings"]?.();
-        }
-        return;
-      }
-      // The number keys first: they are nine chords for one gesture, so they
-      // are matched by position rather than looked up in the table. A number
-      // with no chat under it is left alone rather than swallowed.
-      const jumpPosition = chatJumpFromEvent(event);
-      const jumpTarget = jumpPosition ? chatJumpTargetsRef.current[jumpPosition - 1] : undefined;
-      if (jumpTarget) {
-        event.preventDefault();
-        // The badges stay up: the modifier is still down, and somebody who just
-        // pressed 3 is as likely as not about to press 4.
-        void selectChat(jumpTarget);
-        return;
-      }
-      const shortcut = shortcutForEvent(event);
-      const action = shortcut && shortcutActionsRef.current[shortcut.id];
-      if (!action) return;
-      event.preventDefault();
-      action();
-    };
-    document.addEventListener("keydown", runShortcut, true);
-    return () => document.removeEventListener("keydown", runShortcut, true);
-  }, []);
-
-  /**
-   * The numbers on the sidebar rows, raised and dropped with the modifier.
-   *
-   * Both events carry the modifier state, so holding it and letting it go are
-   * the same handler rather than a pair that can fall out of step — and a chord
-   * that starts with the modifier and ends somewhere else takes the badges down
-   * on its own way through.
-   */
-  useEffect(() => {
-    const sync = (event: KeyboardEvent) => {
-      setChatJumpKeysVisible(!shortcutsBlockedRef.current && chatJumpModifierHeld(event));
-    };
-    const clear = () => setChatJumpKeysVisible(false);
-    document.addEventListener("keydown", sync, true);
-    document.addEventListener("keyup", sync, true);
-    // A modifier let go of while another window has focus never reaches this
-    // one, and the badges would still be up when the user came back to it.
-    window.addEventListener("blur", clear);
-    return () => {
-      document.removeEventListener("keydown", sync, true);
-      document.removeEventListener("keyup", sync, true);
-      window.removeEventListener("blur", clear);
-    };
-  }, []);
+  }, { mode: "private", blocked: modalOpen || !active,
+    allowSettings: settingsOpen && !(active && nonSettingsModalOpen),
+    onEscape: () => { if (reviewOpen) closeReviewPanel(); },
+  });
 
   useEffect(() => {
     const isOpen = modalOpen;
@@ -1280,7 +1195,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     };
     document.addEventListener("keydown", trapFocus);
     return () => { window.cancelAnimationFrame(frame); document.removeEventListener("keydown", trapFocus); };
-  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending]);
+  }, [modalOpen, settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending, reviewFeedbackDialogOpen]);
 
 
   // The offset lives on the DOM node rather than in the style prop, so it needs
@@ -1349,7 +1264,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       if (!target) return;
       if (!target.closest(".branchControl")) setBranchMenuOpen(false);
       if (!target.closest(".permissionControl")) setPermissionMenuOpen(false);
-      if (!target.closest(".idePicker")) setIdeMenuOpen(null);
       if (!target.closest(".chatProjectActions")) setProjectActionMenuKey(null);
       if (!target.closest(".attachmentMenu")) setMention(null);
     };
@@ -1357,7 +1271,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       if (event.key !== "Escape") return;
       setBranchMenuOpen(false);
       setPermissionMenuOpen(false);
-      setIdeMenuOpen(null);
       setProjectActionMenuKey(null);
       setMention(null);
     };
@@ -1845,19 +1758,19 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     );
   }
 
-  async function pickRepository() {
+  async function pickRepository(project?: RepositoryInfo) {
     setError(null);
     setBusy(true);
     try {
-      const result = await api.pickRepository();
-      if (!result.canceled) {
+      const result = project ? { canceled: false as const, repository: await api.getRepository({ repositoryPath: project.rootPath }) } : await api.pickRepository();
+      if (!result.canceled && result.repository) {
         const nextRepository = result.repository;
         mergeProject(nextRepository);
         setRepository(nextRepository);
         // Only a chat that has not run yet may take the folder; one with a
         // task keeps the workspace it started in.
         const chatWithoutProject = activeChatId
-          ? chats.find((chat) => chat.id === activeChatId && !chat.repositoryPath && !chat.taskId)
+          ? chats.find((chat) => chat.id === activeChatId && !chat.taskId)
           : undefined;
         if (chatWithoutProject) {
           const nextChat = await api.updateChatProject({
@@ -2303,6 +2216,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
   }
 
+  function steerCurrentPrompt() {
+    if (!canQueue) return;
+    const submission = currentComposerSubmission();
+    if (submission) void steerSubmission(submission);
+  }
+
   async function steerSubmission(submission: ComposerSubmission, queuedId?: string) {
     if (!task || task.state !== "running" || steerPending) return;
     const steeredPrompt = appendReviewFeedback(submission.prompt, submission.reviewFeedback).trim();
@@ -2414,89 +2333,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     } finally {
       setLocalLogsBusy(false);
     }
-  }
-
-  async function openIde(ideId: string) {
-    if (!repository) return;
-    setIdeMenuOpen(null);
-    const result = await api.openRepositoryInIde({ repositoryId: repository.id, ideId });
-    if (!result.ok) setError(result.message);
-  }
-
-  function toggleIdeMenu(owner: "composer" | "review") {
-    setIdeMenuOpen((open) => {
-      const next = open === owner ? null : owner;
-      if (next) {
-        setBranchMenuOpen(false);
-        setPermissionMenuOpen(false);
-      }
-      return next;
-    });
-  }
-
-  function renderIdePicker(owner: "composer" | "review") {
-    const canOpen = owner === "composer" ? !!repository : canOpenIde;
-    const expanded = ideMenuOpen === owner && canOpen;
-    const disabledTitle = owner === "composer" ? "Select a folder first" : "No review folder yet";
-    const openTitle =
-      owner === "composer"
-        ? `Open ${repository?.name ?? "folder"} in ${selectedIde.label}`
-        : `Use ${selectedIde.label} for changed files`;
-    return (
-      <div className={`idePicker ${canOpen ? "" : "isDisabled"}`}>
-        <button
-          className="idePickerOpen"
-          type="button"
-          onClick={() => openIde(selectedIde.id)}
-          disabled={!canOpen}
-          title={canOpen ? openTitle : disabledTitle}
-        >
-          <IdeIcon icon={selectedIde.icon} />
-        </button>
-        <button
-          className="idePickerToggle"
-          type="button"
-          onClick={() => toggleIdeMenu(owner)}
-          disabled={!canOpen}
-          aria-expanded={expanded}
-          aria-haspopup="menu"
-          title={canOpen ? "Choose editor" : disabledTitle}
-        >
-          <ChevronDown size={13} />
-        </button>
-        {expanded ? (
-          <div className="ideMenu" role="menu" onKeyDown={(event) => {
-            const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("[role='menuitem']"));
-            const index = items.indexOf(document.activeElement as HTMLButtonElement);
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-              event.preventDefault();
-              items[(index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
-            } else if (event.key === "Home") { event.preventDefault(); items[0]?.focus(); }
-            else if (event.key === "End") { event.preventDefault(); items.at(-1)?.focus(); }
-          }}>
-            {availableIdes.map((ide) => (
-              <button
-                className={ide.id === selectedIde.id ? "active" : ""}
-                key={ide.id}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setSelectedIdeId(ide.id);
-                  setIdeMenuOpen(null);
-                }}
-              >
-                <IdeIcon icon={ide.icon} />
-                <span>{ide.label}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  function sidebarMaxAvailableWidth() {
-    return clamp(Math.round(window.innerWidth * sidebarMaxRatio), sidebarMinWidth, sidebarMaxWidth);
   }
 
   function reviewMaxWidth() {
@@ -2639,10 +2475,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [reviewOpen, reviewClosing]);
 
-  async function openReviewFile(filePath: string) {
-    if (!canOpenIde || !task) return;
+  async function openReviewFile(filePath: string, ideId = selectedIde.id) {
+    if (!canOpenIde) return;
     setError(null);
-    const result = await api.openTaskInIde({ taskId: task.id, ideId: selectedIde.id, filePath });
+    const result = task && !["merged", "rejected", "completed"].includes(task.state)
+      ? await api.openTaskInIde({ taskId: task.id, ideId, filePath })
+      : repository ? await api.openRepositoryInIde({ repositoryId: repository.id, ideId, filePath }) : null;
+    if (!result) return;
     if (!result.ok) setError(result.message);
   }
 
@@ -2732,7 +2571,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   async function undoReviewChanges(filePath?: string) {
     if (!task || !canUndoFile) return;
     setBusy(true);
-    setIdeMenuOpen(null);
     try {
       const next = await api.undoTaskChanges({ taskId: task.id, ...(filePath ? { path: filePath } : {}) });
       if (!next) return;
@@ -2920,25 +2758,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     return chat.id;
   }
 
-  function fileToPastedAttachment(file: File): Promise<PastedAttachmentInput> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result !== "string") {
-          reject(new Error("Could not read pasted file."));
-          return;
-        }
-        resolve({
-          name: file.name || (file.type.startsWith("image/") ? "pasted-image.png" : "pasted-file"),
-          mimeType: file.type || undefined,
-          dataUrl: reader.result,
-        });
-      };
-      reader.onerror = () => reject(reader.error ?? new Error("Could not read pasted file."));
-      reader.readAsDataURL(file);
-    });
-  }
-
   async function attachPastedFiles(files: File[]) {
     if (!files.length || !canAttachFiles) return;
     setError(null);
@@ -3044,34 +2863,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         return;
       }
     }
-    if (event.key !== "Enter") {
-      return;
-    }
-    // ⌘/Ctrl+Enter always sends. Plain Enter sends only while "Send with
-    // Enter" is on; switched off, it starts a new line like Shift+Enter does.
-    const modifierSend = event.metaKey || event.ctrlKey;
-    if (!modifierSend && (event.shiftKey || !sendOnEnter)) {
-      const target = event.currentTarget;
-      const continuation = continueNumberedList(target.value, target.selectionStart, target.selectionEnd);
-      if (!continuation) return;
-      event.preventDefault();
-      followComposerScrollRef.current = true;
-      setPrompt(continuation.value);
-      setMention(null);
-      setFileMatches([]);
-      setSelectedFileIndex(0);
-      setSelectedSkillIndex(0);
-      window.requestAnimationFrame(() => {
-        textareaRef.current?.setSelectionRange(continuation.caret, continuation.caret);
-      });
-      return;
-    }
+    const target = event.currentTarget;
+    const action = promptEnterAction({ key: event.key, isComposing: event.nativeEvent.isComposing, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, sendOnEnter, running: isGenerating, value: target.value, start: target.selectionStart, end: target.selectionEnd });
+    if (!action) return;
     event.preventDefault();
-    if (isGenerating) {
-      queueCurrentPrompt();
-    } else {
-      void startTask();
-    }
+    if (action.type === "insert") {
+      followComposerScrollRef.current = true;
+      setPrompt(action.insertion.value); setMention(null); setFileMatches([]); setSelectedFileIndex(0); setSelectedSkillIndex(0);
+      window.requestAnimationFrame(() => textareaRef.current?.setSelectionRange(action.insertion.caret, action.insertion.caret));
+    } else if (action.type === "queue") void queueCurrentPrompt();
+    else if (action.type === "steer") steerCurrentPrompt();
+    else void startTask();
   }
 
   async function newChat() {
@@ -3319,9 +3121,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }
 
   async function confirmDeleteCandidate() {
-    if (!deleteCandidate) return;
+    if (!deleteCandidate || deletePending) return;
     const target = deleteCandidate;
-    setDeleteCandidate(null);
+    setDeletePending(true); setDeleteError("");
     try {
       if (target.kind === "chat") {
         await api.deleteChat({ chatId: target.chat.id });
@@ -3339,18 +3141,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           setRepository(null);
         }
       }
+      setDeleteCandidate(null);
     } catch (cause) {
-      setError(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
-  function beginSidebarResize(event: React.PointerEvent<HTMLDivElement>) {
-    const startX = event.clientX;
-    const startWidth = sidebarWidth;
-    trackPanelResize(event,
-      (clientX) => setSidebarWidth(clamp(startWidth + clientX - startX, sidebarMinWidth, sidebarMaxAvailableWidth())),
-      () => setSidebarWidth((current) => clamp(current, sidebarMinWidth, sidebarMaxAvailableWidth())),
-    );
+      setDeleteError(String(cause instanceof Error ? cause.message : cause));
+    } finally { setDeletePending(false); }
   }
 
   function beginReviewResize(event: React.PointerEvent<HTMLDivElement>) {
@@ -3374,9 +3168,15 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }
 
 
+  const chatActivity = chats.filter(chat => chat.taskState).map(chat => ({ id: chat.id, updatedAt: chat.updatedAt,
+    state: localChatActivity(chat.id === task?.chatId ? task.state : chat.taskState, !!pendingPermission && chat.id === task?.chatId) }));
+  const unreadChatIds = useChatReadState("local", chatActivity, activeChatId, active && !settingsOpen && task?.chatId === activeChatId);
+  const providerActivity = chatActivity.some(chat => chat.state === "waiting") ? "waiting" : chatActivity.some(chat => chat.state === "running") ? "running" : localChatActivity(task?.state, !!pendingPermission);
+  useEffect(() => { onActivity(providerActivity, unreadChatIds.size > 0); }, [providerActivity, unreadChatIds.size, onActivity]);
+
   return (
     <div
-      className={`appShell ${isMacLike ? "macChrome" : ""} sidebarOpen ${
+      className={`appShell unifiedLocalShell ${isMacLike ? "macChrome" : ""} sidebarOpen ${
         reviewLayoutOpen ? "" : "reviewClosed"
       } ${reviewLayoutOpen ? "reviewOpen" : ""} ${reviewClosing ? "reviewClosing" : ""}`}
       ref={shellRef}
@@ -3391,10 +3191,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       </header>
 
       <aside className="sidebar">
-        <div className="sidebarResizeHandle" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={sidebarMinWidth} aria-valuemax={sidebarMaxAvailableWidth()} aria-valuenow={Math.round(sidebarWidth)} aria-label="Sidebar width" onPointerDown={beginSidebarResize} onKeyDown={(event) => { const step = event.shiftKey ? 24 : 8; if (event.key === "ArrowLeft") { event.preventDefault(); setSidebarWidth((width) => clamp(width - step, sidebarMinWidth, sidebarMaxAvailableWidth())); } if (event.key === "ArrowRight") { event.preventDefault(); setSidebarWidth((width) => clamp(width + step, sidebarMinWidth, sidebarMaxAvailableWidth())); } }} />
+        {navigation}
         <div className="sidebarStack">
           <ChatArchive
-            chatProjectGroups={chatProjectGroups} activeChatId={activeChatId}
+            chatProjectGroups={chatProjectGroups} activeChatId={activeChatId} query={chatQuery} onQueryChange={setChatQuery}
+            waitingChatId={pendingPermission ? task?.chatId ?? activeChatId : null}
+            unreadChatIds={unreadChatIds}
             chatJumpKeysVisible={chatJumpKeysVisible} chatJumpNumbersById={chatJumpNumbersById}
             collapsedProjectKeys={collapsedProjectKeys} collapsedWorktreeKeys={collapsedWorktreeKeys}
             projectActionMenuKey={projectActionMenuKey} setProjectActionMenuKey={setProjectActionMenuKey}
@@ -3417,56 +3219,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               <span>Restart to update</span>
             </button>
           ) : null}
-          <div className="sidebarBrand" aria-hidden="true"><span className="sidebarBrandRow"><span className="sidebarBrandMark" /><span className="sidebarBrandName">Umbratic</span></span><span className="confidentialMark">Private and Confidential</span></div>
-          <ShortcutTooltip id="app.settings">
-            <button
-              className="settingsPlaceholder"
-              type="button"
-              onClick={() => openSettings()}
-            >
-              <Settings size={16} />
-              <span>Settings</span>
-            </button>
-          </ShortcutTooltip>
+          <WorkspaceSettingsButton onClick={() => openSettings()}/>
         </div>
       </aside>
 
       <main className={`workspace ${approvalPending ? "approvalPending" : ""}`}>
         <section className="workArea">
           <section className="composerPanel">
-            <div className="composerHeader">
-              <div className="composerHeaderTitle">
-                <strong>{composerHeaderTitle}</strong>
-                <div className="composerHeaderMetaRow">
-                  <span>{composerHeaderMeta}</span>
-                  {remoteBadge ? <RemoteChatBadge name={remoteBadge.name} directory={remoteBadge.directory} /> : null}
-                </div>
-                {indexingThisWorkspace ? (
-                  <span className="workspaceIndexing" role="status">
-                    <span className="workspaceIndexingSpinner" aria-hidden="true" />
-                    Indexing this folder…
-                  </span>
-                ) : null}
-              </div>
-              <div className="composerHeaderActions">
-                {renderIdePicker("composer")}
-                <ShortcutTooltip
-                  id="review.toggle"
-                  label={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
-                  placement="bottom"
-                >
-                  <button
-                    className="chromeButton composerReviewToggle"
-                    type="button"
-                    onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}
-                    aria-pressed={reviewOpen && !reviewClosing}
-                    aria-label={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
-                  >
-                    <PanelRight size={15} />
-                  </button>
-                </ShortcutTooltip>
-              </div>
-            </div>
+            <WorkspaceHeader title={composerHeaderTitle} meta={<><span>{composerHeaderMeta}</span>{remoteBadge ? <RemoteChatBadge name={remoteBadge.name} directory={remoteBadge.directory}/> : null}</>} indexing={indexingThisWorkspace}>
+              {(!reviewOpen || reviewClosing) && <WorkspaceReviewToggle open={reviewOpen} closing={reviewClosing} onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}/>}
+            </WorkspaceHeader>
             <div
               className="composerBody"
               ref={streamRef}
@@ -3479,11 +3241,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 <div className="timeline">
                   {composerItems.map((item) =>
                     item.type === "user" ? (
-                      <article className="timelineMessage userMessage" key={item.id}>
-                        <AttachmentPreviewList files={item.attachedFiles} mode="message" onOpen={openMessageAttachment} />
-                        <div className="userMessageBubble">
-                          {item.text ? <MarkdownContent content={item.text} /> : null}
-                          {item.reviewFeedback.length ? (
+                      <UserPrompt key={item.id} text={item.text} files={item.attachedFiles} onOpen={openMessageAttachment} onCopy={() => void copyText(item.rawText)} feedback={
+item.reviewFeedback.length ? (
                             <button
                               className="messageReviewFeedback"
                               type="button"
@@ -3497,14 +3256,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                               <span><strong>Review feedback</strong><small>{item.reviewFeedback.length} {item.reviewFeedback.length === 1 ? "comment" : "comments"}</small></span>
                               <ChevronRight size={13} aria-hidden="true" />
                             </button>
-                          ) : null}
-                        </div>
-                        <div className="messageActions">
-                          <button className="messageAction" type="button" onClick={() => void copyText(item.rawText)} title="Copy prompt">
-                            <Copy size={14} />
-                          </button>
-                        </div>
-                      </article>
+                          ) : null}/>
                     ) : item.type === "compaction" ? (
                       <CompactionRow item={item} key={item.id} clock={activityClock} />
                     ) : item.type === "assistant" ? (
@@ -3563,7 +3315,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   ) : null}
                 </div>
               ) : (
-                <ComposerGreeting label={todayPromptLabel} />
+                <ComposerGreeting label="What are we working on?" />
               )}
             </div>
           </section>
@@ -3604,15 +3356,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         ) : null}
 
         <section className="promptDock">
-          <div className="promptControls">
-            {/* Everything already committed but not yet answered, in one stack above
-                the controls: messages waiting their turn, and the review comments
-                riding along with the message being written. They were two trays in
-                two places, which read as two unrelated things when they are both
-                just "what is going out next". Anchored to the controls row rather
-                than the dock, because the controls row is the one element that is
-                exactly as wide as the prompt box: a tray anchored to the dock
-                spans the whole pane on a wide window. */}
             <div className={`composerPendingTray ${
               activeQueuedPrompts.length || reviewPromptFeedback.length || dictation.status.error
                 ? "hasPending"
@@ -3647,8 +3390,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   </button>
                 </div>
               ) : null}
-              {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
+              {reviewPromptFeedback.length ? <ReviewFeedbackChip count={reviewPromptFeedback.length} onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }}/> : null}
             </div>
+          <div className="promptControls">
             {/* A chat that started without a folder can never be given one, so
                 the control goes rather than sitting there greyed out: a dead
                 button is a question the user keeps re-asking. Starting a new
@@ -3658,17 +3402,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 other control in the row twice. */}
             {chatStartedWithoutFolder ? null : (
               <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
-                <button
-                  className="workspaceControl"
-                  type="button"
-                  onClick={pickRepository}
-                  disabled={busy}
-                >
-                  <span className="controlIcon"><FolderOpen size={14} /></span>
-                  <span>
-                    <strong>{repository ? repository.name : "Select folder"}</strong>
-                  </span>
-                </button>
+                <WorkspaceFolderPicker projects={repository && !projects.some(project => project.id === repository.id) ? [repository, ...projects] : projects} selectedIds={repository ? [repository.id] : []} disabled={busy || !!task} multiple={false}
+                  onChange={ids => void pickRepository(projects.find(project => project.id === ids[0]))} onAdd={() => void pickRepository()}/>
                 {repository?.kind === "git" ? (
                   <BranchPicker
                     branch={repository.originalBranch}
@@ -3906,26 +3641,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               {/* Always in the flow, so the shell's three rows line up whether or
                   not anything is attached; it collapses to nothing when empty. */}
               <div className="promptAttachmentStrip">
-                <AttachmentPreviewList files={pickedAttachments} mode="composer" onRemove={removeAttachment} />
+                <AttachmentPreviewList files={pickedAttachments} mode="composer" onRemove={removeAttachment} onOpen={openMessageAttachment} />
               </div>
               <div className="promptEditor">
-                <div className="promptHighlight" aria-hidden="true">
+                <div className="promptHighlight promptTextLayout" aria-hidden="true">
                   <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
                     {renderPromptHighlights(prompt, attachedFiles, skills)}
-                    {/* The words being spoken, muted, in the box they are going
-                        into. They are drawn behind the textarea rather than
-                        written into it: a partial is replaced whole on every
-                        update, and rewriting the value would move a caret the
-                        user may have placed. Only the final text is inserted. */}
-                    {dictation.status.preview ? (
-                      <span className="promptDictationGhost">
-                        {prompt && !prompt.endsWith(" ") ? " " : ""}
-                        {dictation.status.preview}
-                      </span>
-                    ) : null}
+
                   </div>
                 </div>
-                <textarea
+                <PromptTextarea dictation={dictation.status} previewCaret={promptCaretRef.current}
                   ref={textareaRef}
                   value={prompt}
                   onChange={handlePromptChange}
@@ -3937,20 +3662,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   onScroll={(event) => setPromptScrollTop(event.currentTarget.scrollTop)}
                   disabled={busy || !!closedChatNotice}
                   placeholder={
-                    // The ghost transcript occupies the same line, so the
-                    // placeholder stands down rather than printing under it.
-                    dictation.status.preview
-                      ? ""
-                      : closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
+                    closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
                   }
                 />
               </div>
-              <div className="promptActionRail">
-                {/* What this turn will do, on the left: speak it instead of
-                    typing it, and whether it may act without asking. What will
-                    answer it, on the right. The two halves are separate
-                    questions and the gap between them is what says so. */}
-                <div className="promptRailGroup promptRailLeft">
+              <ComposerActionRail leading={<>
                   <DictationControl status={dictation.status} enabled={dictationAvailable} onToggle={dictation.toggle}
                     devices={dictation.devices} deviceId={dictation.deviceId} onSelectDevice={dictation.selectDevice}
                     onRequestSetup={() => setDictationSetupOffer(true)} />
@@ -3969,8 +3685,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       void updatePermissionMode(mode);
                     }}
                   />
-                </div>
-                <div className="promptRailGroup promptRailRight">
+                </>} trailing={<>
                   {composerModels.length > 1 || modelReasoningEfforts.length > 0 || endpointSettings.mode === "local" ? (
                     <ComposerModelPicker
                       models={composerModels}
@@ -4028,32 +3743,31 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     </button>
                   </ShortcutTooltip>
                 ) : isGenerating ? (
-                  <ShortcutTooltip id="composer.send" label="Queue prompt">
+                  <ShortcutTooltip id="composer.send" label="Steer with prompt">
                     <button
-                      className="sendButton queueButton"
+                      className="sendButton"
                       type="button"
-                      onClick={queueCurrentPrompt}
+                      onClick={steerCurrentPrompt}
                       disabled={!canQueue}
-                      aria-label="Queue prompt"
+                      aria-label="Send prompt"
                     >
                       <Send aria-hidden="true" size={16} />
                     </button>
                   </ShortcutTooltip>
                 ) : (
-                  <ShortcutTooltip id="composer.send" label="Send prompt">
+                  <ShortcutTooltip id="composer.send" sendOnEnter={sendOnEnter} label="Send prompt">
                     <button className="sendButton" type="button" onClick={() => void startTask()} disabled={!canStart} aria-label="Send prompt">
                       {busy ? <Loader2 className="spin" size={17} /> : <Send aria-hidden="true" size={17} />}
                     </button>
                   </ShortcutTooltip>
                 )}
-                </div>
-              </div>
+                </>}/>
             </div>
           </div>
         </section>
       </main>
 
-      <aside className="reviewSidebar">
+      <aside className="reviewSidebar" aria-hidden={!reviewLayoutOpen} inert={!reviewLayoutOpen}>
         <ReviewPanel
           files={reviewFiles}
           // False the moment the panel is asked to close, not when its spring
@@ -4069,6 +3783,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           canUndoFile={canUndoFile}
           undoUnavailableReason={undoUnavailableReason}
           selectedIdeLabel={selectedIde.label}
+          availableIdes={availableIdes}
+          selectedIde={selectedIde}
+          onSelectIde={setSelectedIdeId}
           onClose={closeReviewPanel}
           onUndoFile={(filePath) => void undoReviewChanges(filePath)}
           onUndoAll={() => void undoReviewChanges()}
@@ -4093,33 +3810,32 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           setReviewFeedbackPreview(null);
         };
         return (
-          <div className="modalScrim reviewFeedbackScrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}>
-            <section className="reviewFeedbackDialog" role="dialog" aria-modal="true" aria-labelledby="review-feedback-title" onKeyDown={(event) => { if (event.key === "Escape") closeDialog(); }}>
-              <header><span><MessageSquareText size={16} /><strong id="review-feedback-title">Review feedback</strong><small>{dialogFeedback.length}</small></span><button type="button" onClick={closeDialog} aria-label="Close review feedback"><X size={15} /></button></header>
-              <div>{dialogFeedback.map((comment) => <article key={comment.id}><div><button className="reviewFeedbackFileLink" type="button" onClick={() => { closeDialog(); openReviewReference(comment.filePath); }} title={`Open ${comment.filePath} in review`}><strong>{comment.filePath}</strong></button><small>{comment.lineLabel}</small></div><p>{comment.body}</p>{!readOnly ? <button type="button" onClick={() => setReviewPromptFeedback((current) => current.filter((candidate) => candidate.id !== comment.id))} aria-label={`Remove feedback for ${comment.filePath}`}><X size={13} /></button> : null}</article>)}</div>
-              <footer>{!readOnly ? <button type="button" onClick={() => { setReviewPromptFeedback([]); closeDialog(); }}>Remove all</button> : null}<button className="primaryAction" type="button" onClick={closeDialog}>Done</button></footer>
-            </section>
-          </div>
+          <ReviewFeedbackDialog comments={dialogFeedback} onClose={closeDialog}
+            onOpenFile={openReviewReference}
+            onRemove={readOnly ? undefined : id => setReviewPromptFeedback(current => current.filter(comment => comment.id !== id))}
+            onRemoveAll={readOnly ? undefined : () => setReviewPromptFeedback([])}/>
+
         );
       })() : null}
 
-      {settingsOpen ? (
-        <div className="modalScrim" role="presentation">
+      {settingsOpen ? createPortal(
+        <div className="modalScrim unifiedSettingsScrim" role="presentation">
           <section ref={modalRef} tabIndex={-1} className="settingsDialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" onKeyDown={(event) => { if (event.key === "Escape") closeSettingsDialog(); }}>
             <header className="settingsDialogHeader">
               <span>
                 <Settings size={17} />
                 <strong id="settings-title">Settings</strong>
               </span>
-              <button className="chromeButton" type="button" onClick={closeSettingsDialog} title="Close settings">
+              <ShortcutTooltip id="dialog.dismiss" label="Close settings"><button className="chromeButton" type="button" onClick={closeSettingsDialog} aria-label="Close settings">
                 <X size={15} />
-              </button>
+              </button></ShortcutTooltip>
             </header>
 
             <div className="settingsLayout">
               <SettingsNav active={settingsTab} onSelect={setSettingsTab} />
 
               <div className="settingsContent">
+                {settingsTab === "providers" ? providerSettings : null}
                 {settingsTab === "account" ? <ConnectionSettingsPanel controller={connectionSettings} /> : null}
 
                 {settingsTab === "remote" ? <RemoteSettingsPanel controller={remoteSettings} /> : null}
@@ -4159,9 +3875,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 {settingsTab === "image" ? <ImageSettings api={api} serverMode={connectionSettings.settings.mode === "server"} /> : null}
                 {settingsTab === "voice" ? (
                   <VoiceSettings api={api} backend={backend} active onBackendStatus={setBackend}
-                    serverMode={connectionSettings.settings.mode === "server"} speechAdvertised={dictationAvailable} />
+                    serverMode={active && connectionSettings.settings.mode === "server"} speechAdvertised={active && dictationAvailable} />
                 ) : null}
-                {settingsTab === "keyboard" ? <KeyboardSettingsPanel api={api} /> : null}
+                {settingsTab === "keyboard" ? <KeyboardSettingsPanel api={api} mode={active ? "private" : "cloud"} sendOnEnter={sendOnEnter} /> : null}
                 {settingsTab === "skills" ? (
                   <SkillsSettingsPanel {...skillSettings.panelProps} />
                 ) : null}
@@ -4186,75 +3902,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   />
                 ) : null}
                 {settingsTab === "about" ? <AboutSettingsPanel api={api} /> : null}
-                <div className="settingsFooter" aria-hidden="true"><span className="sidebarBrandMark" /><span>Umbratic · Private and confidential</span></div>
+                <div className="settingsFooter" aria-hidden="true"><span className="sidebarBrandMark" /><span>Umbratic</span></div>
               </div>
             </div>
           </section>
-        </div>
+        </div>, document.body
       ) : null}
 
-      {previewAttachment?.previewDataUrl ? (
-        <div className="modalScrim imagePreviewScrim" role="presentation" onClick={() => setPreviewAttachment(null)}>
-          <section
-            ref={modalRef}
-            tabIndex={-1}
-            className="imagePreviewDialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label={attachmentLabel(previewAttachment)}
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => { if (event.key === "Escape") setPreviewAttachment(null); }}
-          >
-            <div className="imagePreviewHeader">
-              <strong>{attachmentLabel(previewAttachment)}</strong>
-              <button className="messageAction" type="button" onClick={() => setPreviewAttachment(null)} aria-label="Close preview" title="Close preview">
-                <X size={15} />
-              </button>
-            </div>
-            <div className="imagePreviewCanvas">
-              <img alt={attachmentLabel(previewAttachment)} src={previewAttachment.previewDataUrl} />
-            </div>
-          </section>
-        </div>
-      ) : null}
-
-      {deleteCandidate ? (
-        <div className="modalScrim" role="presentation">
-          <section ref={modalRef} tabIndex={-1} className="riskDialog deleteDialog" role="dialog" aria-modal="true" aria-labelledby="delete-title" onKeyDown={(event) => { if (event.key === "Escape") setDeleteCandidate(null); }}>
-            <div className="dialogIcon deleteIcon">
-              {deleteCandidate.kind === "project" ? (
-                <FolderX size={18} />
-              ) : deleteCandidate.kind === "projectChats" ? (
-                <MessageSquareX size={18} />
-              ) : (
-                <Trash2 size={18} />
-              )}
-            </div>
-            <div>
-              <h3 id="delete-title">{deleteCandidateTitle(deleteCandidate)}</h3>
-              <p>{deleteCandidateDescription(deleteCandidate)}</p>
-            </div>
-            <div className="dialogActions">
-              <button className="secondaryAction" type="button" onClick={() => setDeleteCandidate(null)}>
-                Cancel
-              </button>
-              {/* The dialog was raised by asking to delete, so Enter answers the
-                  question that was asked. Cancel is still one Tab away and
-                  Escape still leaves without doing anything. */}
-              <button className="dangerAction" type="button" data-modal-autofocus onClick={confirmDeleteCandidate}>
-                {deleteCandidate.kind === "project" ? (
-                  <FolderX size={14} />
-                ) : deleteCandidate.kind === "projectChats" ? (
-                  <MessageSquareX size={14} />
-                ) : (
-                  <Trash2 size={14} />
-                )}
-                {deleteCandidateActionLabel(deleteCandidate)}
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+      {active && previewAttachment?.previewDataUrl && <AttachmentPreviewDialog name={attachmentLabel(previewAttachment)} imageUrl={previewAttachment.previewDataUrl} onClose={() => setPreviewAttachment(null)}/>}
+      {active && deleteCandidate && <ConfirmationDialog kind={deleteCandidate.kind === "projectChats" ? "chats" : deleteCandidate.kind}
+        title={deleteCandidateTitle(deleteCandidate)} description={deleteCandidateDescription(deleteCandidate)} actionLabel={deleteCandidateActionLabel(deleteCandidate)}
+        busy={deletePending} error={deleteError} onCancel={() => setDeleteCandidate(null)} onConfirm={() => void confirmDeleteCandidate()}/>}
 
       {showElevatedPermissionsDialog ? (
         <div className="modalScrim" role="presentation">
@@ -4322,7 +3980,7 @@ if (rootElement) {
     })();
   const renderApp = (startupSettings: DesktopStartupSettings) => {
     rootElement.umbraticRoot ??= createRoot(rootElement);
-    rootElement.umbraticRoot.render(<App startupSettings={startupSettings} />);
+    rootElement.umbraticRoot.render(<WorkspaceRoot api={api} renderPrivate={surface => <App startupSettings={startupSettings} {...surface}/>}/>);
   };
   // The stored chords are put in force before the first paint, not after it: a
   // window that draws its tooltips with the shipped keys and then corrects

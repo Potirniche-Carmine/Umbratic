@@ -1,12 +1,4 @@
-/*
- * The Keyboard page.
- *
- * A two-column reference: what the chord does on the left, the chord itself on
- * the right, hard against the edge so the keys line up in a column the eye can
- * run down. The description sits under its own label rather than beside it —
- * the keys are what someone is scanning for, and a sentence between them and
- * the next row would break the column.
- */
+/* Shared shortcut list: actions and editable keycaps, with details on hover. */
 .shortcutList {
   display: grid;
   gap: 2px;
@@ -19,8 +11,8 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
-  align-items: start;
-  padding: 8px 6px;
+  align-items: center;
+  padding: 9px 6px;
   border-radius: 8px;
 }
 

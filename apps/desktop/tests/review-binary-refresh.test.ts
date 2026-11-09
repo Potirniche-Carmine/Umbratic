@@ -82,3 +82,22 @@ test("successive binary edits invalidate folder and untracked Git review preview
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("workspace review honors ignore rules and excludes scratch output while retaining real image assets", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-review-ignore-")); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "project"); fs.mkdirSync(workspace);
+  const git = (...args) => execFileSync("git", args, { cwd: workspace, encoding: "utf8", stdio: "pipe" });
+  git("init"); fs.writeFileSync(path.join(workspace, "tracked.log"), "before"); git("add", ".");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "baseline");
+  fs.writeFileSync(path.join(workspace, ".gitignore"), "*.log\nignored/\n");
+  fs.writeFileSync(path.join(workspace, "tracked.log"), "after"); fs.writeFileSync(path.join(workspace, "scratch.log"), "log");
+  fs.mkdirSync(path.join(workspace, "output/imagegen"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "output/imagegen/concept.png"), Buffer.from([0,1,2]));
+  fs.writeFileSync(path.join(workspace, "asset.png"), Buffer.from([0,1,2]));
+  fs.writeFileSync(path.join(workspace, "app.ts"), "export const changed = true;\n");
+  const mocks = { electron: { app: { getPath: () => root, on() {}, whenReady: async () => {} }, BrowserWindow: class {}, safeStorage: { isEncryptionAvailable: () => false } } };
+  const review = loadTypeScriptModule(new URL("../src/main/reviewFiles.ts", import.meta.url), { mocks });
+  const files = await review.gitWorkspaceReviewFiles(workspace, "HEAD");
+  assert.deepEqual(Array.from(files, file => file.path).sort(), [".gitignore", "app.ts", "asset.png"]);
+});

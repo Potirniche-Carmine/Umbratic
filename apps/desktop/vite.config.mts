@@ -5,6 +5,7 @@ export default defineConfig(({ command }) => ({
   plugins: [react()],
   root: "src/renderer",
   base: "./",
+  worker: { format: "es" },
   define: {
     __UMBRATIC_PREVIEW_BUILD__: JSON.stringify(command === "serve"),
   },

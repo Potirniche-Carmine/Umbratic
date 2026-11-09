@@ -34,19 +34,17 @@ test("the feedback button sizes to its own label", () => {
   assert.doesNotMatch(panel, /reviewSelectionConfirm/);
 });
 
-test("arming feedback does not move the toolbar around it", () => {
-  // "Leave feedback" and "Done" are different lengths, so a pill that sized to
-  // its text re-centred the word and slid its neighbours along the row every
-  // time the mode was toggled.
+test("the feedback action stays a compact icon when its mode changes", () => {
   const button = declarations(workspaceStyles, ".reviewFeedbackModeButton");
-  assert.match(button, /min-width:\s*128px/);
+  assert.match(button, /min-width:\s*30px/);
   assert.match(button, /justify-content:\s*center/);
+  assert.match(panel, /aria-label=\{commenting \? "Done leaving feedback" : "Leave feedback"\}/);
 });
 
 test("a file with no earlier version drops the layout toggle instead of disabling it", () => {
   // Two `disabled` buttons looked exactly like the ordinary inactive state, so
   // the control read as broken rather than as inapplicable.
-  assert.match(panel, /splitFits && selectedFile\.status !== "added" \?/);
+  assert.match(panel, /aria-label="Side by side" aria-pressed=\{viewMode === "split"\}/);
   assert.doesNotMatch(panel, /disabled=\{selectedFile\.status === "added"\}/);
   assert.doesNotMatch(panel, /A new file has no earlier version to compare against/);
 });

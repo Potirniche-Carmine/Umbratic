@@ -1,5 +1,6 @@
+import { ShortcutTooltip } from "../Tooltip";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Columns2, ExternalLink, FileText, MessageSquarePlus, PanelRight, Rows3, Undo2, WrapText } from "lucide-react";
+import { Maximize2, Minimize2, Check, ChevronDown, Columns2, ExternalLink, FileText, MessageSquarePlus, PanelRight, Rows3, Undo2, WrapText } from "lucide-react";
 import { isArtifactPath } from "../../shared/artifactReview";
 import type { DocumentReviewSnapshot } from "../../shared/documentReview";
 import type { DiffCell, DiffSide, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
@@ -10,6 +11,8 @@ import type { ReviewLineSelection } from "./DiffRow";
 import { documentReviewSelectionDetails } from "./documentReviewSelection";
 import { reconcileReviewComments, type ReviewCommentDraft } from "./reviewComments";
 import { setReviewLayout, setReviewWrap, useReviewLayout, useReviewWrap } from "./reviewPreferences";
+import type { IdeInfo } from "../../shared/desktopApi";
+import { WorkspaceIdePicker } from "../WorkspaceChrome";
 
 /// Two 380px columns and their gutters. Below this the split layout does not
 /// fit, and CSS collapsing it to one column left the rows still shaped for two:
@@ -48,6 +51,9 @@ function splitReviewPath(filePath: string): { dir: string; name: string } {
 
 export function ReviewPanel({
   files,
+  chrome = true,
+  resizable = chrome,
+  closable = chrome,
   open,
   initialSelectedPath,
   taskId,
@@ -58,6 +64,9 @@ export function ReviewPanel({
   canUndoFile,
   undoUnavailableReason,
   selectedIdeLabel,
+  availableIdes = [],
+  selectedIde,
+  onSelectIde,
   onClose,
   onUndoFile,
   onUndoAll,
@@ -69,6 +78,9 @@ export function ReviewPanel({
   onLoadDocumentReview,
 }: {
   files: ReviewFile[];
+  chrome?: boolean;
+  resizable?: boolean;
+  closable?: boolean;
   /** Whether the panel is showing. A hidden panel holds no armed mode. */
   open: boolean;
   initialSelectedPath?: string;
@@ -81,10 +93,13 @@ export function ReviewPanel({
   /** Why undo is off, said in the button's tooltip instead of leaving it grey and mute. */
   undoUnavailableReason: string;
   selectedIdeLabel: string;
+  availableIdes?: IdeInfo[];
+  selectedIde?: IdeInfo;
+  onSelectIde?(id: string): void;
   onClose(): void;
   onUndoFile(path: string): void;
   onUndoAll(): void;
-  onOpenFile(path: string): void;
+  onOpenFile(path: string, ideId?: string): void;
   onScopeChange(scope: "task" | "worktree"): void;
   onResizePointerDown(event: React.PointerEvent<HTMLDivElement>): void;
   onResizeKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void;
@@ -94,6 +109,7 @@ export function ReviewPanel({
     | { ok: false; code: "not_available" | "invalid" | "unsafe" | "too_large"; message: string }
   >;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const [selectedPath, setSelectedPath] = useState(initialSelectedPath ?? files[0]?.path ?? "");
   // Read from the shared store, so a change made in General settings lands
   // here without the panel being remounted, and vice versa.
@@ -343,19 +359,20 @@ export function ReviewPanel({
 
   return (
     <section
-      className="panel reviewPanel"
+      className={`panel reviewPanel ${expanded ? "reviewExpanded" : ""}`}
       aria-label={selectedFileIsDocument ? "Document review" : "Code review"}
       // Escape leaves the mode from anywhere in the panel, not only from
       // inside the comment box: with nothing selected the box is not there to
       // press it in, and that was the state with no way out.
       onKeyDown={(event) => {
+        if (event.key === "Escape" && expanded && !commenting) { event.stopPropagation(); setExpanded(false); return; }
         if (event.key !== "Escape" || !commenting) return;
         event.stopPropagation();
         stopCommenting();
       }}
     >
       {feedbackAdded ? <div className="reviewFeedbackAdded" role="status"><span><Check size={13} /></span><strong>Added — sends with your next message</strong></div> : null}
-      <div
+      {resizable && !expanded && <div
         className="reviewResizeHandle"
         role="separator"
         aria-label="Resize review panel"
@@ -363,18 +380,19 @@ export function ReviewPanel({
         tabIndex={0}
         onPointerDown={onResizePointerDown}
         onKeyDown={onResizeKeyDown}
-      />
+      />}
       <header className="reviewTopbar">
         <strong className="reviewChangeSummary">Review</strong>
         <div className="reviewTopActions">
-          {files.length ? <button className="reviewControlButton reviewUndoAll" type="button" onClick={onUndoAll} disabled={!canUndoFile} aria-label="Undo all" title={canUndoFile ? "Undo all changes from the latest prompt" : undoUnavailableReason}><Undo2 size={14} /><span>Undo all</span></button> : null}
+          <button className="reviewIconButton" type="button" aria-label={expanded ? "Restore review size" : "Expand review"} title={expanded ? "Restore review size" : "Expand review"} aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
+          {chrome && files.length ? <button className="reviewControlButton reviewUndoAll" type="button" onClick={onUndoAll} disabled={!canUndoFile} aria-label="Undo all" title={canUndoFile ? "Undo all changes from the latest prompt" : undoUnavailableReason}><Undo2 size={14} /><span>Undo all</span></button> : null}
           {canUseWorktreeScope ? (
             <div className="reviewScopePicker">
               <button type="button" className="reviewControlButton" onClick={() => setScopeOpen((open) => !open)} aria-expanded={scopeOpen}><span>{selectedScope === "worktree" ? "Whole diff" : "Turn changes"}</span><ChevronDown size={13} /></button>
               {scopeOpen ? <div className="reviewScopeMenu" role="menu"><button type="button" role="menuitemradio" aria-checked={selectedScope === "task"} className={selectedScope === "task" ? "isSelected" : ""} onClick={() => chooseScope("task")}><span><strong>Turn changes</strong><small>Changes made in this model turn</small></span>{selectedScope === "task" ? <Check size={14} /> : null}</button><button type="button" role="menuitemradio" aria-checked={selectedScope === "worktree"} className={selectedScope === "worktree" ? "isSelected" : ""} onClick={() => chooseScope("worktree")}><span><strong>Whole diff</strong><small>All uncommitted changes against HEAD</small></span>{selectedScope === "worktree" ? <Check size={14} /> : null}</button></div> : null}
             </div>
           ) : null}
-          <button className="reviewIconButton" type="button" onClick={onClose} title="Hide review" aria-label="Hide review"><PanelRight size={16} /></button>
+          {closable && <ShortcutTooltip id="review.toggle" label="Hide review"><button className="reviewIconButton" type="button" onClick={onClose} aria-label="Hide review"><PanelRight size={16} /></button></ShortcutTooltip>}
         </div>
       </header>
       {files.length && selectedFile ? (
@@ -390,7 +408,8 @@ export function ReviewPanel({
                       type="button"
                       className={`reviewNavigatorFile status-${file.status} ${file.path === selectedFile.path ? "isActive" : ""}`}
                       onClick={() => { setSelectedPath(file.path); setSelection(null); }}
-                      title={`${file.path} · ${statusLabel(file.status)}`}
+                      onDoubleClick={() => { if (canOpenIde && file.status !== "deleted") onOpenFile(file.path); }}
+                      title={`${file.path} · ${statusLabel(file.status)}${canOpenIde ? ` · Double-click to open in ${selectedIdeLabel}` : ""}`}
                     >
                       <span className="reviewNavigatorRow">
                         <span className="reviewNavigatorStatusDot" aria-hidden="true" />
@@ -402,7 +421,7 @@ export function ReviewPanel({
                       </span>
                       {dir ? <small className="reviewNavigatorDir">{dir.replace(/\/$/, "")}</small> : null}
                     </button>
-                    <button className="reviewIconButton" type="button" onClick={() => onUndoFile(file.path)} disabled={!canUndoFile} title={canUndoFile ? `Undo changes to ${name}` : undoUnavailableReason} aria-label={`Undo changes to ${file.path}`}><Undo2 size={14} /></button>
+                    {chrome && <button className="reviewIconButton" type="button" onClick={() => onUndoFile(file.path)} disabled={!canUndoFile} title={canUndoFile ? `Undo changes to ${name}` : undoUnavailableReason} aria-label={`Undo changes to ${file.path}`}><Undo2 size={14} /></button>}
                   </div>
                 );
               })}</div>
@@ -419,17 +438,18 @@ export function ReviewPanel({
               </span>
               <div className="reviewFileActions">
                 <span className="reviewFeedbackSelectionControls">
-                  <button className={`reviewFeedbackModeButton ${commenting ? "isActive" : ""}`} type="button" disabled={!documentFeedbackEnabled} aria-pressed={commenting} onClick={() => { setCommenting((current) => !current); setSelection(null); setDocumentSelection([]); setEditorOpen(false); setCommentBody(""); }} title={commenting ? "Done leaving feedback" : selectedFileIsDocument && !documentFeedbackEnabled ? "A review preview is required for document feedback" : `Click ${selectedFileIsDocument ? "sentences" : "lines"} in the diff to comment on them`}><MessageSquarePlus size={14} /><span>{commenting ? "Done" : "Leave feedback"}</span></button>
+                  <button className={`reviewFeedbackModeButton ${commenting ? "isActive" : ""}`} type="button" disabled={!documentFeedbackEnabled} aria-label={commenting ? "Done leaving feedback" : "Leave feedback"} aria-pressed={commenting} onClick={() => { setCommenting((current) => !current); setSelection(null); setDocumentSelection([]); setEditorOpen(false); setCommentBody(""); }} title={commenting ? "Done leaving feedback" : selectedFileIsDocument && !documentFeedbackEnabled ? "A review preview is required for document feedback" : `Click ${selectedFileIsDocument ? "sentences" : "lines"} in the diff to comment on them`}><MessageSquarePlus size={14} /></button>
                 </span>
                 {/* A new file has no earlier version, so there is nothing to
                     put side by side. The two buttons used to stay in the
                     toolbar `disabled`, which looked exactly like the ordinary
                     inactive state — the layout control read as broken rather
                     than as inapplicable. */}
-                {!selectedFileIsDocument && splitFits && selectedFile.status !== "added" ? <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={effectiveViewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} title="Side by side"><Columns2 size={14} /><span>Side by side</span></button><button type="button" className={effectiveViewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} title="Unified"><Rows3 size={14} /><span>Unified</span></button></span> : null}
-                {!selectedFileIsDocument ? <button className={`reviewIconButton ${wrap ? "isActive" : ""}`} type="button" onClick={toggleWrap} title={wrap ? "Disable line wrapping" : "Wrap long lines"}><WrapText size={15} /></button> : null}
-                <button className="reviewIconButton reviewSelectedUndo" type="button" onClick={() => onUndoFile(selectedFile.path)} disabled={!canUndoFile} title={canUndoFile ? `Undo changes to ${splitReviewPath(selectedFile.path).name}` : undoUnavailableReason} aria-label={`Undo changes to ${selectedFile.path}`}><Undo2 size={15} /></button>
-                <button className="reviewIconButton" type="button" onClick={() => onOpenFile(selectedFile.path)} disabled={!canOpenIde || selectedFile.status === "deleted"} title={`Open in ${selectedIdeLabel}`}><ExternalLink size={15} /></button>
+                {!selectedFileIsDocument ? <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={viewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} aria-label="Side by side" aria-pressed={viewMode === "split"} title={!splitFits ? "Side by side (expand the panel to display both columns)" : "Side by side"}><Columns2 size={14} /></button><button type="button" className={viewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} aria-label="Unified" aria-pressed={viewMode === "unified"} title="Unified"><Rows3 size={14} /></button></span> : null}
+                {!selectedFileIsDocument ? <button className={`reviewIconButton ${wrap ? "isActive" : ""}`} type="button" onClick={toggleWrap} aria-label="Word wrap" aria-pressed={wrap} title={wrap ? "Disable line wrapping" : "Wrap long lines"}><WrapText size={15} /></button> : null}
+                {chrome && <button className="reviewIconButton reviewSelectedUndo" type="button" onClick={() => onUndoFile(selectedFile.path)} disabled={!canUndoFile} title={canUndoFile ? `Undo changes to ${splitReviewPath(selectedFile.path).name}` : undoUnavailableReason} aria-label={`Undo changes to ${selectedFile.path}`}><Undo2 size={15} /></button>}
+                {selectedIde && onSelectIde ? <WorkspaceIdePicker key={selectedFile.path} choices={availableIdes} selected={selectedIde} disabled={!open || !canOpenIde || selectedFile.status === "deleted"} title={`Open ${splitReviewPath(selectedFile.path).name} in ${selectedIde.label}`} onSelect={onSelectIde} onOpen={ideId => onOpenFile(selectedFile.path, ideId)}/>
+                  : (chrome || canOpenIde) && <button className="reviewIconButton" type="button" onClick={() => onOpenFile(selectedFile.path)} disabled={!canOpenIde || selectedFile.status === "deleted"} aria-label={`Open in ${selectedIdeLabel}`} title={`Open in ${selectedIdeLabel}`}><ExternalLink size={15} /></button>}
               </div>
             </header>
             <div className="reviewFileScroller" ref={scrollerRef}>

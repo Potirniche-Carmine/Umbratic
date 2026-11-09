@@ -20,6 +20,7 @@ export type CommandClass =
 export type CommandRun = {
   id: string;
   command: string;
+  nativeDisplay?: { label: string; detail: string };
   kind?: TaskPermissionRequest["kind"];
   toolKind?: string;
   commandClass?: CommandClass;
@@ -121,6 +122,7 @@ export function commandVisibleOutput(run: CommandRun): string {
 }
 
 export function commandHasVisibleDetails(run: CommandRun): boolean {
+  if (run.nativeDisplay) return !!run.nativeDisplay.detail.trim();
   return isShellRun(run) || commandVisibleOutput(run).trim().length > 0;
 }
 
@@ -149,6 +151,7 @@ export function commandSummary(run: CommandRun): string {
 }
 
 export function commandShellText(run: CommandRun): string {
+  if (run.nativeDisplay) return stripAnsi(run.nativeDisplay.detail).slice(0, 20000);
   const isTool = !isShellRun(run);
   const parts = isTool ? [] : [`$ ${run.command}`];
   const outputPreview = previewOutput(run);
@@ -180,6 +183,7 @@ export function commandDetailLabel(run: CommandRun): string {
 }
 
 export function activityToolLabel(run: CommandRun): { key: string; label: string } {
+  if (run.nativeDisplay) return { key: `native:${run.id}`, label: run.nativeDisplay.label };
   const actions: Record<string, [string, string, string]> = {
     write: ["Write", "Writing", "Wrote"],
     edit: ["Edit", "Editing", "Edited"],

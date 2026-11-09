@@ -1,3 +1,8 @@
+import { installCloudBrowser } from "./cloudBrowser";
+import { listCloudAllowedCommands, revokeCloudAllowedCommand } from "./cloudCommandRules";
+import { saveCloudImages } from "./cloudImages";
+import { pickCloudFolders } from "./repositoryOps";
+import { cloudProjectChats, listCloudChats, createCloudChat, deleteCloudChat, readCloudFile, getCloudSettings, saveCloudSettings, inspectCloudProvider, disconnectCloudProvider, cancelCloudSignIn, signInCloudProvider, installCloudProvider, getCloudWorkspace, startCloudTurn, sendCloudFollowUp, removeCloudQueuedPrompt, stopCloudTurn, respondCloudApproval, stopCloudService } from "./cloudService";
 import { readGeneratedImage } from "./generatedImage";
 import { imageRuntimeBinary } from "./localImage";
 import { readImageModelSetting, writeImageModelSetting } from "./settingsStorage";
@@ -358,6 +363,29 @@ async function createWindow() {
 
 function desktopIpcHandlers(): DesktopIpcHandlers {
   return {
+    installCloudBrowser: async () => installCloudBrowser(),
+    listCloudAllowedCommands: async () => listCloudAllowedCommands(),
+    revokeCloudAllowedCommand: async input => revokeCloudAllowedCommand(input),
+    getCloudSettings: async () => getCloudSettings(),
+    saveCloudSettings: async (input) => saveCloudSettings(input),
+    inspectCloudProvider: async (input) => inspectCloudProvider(input),
+    cancelCloudSignIn: async (input) => cancelCloudSignIn(input),
+    signInCloudProvider: async (input) => signInCloudProvider(input),
+    disconnectCloudProvider: async (input) => disconnectCloudProvider(input),
+    installCloudProvider: async (input) => installCloudProvider(input),
+    pickCloudFolders: async () => pickCloudFolders(),
+    readCloudFile: async (input) => readCloudFile(input),
+    saveCloudImages: async (input) => saveCloudImages(input),
+    listCloudChats: async (input) => listCloudChats(input),
+    createCloudChat: async (input) => createCloudChat(input),
+    deleteCloudChat: async (input) => deleteCloudChat(input),
+    getCloudWorkspace: async (input) => getCloudWorkspace(input),
+    startCloudTurn: async (input) => startCloudTurn(input),
+    sendCloudFollowUp: async (input) => sendCloudFollowUp(input),
+    removeCloudQueuedPrompt: async (input) => removeCloudQueuedPrompt(input),
+    stopCloudTurn: async (input) => stopCloudTurn(input),
+    respondCloudApproval: async (input) => respondCloudApproval(input),
+
     listProjects: () => readProjects(),
     listChats: () => readChats(),
     createChat: (input) => createChat(input),
@@ -368,7 +396,12 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     clearUnsavedDraft: (input) => clearUnsavedDraft(input),
     deleteChat: (input) => deleteChat(input),
     deleteProjectChats: (input) => deleteProjectChats(input),
-    deleteProject: (input) => deleteProject(input),
+    deleteProject: (input) => {
+      const chats = cloudProjectChats(input.projectId);
+      const result = deleteProject(input);
+      for (const chat of chats) deleteCloudChat({ key: chat.key, provider: chat.provider });
+      return result;
+    },
     getNotes: () => getNotes(),
     updateNotes: (input) => updateNotes(input),
     getTask: (input) => publicTaskById(input),
@@ -638,6 +671,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopCloudService();
   stopAppUpdates();
   stopLocalCacheMaintenance();
   // A download in flight leaves its .partial file behind on purpose: the next

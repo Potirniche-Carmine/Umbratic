@@ -1,17 +1,12 @@
-import { ChevronDown, ChevronRight, Sparkles, SquareTerminal } from "lucide-react";
-import { useEffect } from "react";
+import { ChevronRight } from "lucide-react";
+import { ActivityTools } from "./ActivityTools";
+import { groupActivitySegments } from "./activityPresentation";
 import type { Dispatch, MutableRefObject, PointerEvent, SetStateAction, TouchEvent, UIEvent, WheelEvent } from "react";
 import type { SkillInfo } from "../shared/desktopApi";
 import { activityHasNarration, activityHasTools, activitySummary } from "./activityTiming";
-import {
-  activityToolLabel,
-  commandHasVisibleDetails,
-  commandLiveOutputPreview,
-  commandShellText,
-} from "./commandDisplay";
+import { activityToolLabel } from "./commandDisplay";
 import { WorkMarkdownContent } from "./markdownContent";
 import type { ComposerTimelineItem } from "./rendererTypes";
-import { useAutoExpandWorkingBlocks } from "./workingBlockPreferences";
 
 type ActivityItem = Extract<ComposerTimelineItem, { type: "activity" }>;
 
@@ -19,6 +14,7 @@ type WorkingBlockProps = {
   item: ActivityItem;
   clock: number;
   expanded: boolean;
+  expandWhileRunning?: boolean;
   expandedToolIds: Set<string>;
   skills: SkillInfo[];
   followScrollRef: MutableRefObject<Map<string, boolean>>;
@@ -60,7 +56,8 @@ function liveActivityHint(segments: ActivityItem["segments"], skills: SkillInfo[
 export function WorkingBlock({
   item,
   clock,
-  expanded,
+  expanded: manuallyExpanded,
+  expandWhileRunning = true,
   expandedToolIds,
   skills,
   followScrollRef,
@@ -72,13 +69,8 @@ export function WorkingBlock({
   onTouchMove,
   onWheel,
 }: WorkingBlockProps) {
-  const autoExpand = useAutoExpandWorkingBlocks();
-  useEffect(() => {
-    if (!autoExpand || item.finished) return;
-    followScrollRef.current.set(item.id, true);
-    setExpanded((current) => current.has(item.id) ? current : new Set([...current, item.id]));
-    // Stream updates and manual toggles must not reopen a collapsed block.
-  }, [autoExpand, item.id, item.finished, followScrollRef, setExpanded]);
+  const lockedOpen = expandWhileRunning && !item.finished;
+  const expanded = lockedOpen || manuallyExpanded;
 
   const hasTools = activityHasTools(item.segments);
   // The bare status line is for a block with nothing in it yet — the wait
@@ -104,11 +96,12 @@ export function WorkingBlock({
 
   return (
     <article
-      className={`timelineActivity ${item.finished ? "isFinished" : "isGenerating"} ${expanded ? "isExpanded" : ""}`}
+      className={`timelineActivity ${item.finished ? "isFinished" : "isGenerating"} ${expanded ? "isExpanded" : ""} ${lockedOpen ? "isLockedOpen" : ""}`}
     >
       <button
         className="activityHeader"
         type="button"
+        disabled={lockedOpen}
         onClick={() => {
           if (!expanded) followScrollRef.current.set(item.id, true);
           setExpanded(toggleId(item.id));
@@ -133,7 +126,7 @@ export function WorkingBlock({
             })()
           ) : null}
         </span>
-        <ChevronRight className="activityChevron" size={13} />
+        {!lockedOpen && <ChevronRight className="activityChevron" size={13} />}
       </button>
       <div className={`activityBody ${expanded ? "open" : ""}`} aria-hidden={!expanded}>
         <div
@@ -145,7 +138,7 @@ export function WorkingBlock({
           onWheel={(event) => onWheel(item.id, event)}
         >
           <div className="activityBodyContent">
-            {item.segments.map((segment) => {
+            {groupActivitySegments(item.segments).map((segment) => {
               switch (segment.type) {
                 case "reasoning":
                   return (
@@ -157,61 +150,8 @@ export function WorkingBlock({
                       <WorkMarkdownContent content={segment.text.trim()} streaming={!item.finished && !segment.finished} />
                     </section>
                   );
-                case "skill": {
-                  const skillName = skills.find((skill) => skill.id === segment.skillId)?.name ?? segment.skillId;
-                  return (
-                    <section className="activityLogEntry skillLog" key={segment.id}>
-                      <Sparkles size={12} aria-hidden="true" />
-                      <span>Skill</span>
-                      <strong>{skillName}</strong>
-                    </section>
-                  );
-                }
-                case "command": {
-                  const { label } = activityToolLabel(segment.run);
-                  const toolDisclosureId = `${item.id}:${segment.id}`;
-                  const toolExpanded = expandedToolIds.has(toolDisclosureId);
-                  const hasVisibleDetails = commandHasVisibleDetails(segment.run);
-                  const liveOutput = toolExpanded ? undefined : commandLiveOutputPreview(segment.run);
-                  const toolLabelContent = (
-                    <>
-                      <SquareTerminal className="activityToolKindIcon" size={11} aria-hidden="true" />
-                      <span title={segment.run.command}>{label}</span>
-                    </>
-                  );
-                  return (
-                    <section
-                      className={`activityLogEntry commandLog ${segment.run.status} ${
-                        toolExpanded ? "isExpanded" : ""
-                      }`}
-                      key={segment.id}
-                    >
-                      {hasVisibleDetails ? (
-                        <button
-                          className="activityToolToggle"
-                          type="button"
-                          onClick={() => setExpandedTools(toggleId(toolDisclosureId))}
-                          aria-expanded={toolExpanded}
-                        >
-                          {toolLabelContent}
-                          {toolExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                        </button>
-                      ) : (
-                        <div className="activityToolToggle activityToolStatic">
-                          {toolLabelContent}
-                        </div>
-                      )}
-                      {liveOutput ? <pre className="activityLiveOutput" aria-live="polite">{liveOutput}</pre> : null}
-                      {hasVisibleDetails && toolExpanded ? (
-                        <div className="activityToolGroupDetails">
-                          <div>
-                            <pre>{commandShellText(segment.run)}</pre>
-                          </div>
-                        </div>
-                      ) : null}
-                    </section>
-                  );
-                }
+                case "tools":
+                  return <ActivityTools key={segment.id} group={segment} itemId={item.id} finished={item.finished} skills={skills} expandedToolIds={expandedToolIds} setExpandedTools={setExpandedTools}/>;
                 default: {
                   const exhaustive: never = segment;
                   return exhaustive;

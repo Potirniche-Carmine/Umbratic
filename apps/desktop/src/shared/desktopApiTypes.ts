@@ -1,3 +1,4 @@
+import type { CloudApi } from "./cloud";
 import type { ReasoningEffort } from "./modelReasoning";
 export { REASONING_EFFORTS, DEFAULT_REASONING_EFFORT, isReasoningEffort, resolveReasoningEffort } from "./modelReasoning";
 export type { ReasoningEffort } from "./modelReasoning";
@@ -586,7 +587,7 @@ export type SystemProfile = {
 
 export type { LocalCatalogModel, LocalCatalogModelKind, LocalMemoryFit, LocalModelQuant, ModelDownloadEvent } from "./localModels";
 
-export type DesktopApi = {
+export type DesktopApi = CloudApi & {
   listProjects(): Promise<RepositoryInfo[]>;
   listChats(): Promise<ChatRecord[]>;
   createChat(input?: {
@@ -866,6 +867,7 @@ export type DesktopApi = {
     decision: "allow" | "deny";
   }): Promise<void>;
   openRepositoryInIde(input: {
+    filePath?: string;
     repositoryId: string;
     ideId: string;
   }): Promise<{ ok: true } | { ok: false; message: string }>;
@@ -895,7 +897,7 @@ export type DesktopApi = {
    * credentials stay in the other. Throws when the connected server does not
    * advertise `speech.transcribe`.
    */
-  startDictation(input: { language?: string }): Promise<{ started: boolean }>;
+  startDictation(input: { language?: string; localOnly?: boolean }): Promise<{ started: boolean }>;
   /** Takes microphone consent the way the platform takes it, before the renderer
    *  opens a device — so a refusal is explained where it can be fixed. */
   requestMicrophoneAccess(): Promise<{ granted: boolean }>;

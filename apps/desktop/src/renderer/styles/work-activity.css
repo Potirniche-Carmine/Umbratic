@@ -140,3 +140,39 @@
 .activityToolStatic {
   grid-template-columns: 12px minmax(0, 1fr);
 }
+
+/* Live work follows the main transcript scroll. Tool details remain optional. */
+.timelineActivity.isLockedOpen .activityHeader:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.timelineActivity.isLockedOpen .activityBodyInner {
+  max-height: none;
+  overflow: visible;
+}
+
+.activityTools { display: grid; gap: 2px; margin: 9px 0 12px; }
+.activityToolItem { min-width: 0; }
+.activityTools .activityToolRow, .activityTools .activityGroupToggle {
+  display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%;
+  min-height: 27px; padding: 2px 0; border: 0; background: transparent;
+  color: var(--muted); font: inherit; font-size: 12px; line-height: 1.5; text-align: left;
+}
+button.activityTools .activityToolRow, .activityTools .activityGroupToggle { cursor: pointer; }
+button.activityToolRow:hover, .activityGroupToggle:hover { color: var(--text); }
+.activityToolRow > svg, .activityGroupToggle > svg { flex-shrink: 0; opacity: .8; }
+.activityToolText { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activityToolVerb { color: var(--faint); }
+.activityCommandText { font-family: var(--mono-font); font-size: .96em; }
+.activityToolChevron { opacity: 0 !important; }
+.activityToolRow:hover .activityToolChevron, .activityToolRow:focus-visible .activityToolChevron, .activityToolItem.isExpanded .activityToolChevron { opacity: .7 !important; }
+.activityToolItem.running > .activityToolRow { color: color-mix(in srgb, var(--text) 76%, var(--muted)); }
+.activityToolItem.failed > .activityToolRow { color: var(--red); }
+.activityGroupToggle { width: fit-content; gap: 8px; }
+.activityTools.isGrouped > .activityToolItem { margin-left: 22px; }
+.activityCommandOutput {
+  margin: 5px 0 9px 22px; padding: 10px 12px; max-height: 230px; overflow: auto;
+  border-left: 1px solid var(--line); color: var(--muted); background: color-mix(in srgb, var(--surface) 45%, transparent);
+  font-family: var(--mono-font); font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere;
+}

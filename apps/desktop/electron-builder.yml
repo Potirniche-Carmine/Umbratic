@@ -4,6 +4,7 @@ artifactName: Umbratic-${version}.${ext}
 asar: true
 asarUnpack:
   - "**/*.node"
+  - "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
 npmRebuild: false
 afterPack: scripts/after-pack.cjs
 electronDist: ../../node_modules/electron/dist

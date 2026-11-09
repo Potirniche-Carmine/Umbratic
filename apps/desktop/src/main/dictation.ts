@@ -168,7 +168,7 @@ function handleFrame(session: ActiveDictation, frame: string): void {
   }
 }
 
-export async function startDictation(input: { language?: string }, webContents: WebContents): Promise<{ started: boolean }> {
+export async function startDictation(input: { language?: string; localOnly?: boolean }, webContents: WebContents): Promise<{ started: boolean }> {
   cancelDictation();
   const generation = ++startGeneration;
 
@@ -179,7 +179,7 @@ export async function startDictation(input: { language?: string }, webContents: 
   // guess returns confident text in a language the speaker does not use.
   const language = (input.language ?? dictationSettings.language ?? "").trim();
 
-  if (settings.mode === "local") {
+  if (input.localOnly === true || settings.mode === "local") {
     // The transcription model is not resident: it is loaded on the press and
     // released after a spell of not dictating. Waiting for it here means the
     // load lands inside the button's existing starting state rather than as a

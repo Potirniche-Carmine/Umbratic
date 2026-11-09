@@ -1,7 +1,7 @@
 {
   "name": "@umbratic/desktop",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Private AI workbench for local and company-managed models",
   "author": "Umbratic",
   "packageManager": "npm@11.20.0",
@@ -28,17 +28,23 @@
     "generate:skill-references": "node scripts/generate-skill-references.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.303",
+    "@anthropic-ai/sdk": "0.135.0",
     "@cantoo/pdf-lib": "2.11.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@napi-rs/canvas": "1.0.11",
     "@xmldom/xmldom": "0.9.12",
     "electron-updater": "6.8.9",
     "fontkit": "2.0.4",
     "jszip": "3.10.1",
     "lucide-react": "1.28.0",
+    "mermaid": "12.2.0",
     "pdf-to-img": "7.0.1",
     "pdfjs-dist": "6.4.299",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "shiki": "4.5.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@electron/asar": "4.3.1",

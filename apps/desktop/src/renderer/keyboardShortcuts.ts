@@ -131,14 +131,14 @@ export const shortcuts: readonly ShortcutDefinition[] = [
     id: "composer.send",
     section: "Composer",
     label: "Send the prompt",
-    detail: "Queues the message instead when a run is already going.",
+    detail: "Enter steers the current run. Shift+Enter queues the prompt while a run is active.",
     display: ["Enter"],
   },
   {
     id: "composer.newline",
     section: "Composer",
     label: "New line",
-    detail: "Continues a numbered or bulleted list when you are in one.",
+    detail: "Continues a numbered or bulleted list. Queues the prompt while a run is active.",
     display: ["Shift", "Enter"],
   },
   {
@@ -419,10 +419,19 @@ export function titleWithShortcut(label: string, id: ShortcutId, mac = isMacPlat
   return chord ? `${label} (${chord})` : label;
 }
 
-export function shortcutSections(): Array<{ section: ShortcutSection; rows: ShortcutDefinition[] }> {
+export type ShortcutMode = "private" | "cloud";
+const privateOnlyShortcuts = new Set<ShortcutId>(["composer.mention"]);
+export function shortcutAvailable(id: ShortcutId, mode: ShortcutMode): boolean {
+  return mode === "private" || !privateOnlyShortcuts.has(id);
+}
+export function composerSendShortcut(sendOnEnter = true): ShortcutDefinition {
+  const row = shortcutById("composer.send");
+  return sendOnEnter ? row : { ...row, display: ["Enter"], displayPrimary: true };
+}
+export function shortcutSections(mode: ShortcutMode = "private", sendOnEnter = true): Array<{ section: ShortcutSection; rows: ShortcutDefinition[] }> {
   const order: ShortcutSection[] = ["Chats and panels", "Composer", "Dictation", "Running", "Windows and dialogs"];
   return order
-    .map((section) => ({ section, rows: active.filter((row) => row.section === section) }))
+    .map((section) => ({ section, rows: active.filter((row) => row.section === section && shortcutAvailable(row.id, mode)).map(row => row.id === "composer.send" ? composerSendShortcut(sendOnEnter) : row) }))
     .filter((group) => group.rows.length > 0);
 }
 

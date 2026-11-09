@@ -1,0 +1,253 @@
+/* One set of materials and proportions for native subscription and local runtimes. */
+:root {
+  --workspace-canvas: #151719;
+  --workspace-chrome: #101214;
+  --workspace-glass: color-mix(in srgb, var(--surface-2) 78%, transparent);
+  --workspace-edge: rgba(255, 255, 255, .09);
+  --workspace-shadow: 0 12px 38px rgba(0, 0, 0, .16);
+}
+:root[data-theme="light"] {
+  --workspace-canvas: #fafbfc;
+  --workspace-chrome: #e9edf1;
+  --workspace-glass: rgba(255, 255, 255, .78);
+  --workspace-edge: rgba(255, 255, 255, .8);
+  --workspace-shadow: 0 12px 38px rgba(37, 49, 62, .07);
+}
+.unifiedWorkspace {
+  --prompt-min-width: 0px;
+  --prompt-max-width: 760px;
+  --response-content-width: 760px;
+  --timeline-card-width: 760px;
+  --prompt-radius: 22px;
+  height: 100dvh;
+  background: var(--workspace-chrome);
+}
+.workspaceSurface, .unifiedWorkspace .appShell { height: 100dvh; }
+.workspaceSurface[hidden] { display: none; }
+.unifiedWorkspace :focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.unifiedWorkspace .appShell { grid-template-rows: 0 minmax(0, 1fr); background: transparent; }
+.unifiedWorkspace .topbar { position: absolute; z-index: 40; top: 0; left: 0; height: 42px; width: var(--sidebar-width); border: 0; background: transparent; }
+.unifiedWorkspace .topbarTitle { display: none; }
+.unifiedWorkspace .sidebar {
+  top: 0;
+  width: var(--sidebar-width, 246px);
+  max-width: 300px;
+  min-width: 0;
+  padding: 46px 12px 12px;
+  gap: 18px;
+  border: 0;
+  background: linear-gradient(155deg, color-mix(in srgb, var(--surface-3) 26%, transparent), transparent 62%), color-mix(in srgb, var(--workspace-chrome) 85%, transparent);
+  backdrop-filter: blur(28px) saturate(135%);
+  box-shadow: inset -1px 0 0 var(--workspace-edge);
+  transition: none;
+}
+.workspaceNavigation { flex: 0 0 auto; min-width: 0; }
+.workspaceNavigation .workspaceIdentity { display: flex; align-items: center; gap: 9px; padding: 0 12px 22px; font-size: 15px; font-weight: 600; letter-spacing: -.35px; }
+.workspaceNavigation .workspaceIdentity > span { display: block; }
+.workspaceNavigation .workspaceIdentity .topbarLogo { width: 20px; height: 22px; color: var(--text); }
+.workspaceProviders { display: flex; flex-direction: column; gap: 4px; }
+.workspaceProvider { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 40px; padding: 9px 12px; border: 1px solid transparent; border-radius: 11px; color: var(--muted); text-align: left; font-size: 13px; font-weight: 500; transition: background 150ms ease, color 150ms ease; }
+.workspaceProviderIcon { display: grid; place-items: center; width: 19px; height: 20px; flex: 0 0 19px; }
+.workspaceProvider:hover { background: var(--control-hover-soft); color: var(--text); }
+.workspaceProvider.isSelected { color: var(--text); background: var(--workspace-glass); border-color: var(--line); box-shadow: inset 0 1px 0 var(--workspace-edge), 0 3px 9px color-mix(in srgb, var(--shadow-color) 25%, transparent); }
+.workspaceProviderNote { margin: 12px 12px 0; font-size: 11px; line-height: 1.55; color: var(--faint); }
+.workspaceActivity { display: inline-flex; align-items: center; justify-content: center; gap: 2px; flex: 0 0 16px; width: 16px; height: 14px; color: var(--faint); }
+.workspaceActivity > i { display: block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.workspaceActivity.is-running > i { width: 3px; height: 3px; animation: chatActivityPulse 1.2s ease-in-out infinite; }
+.workspaceActivity.is-running > i:nth-child(2) { animation-delay: .15s; }
+.workspaceActivity.is-running > i:nth-child(3) { animation-delay: .3s; }
+.workspaceProvider > .workspaceActivity { margin-left: auto; }
+.workspaceActivity.is-waiting { color: var(--amber); }
+@keyframes chatActivityPulse { 0%, 70%, 100% { opacity: .35; } 35% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .workspaceActivity.is-running > i { animation: none; } }
+.workspaceArchiveActions { display: flex; align-items: center; gap: 5px; padding: 0 3px 12px; }
+.workspaceNewChat { display: flex; gap: 9px; align-items: center; min-height: 34px; flex: 1; padding: 7px 9px; border-radius: 8px; font-size: 12px; font-weight: 500; text-align: left; }
+.workspaceArchiveActions > .shortcutTooltip { flex: 1; }
+.workspaceNewChat:hover { background: var(--control-hover); }
+.workspaceChatSearch { display: flex; align-items: center; flex: 0 0 auto; gap: 7px; margin: 0 4px 16px; padding: 8px 9px; color: var(--faint); border: 1px solid var(--line); border-radius: 8px; }
+.workspaceChatSearch input { width: 100%; min-width: 0; background: transparent; border: 0; color: var(--text); font-size: 11px; outline: none; }
+.workspaceChatSearch:focus-within { border-color: var(--blue); }
+.workspaceChatSearch input::placeholder { color: var(--faint); }
+.workspaceChatGroup { display: flex; align-items: center; justify-content: space-between; min-height: 30px; padding-left: 10px; color: var(--faint); font-size: 11px; font-weight: 500; }
+.workspaceChatGroup > span { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspaceArchiveEmpty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin: 18px 12px; color: var(--faint); font-size: 11px; line-height: 1.5; }
+.workspaceArchiveEmpty > svg { margin-bottom: 6px; opacity: .6; }
+.workspaceArchiveEmpty strong { color: var(--muted); font-weight: 500; }
+.unifiedWorkspace .chatArchive { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.unifiedWorkspace .chatList { overflow: auto; scrollbar-width: thin; padding-right: 2px; }
+.unifiedWorkspace .chatRow { border-radius: 8px; }
+.unifiedWorkspace .chatRowMain { min-height: 35px; padding-top: 8px; padding-bottom: 8px; }
+.unifiedWorkspace .chatRow.active { background: color-mix(in srgb, var(--control-hover) 80%, transparent); border-color: transparent; }
+.unifiedWorkspace .chatRowContent > strong { font-size: 12px; font-weight: 450; }
+.unifiedWorkspace .chatProject { margin-bottom: 16px; }
+.unifiedWorkspace .chatProjectToggle { min-height: 32px; color: var(--muted); }
+.unifiedWorkspace .chatProjectToggle strong { font-size: 11px; font-weight: 500; }
+.unifiedWorkspace .chatProjectEmpty, .unifiedWorkspace .archiveEmpty { border: 0; background: transparent; line-height: 1.5; }
+.unifiedWorkspace .sideHeader h2 { text-transform: none; font-size: 12px; letter-spacing: 0; }
+.unifiedWorkspace .sidebarFooter { gap: 12px; padding-top: 8px; border: 0; }
+.workspacePrivacyNote { display: flex; align-items: center; gap: 7px; padding: 0 10px; color: var(--faint); font-size: 10px; line-height: 1.5; }
+.workspacePrivacyNote .cloudProviderIcon { width: 13px; height: 13px; opacity: .65; }
+.unifiedWorkspace .settingsPlaceholder { justify-content: flex-start; gap: 10px; min-height: 36px; padding: 9px 12px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: 12px; }
+.unifiedWorkspace .settingsPlaceholder:hover { background: var(--control-hover); color: var(--text); }
+/* The content surface sits inside the heavier sidebar material. */
+.unifiedWorkspace .workspace { margin: 8px 8px 8px var(--sidebar-reserved-width, 246px); padding-left: 0; border: 1px solid var(--line); border-radius: 20px; background: var(--workspace-canvas); overflow: hidden; }
+.unifiedWorkspace .workspace::after { display: none; }
+.unifiedWorkspace .composerHeader { min-height: 58px; padding: 11px 20px; border: 0; background: transparent; -webkit-app-region: drag; }
+.unifiedWorkspace .composerHeaderActions { -webkit-app-region: no-drag; }
+.unifiedWorkspace .composerHeaderTitle strong { font-weight: 500; font-size: 13px; }
+.unifiedWorkspace .composerBody { padding: 28px max(24px, calc((100% - 760px) / 2)) 36px; }
+.unifiedWorkspace .timeline { max-width: 760px; }
+.unifiedWorkspace .workspace .promptDock { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px 28px 18px; background: var(--workspace-canvas); }
+.unifiedWorkspace .promptDock::before { background: linear-gradient(to top, var(--workspace-canvas), transparent); height: 28px; top: -28px; }
+.unifiedWorkspace .promptDock::after { display: none; }
+.unifiedWorkspace .promptControls { order: 2; z-index: 48; width: min(760px, 100%); flex-wrap: wrap; padding: 0 5px; gap: 7px; }
+.unifiedWorkspace .composer { width: min(760px, 100%); min-width: 0; animation: none; }
+.unifiedWorkspace .promptInputShell, .unifiedWorkspace .cloudDock {
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 22px;
+  background: var(--workspace-glass);
+  box-shadow: inset 0 1px 0 var(--workspace-edge), var(--workspace-shadow);
+  backdrop-filter: blur(24px) saturate(135%);
+}
+.unifiedWorkspace .promptInputShell:focus-within, .unifiedWorkspace .cloudDock:focus-within { border-color: color-mix(in srgb, var(--muted) 40%, var(--line)); box-shadow: inset 0 1px 0 var(--workspace-edge), var(--workspace-shadow); }
+.unifiedWorkspace .promptTextLayout { padding: 14px 16px 10px; min-height: 72px; max-height: min(240px, 30dvh); font-family: var(--app-font); font-size: 15px; font-weight: 400; line-height: 1.6; letter-spacing: 0; scrollbar-gutter: stable; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; box-sizing: border-box; }
+.unifiedWorkspace .promptActionRail { padding: 0 12px 12px; gap: 8px; }
+.unifiedWorkspace .sendButton { width: 32px; height: 32px; border: 0; background: var(--text); color: var(--workspace-canvas); box-shadow: none; }
+.unifiedWorkspace .workspaceControl, .unifiedWorkspace .worktreeToggle, .unifiedWorkspace .webToolsToggle, .unifiedWorkspace .attachmentTrigger { border-color: transparent; background: transparent; box-shadow: none; }
+.unifiedWorkspace .workspaceControl strong { font-weight: 450; }
+.unifiedWorkspace .workspace:has(.composerGreeting) { justify-content: center; padding-bottom: 10vh; }
+.unifiedWorkspace .workspace:has(.composerGreeting) .workArea { flex: 0 0 auto; }
+.unifiedWorkspace .workspace:has(.composerGreeting) .promptDock::before { display: none; }
+.unifiedWorkspace .workspace:has(.composerGreeting) .composerHeader { position: absolute; top: 0; left: 0; right: 0; }
+.unifiedWorkspace .workspace:has(.composerGreeting) .composerBody { padding: 24px 28px 26px; }
+.unifiedWorkspace .composerGreeting { flex-direction: column; gap: 0; height: auto; min-height: 0; padding: 0; }
+.unifiedWorkspace .composerGreeting h1, .unifiedWorkspace .cloudWelcome h1 { margin: 0; font-size: clamp(24px, 2.6vw, 32px); font-weight: 500; line-height: 1.2; letter-spacing: -.95px; text-wrap: balance; }
+.workspaceWelcomeMark { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 15px; margin: 0 auto 18px; background: var(--workspace-glass); border: 1px solid var(--line); box-shadow: inset 0 1px 0 var(--workspace-edge), 0 6px 20px color-mix(in srgb, var(--shadow-color) 30%, transparent); }
+.workspaceWelcomeMark .cloudProviderIcon { width: 26px; height: 26px; }
+.workspaceWelcomeMark .topbarLogo { width: 25px; height: 27px; }
+.workspaceEyebrow { margin: 0 0 12px; font-size: 11px; font-weight: 500; line-height: 1.5; letter-spacing: .02em; color: var(--muted); }
+.workspaceWelcomeHint { margin: 13px 0 0; color: var(--faint); font-size: 13px; line-height: 1.6; letter-spacing: 0; font-weight: 400; }
+/* Both backends use the same workspace frame, header and empty-state centering. */
+.unifiedCloudShell .cloudMain { flex-direction: row; overflow: visible; }
+.unifiedCloudShell .workspace:has(.withReview) { justify-content: flex-start; padding-bottom: 0; }
+.unifiedCloudShell .workspace:has(.withReview) .workArea { flex: 1 1 auto; }
+.unifiedCloudShell .workspace:has(.withReview) > .composerHeader { position: relative; }
+.unifiedCloudShell .cloudCanvas { padding: 28px max(24px, calc((100% - 760px) / 2)) 36px; }
+.unifiedCloudShell .cloudWorkColumn.isEmpty { padding-bottom: 0; }
+.unifiedCloudShell .cloudWorkColumn.isEmpty .cloudCanvas { flex: 0 0 auto; padding: 24px 28px 26px; }
+.unifiedCloudShell .isEmpty .cloudDockArea { margin-top: 0; }
+.workspaceSessionHint { font-size: 10px; color: var(--faint); white-space: nowrap; }
+.workspaceComposerProvider { display: grid; place-items: center; padding: 0 4px; }
+.unifiedCloudShell .cloudReview { border-radius: 16px 0 0 0; }
+.unifiedWorkspace .modalScrim { inset: 0; background: rgba(8, 12, 18, .24); backdrop-filter: blur(8px); }
+.unifiedWorkspace .settingsDialog { border-radius: 22px; box-shadow: inset 0 1px 0 var(--workspace-edge), 0 24px 80px var(--shadow-color); }
+@media (max-width: 800px) {
+  .unifiedWorkspace .workspace .promptDock { padding-left: 18px; padding-right: 18px; }
+  .unifiedWorkspace .composerBody { padding-left: 22px; padding-right: 22px; }
+}
+@media (max-width: 620px) {
+  .unifiedWorkspace { --sidebar-width: 64px !important; --sidebar-reserved-width: 64px !important; }
+  .unifiedWorkspace .sidebar { padding-left: 7px; padding-right: 7px; }
+  .workspaceNavigation .workspaceIdentity { padding: 0 0 22px; justify-content: center; }
+  .workspaceNavigation .workspaceIdentity > span:last-child, .workspaceProvider > span:not(.workspaceProviderIcon), .workspaceProviderNote,
+  .unifiedWorkspace .sidebar .chatList, .unifiedWorkspace .sidebar .workspaceChatSearch, .workspaceNewChat > span,
+  .unifiedWorkspace .sidebar .workspacePrivacyNote, .unifiedWorkspace .sidebar .settingsPlaceholder > span,
+  .unifiedWorkspace .sidebarResizeHandle { display: none; }
+  .workspaceProvider { justify-content: center; padding: 10px 5px; }
+  .workspaceArchiveActions { flex-direction: column; padding: 0; }
+  .unifiedWorkspace .settingsPlaceholder { justify-content: center; }
+  .unifiedWorkspace .promptRailGroup { gap: 4px; }
+  .unifiedWorkspace .promptRailLeft { flex-wrap: wrap; }
+  .unifiedWorkspace .promptRailRight { margin-left: auto; }
+  .unifiedCloudShell .cloudTopbar { padding-left: 12px; padding-right: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .unifiedWorkspace *, .unifiedWorkspace *::before, .unifiedWorkspace *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .unifiedWorkspace { --workspace-glass: var(--surface-2); }
+  .unifiedWorkspace .sidebar { background: var(--workspace-chrome); backdrop-filter: none; }
+  .unifiedWorkspace .promptInputShell, .unifiedWorkspace .cloudDock { backdrop-filter: none; }
+  .unifiedWorkspace .modalScrim { backdrop-filter: none; background: rgba(0, 0, 0, .65); }
+}
+@media (prefers-contrast: more) {
+  .unifiedWorkspace { --line: var(--muted); --line-strong: var(--text); --faint: var(--muted); }
+}
+
+.unifiedSettingsScrim { inset: 0; padding: 32px; background: rgba(8, 12, 18, .28); backdrop-filter: blur(8px); }
+.unifiedSettingsScrim .settingsDialog { width: min(960px, 100%); height: min(740px, 100%); border-radius: 22px; box-shadow: inset 0 1px 0 var(--workspace-edge), 0 24px 80px var(--shadow-color); }
+.unifiedSettingsScrim .settingsDialogHeader { padding: 18px 22px; background: transparent; border-bottom: 1px solid var(--line); }
+.unifiedSettingsScrim .settingsLayout { grid-template-columns: 190px minmax(0, 1fr); }
+.unifiedSettingsScrim .settingsNav { flex-direction: column; align-items: stretch; min-width: 0; overflow-x: hidden; border-right: 1px solid var(--line); border-bottom: 0; padding: 16px 12px; background: color-mix(in srgb, var(--surface-2) 65%, transparent); }
+.unifiedSettingsScrim .settingsNavItem { min-height: 38px; font-size: 12px; font-weight: 500; border-radius: 8px; }
+.unifiedSettingsScrim .settingsContent { padding: 26px 30px; }
+.unifiedSettingsScrim .settingsPanelHead h3 { font-size: 20px; font-weight: 550; letter-spacing: -.5px; }
+.unifiedSettingsScrim .settingsPanelHead p { font-size: 12px; line-height: 1.7; max-width: 52ch; color: var(--muted); }
+.providerSettingsTabs { display: flex; align-items: center; gap: 3px; width: fit-content; padding: 3px; border-radius: 10px; background: var(--control-bg); margin-bottom: 24px; }
+.providerSettingsTabs button { padding: 7px 16px; color: var(--muted); border-radius: 7px; font-size: 12px; }
+.providerSettingsTabs button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); box-shadow: inset 0 1px 0 var(--workspace-edge); }
+.providerSettings .cloudAccountRow { padding: 18px 0; }
+@media (max-width: 720px) {
+  .unifiedSettingsScrim { padding: 14px; }
+  .unifiedSettingsScrim .settingsLayout { grid-template-columns: 150px minmax(0, 1fr); }
+  .unifiedSettingsScrim .settingsContent { padding: 20px; }
+}
+@media (max-width: 500px) {
+  .unifiedSettingsScrim .settingsLayout { grid-template-columns: 48px minmax(0, 1fr); }
+  .unifiedSettingsScrim .settingsNav { padding: 10px 4px; }
+  .unifiedSettingsScrim .settingsNavItem span { display: none; }
+  .unifiedSettingsScrim .settingsNavItem { justify-content: center; }
+}
+@media (prefers-reduced-transparency: reduce) { .unifiedSettingsScrim { backdrop-filter: none; background: rgba(0, 0, 0, .65); } }
+
+.workspaceHeaderIdentity { display: flex; flex-direction: column; justify-content: center; min-width: 0; gap: 2px; }
+.workspaceHeaderIdentity > strong { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: min(50vw, 600px); }
+.unifiedCloudShell .workspaceHeaderIdentity .cloudFolderPicker { max-width: 100%; gap: 5px; }
+.workspaceHeaderIdentity .cloudWorkspaceName { font-size: 11px; color: var(--muted); font-weight: 400; }
+.workspaceHeaderIdentity .cloudIconButton { width: 18px; height: 20px; }
+.workspaceHeaderIdentity .cloudIconButton svg { width: 13px; height: 13px; }
+
+/* Shared geometry: adding images never changes text size or control placement. */
+.workspaceHeaderIdentity > small { color: var(--muted); font-size: 11px; }
+.unifiedWorkspace .promptInputShell { grid-template-rows: auto minmax(72px, auto) auto; }
+.unifiedWorkspace .composerAttachmentList { gap: 8px; max-height: 64px; padding: 12px 16px 0; }
+.unifiedWorkspace .composerAttachmentList .attachmentPreview.imageAttachment { flex: 0 0 48px; width: 48px; height: 48px; border-radius: 8px; }
+.unifiedWorkspace .composerAttachmentList .attachmentPreview.fileAttachment { height: 36px; max-width: 190px; }
+.unifiedWorkspace .attachmentPreviewFileName { font-size: 12px; }
+.unifiedWorkspace .userMessage { width: fit-content; max-width: min(760px, 88%); margin: 0 0 24px auto; }
+.unifiedWorkspace .userMessageBubble { padding: 12px 16px; border: 1px solid var(--line); border-radius: 18px 18px 5px 18px; box-shadow: none; }
+.unifiedWorkspace .userPromptText { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 15px/1.6 var(--app-font); letter-spacing: 0; }
+.unifiedWorkspace .promptControls .workspaceControl { min-height: 30px; gap: 7px; font-size: 12px; padding: 4px 6px; }
+.unifiedWorkspace .promptControls .workspaceControl strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+.unifiedWorkspace .promptControls .remoteTrigger { border-color: transparent; background: transparent; box-shadow: none; }
+.unifiedWorkspace .promptControls .remoteTrigger:hover { background: var(--control-hover); }
+.unifiedWorkspace .cloudContextBar { justify-content: flex-start; padding: 0 5px; margin: 0; height: auto; min-height: 30px; font: inherit; gap: 7px; }
+.unifiedWorkspace .cloudContextBar .cloudFolderPicker { max-width: 240px; flex: 0 1 auto; }
+.unifiedWorkspace .cloudContextBar .cloudComposerStatus { flex: 1; }
+.unifiedWorkspace .promptActionRail :is(.modelTrigger, .permissionTrigger, .cloudModelTrigger, .cloudSelectTrigger) { height: 26px; min-height: 26px; padding: 0 7px; gap: 5px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 11.5px !important; font-weight: 520; letter-spacing: .004em; }
+.unifiedWorkspace .cloudDock .cloudRunControls { gap: 4px; }
+.unifiedWorkspace .chatConnectionIcon .cloudProviderIcon { width: 12px; height: 12px; }
+.unifiedWorkspace .cloudDockArea { position: relative; z-index: 24; padding-top: 12px; padding-bottom: 18px; }
+.unifiedWorkspace .composerPendingTray { position: static; display: none; width: min(760px, 100%); transform: none; }
+.unifiedWorkspace .composerPendingTray.hasPending { display: flex; }
+.unifiedWorkspace .promptEditor { font: 400 15px/1.6 var(--app-font); }
+.workspaceFolderFooter { display: flex; justify-content: flex-end; padding: 8px 4px 2px; border-top: 1px solid var(--line); }
+.cloudFoldersMenu { margin: 0; }
+.cloudFoldersMenu:popover-open { display: flex; flex-direction: column; }
+.cloudFoldersMenu .cloudFolderList { min-height: 0; }
+.unifiedWorkspace .chatProjectChats:empty { display: none; }
+
+/* Native dialogs share the same surface and backdrop across every provider. */
+.confirmationDialog { color: var(--text); max-height: calc(100vh - 48px); }
+.confirmationDialog:not([open]), .sharedAttachmentPreview:not([open]) { display: none; }
+.confirmationDialog::backdrop, .sharedAttachmentPreview::backdrop {
+  background: rgba(8, 12, 18, .24);
+  backdrop-filter: blur(8px);
+}
+.confirmationDialog .confirmationError { grid-column: 1 / -1; color: var(--red); }
+.sharedAttachmentPreview { width: min(920px, calc(100vw - 36px)); height: min(720px, calc(100vh - 36px)); padding: 0; color: var(--text); }
+.attachmentFilePlaceholder { text-align: center; color: var(--muted); overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) {
+  .confirmationDialog::backdrop, .sharedAttachmentPreview::backdrop { backdrop-filter: none; background: rgba(0, 0, 0, .65); }
+}
