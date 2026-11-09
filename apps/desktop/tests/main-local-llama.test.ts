@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
@@ -127,7 +128,7 @@ test("vision loads a paired projector and rejects a missing encoder before start
 });
 
 test("development can use the prepared speech runtime without accepting arbitrary search paths", () => {
-  const prepared = path.resolve(new URL("../src/main", import.meta.url).pathname, "../../.package/llama-server/llama-server");
+  const prepared = path.resolve(fileURLToPath(new URL("../src/main", import.meta.url)), "../../.package/llama-server/llama-server");
   const exists = new Set([prepared]);
   const make = defaultApp => loadTypeScriptModule(new URL("../src/main/llamaServer.ts", import.meta.url), {
     realm: "host", mocks: { "node:fs": { existsSync: value => exists.has(value) } },
